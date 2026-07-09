@@ -15,6 +15,7 @@ import importlib.util
 import threading
 from pathlib import Path
 
+from .arp import Arpeggiator
 from .audio_devices import list_audio_devices
 from .engine import Engine
 from .master import MasterSection
@@ -66,6 +67,8 @@ class SynthApp:
         self.router: MidiRouter | None = None
         self.reloader: Reloader | None = None
         self.voice: MonoVoice | None = None
+        self.arp: Arpeggiator | None = None
+        self._arp_settings: dict = {}  # persists across patch switches
 
         self.on_midi_event = None  # set by GuiServer; called from MIDI thread
         self.patch_name: str | None = None
@@ -113,7 +116,16 @@ class SynthApp:
 
         bindings = patch.get("bindings", {})
         target = bindings.get("notes_to") or self._guess_voice_target()
+        if self.arp:
+            self.arp.shutdown()
+            self.arp = None
         self.voice = MonoVoice(self.rack, target) if target else None
+        if self.voice:
+            self.arp = Arpeggiator(self.voice)
+            self.arp.configure(**{**self._arp_settings, **patch.get("arp", {})})
+            self._arp_settings = {
+                k: v for k, v in self.arp.settings().items() if k != "patterns"
+            }
         self.patch_name = patch_name
         self.patch = patch
         self._restart_midi()
@@ -130,7 +142,7 @@ class SynthApp:
             self.rack,
             cc_bindings=bindings.get("cc"),
             port_name=self.midi_port or bindings.get("midi_in"),
-            voice=self.voice,
+            voice=self.arp or self.voice,
             verbose=False,
             on_event=self._emit_midi_event,
         )
@@ -162,6 +174,9 @@ class SynthApp:
             if self.router:
                 self.router.stop()
                 self.router = None
+            if self.arp:
+                self.arp.shutdown()
+                self.arp = None
             if self.master:
                 self.master.stop()
             if self.rack:
@@ -220,19 +235,27 @@ class SynthApp:
                 self.master.set_volume(volume)
 
     def note_on(self, note: int, velocity: int = 100) -> None:
-        with self._lock:
-            if self.voice:
-                self.voice.note_on(int(note), int(velocity))
+        sink = self.arp or self.voice
+        if sink:
+            sink.note_on(int(note), int(velocity))
 
     def note_off(self, note: int) -> None:
-        with self._lock:
-            if self.voice:
-                self.voice.note_off(int(note))
+        sink = self.arp or self.voice
+        if sink:
+            sink.note_off(int(note))
 
     def all_notes_off(self) -> None:
+        sink = self.arp or self.voice
+        if sink:
+            sink.all_off()
+
+    def set_arp(self, **settings) -> None:
         with self._lock:
-            if self.voice:
-                self.voice.all_off()
+            if self.arp:
+                self.arp.configure(**settings)
+                self._arp_settings = {
+                    k: v for k, v in self.arp.settings().items() if k != "patterns"
+                }
 
     def levels(self) -> dict:
         return self.master.levels() if self.master else {"out": [0, 0], "in": None}
@@ -275,5 +298,6 @@ class SynthApp:
                 "midi_inputs": _list_midi_inputs(),
                 "midi_port": self.router.active_port if self.router else None,
                 "midi_enabled": self.midi_enabled,
+                "arp": self.arp.settings() if self.arp else None,
                 "module_errors": {k: repr(v) for k, v in self.module_errors.items()},
             }

@@ -104,6 +104,22 @@
       </div>
       <div class="small" id="chain-desc"></div>
     </div>
+    <div class="row" style="margin-top:10px; border-top:1px solid var(--hairline); padding-top:10px;">
+      <label class="small"><input type="checkbox" id="arp-on"> <b>ARP</b></label>
+      <select id="arp-pattern" class="small"></select>
+      <div class="grow">
+        <label class="small">RATE <span id="arp-rate-v"></span></label>
+        <input type="range" id="arp-rate" min="0" max="1" step="0.001">
+      </div>
+      <div class="grow">
+        <label class="small">GATE <span id="arp-gate-v"></span></label>
+        <input type="range" id="arp-gate" min="0.05" max="1" step="0.01">
+      </div>
+      <div>
+        <label class="small">OCT <span id="arp-oct-v"></span></label><br>
+        <input type="range" id="arp-oct" min="1" max="3" step="1" style="width:70px">
+      </div>
+    </div>
     <div id="modules"></div>
     <div class="err" id="mod-errors"></div>
   </div>
@@ -233,6 +249,7 @@ function renderState() {
     holder.appendChild(div);
   }
   document.getElementById("voice-target").textContent = state.voice_target || "none (no playable source)";
+  renderArp();
   const errs = Object.entries(state.module_errors || {});
   document.getElementById("mod-errors").textContent =
     errs.map(([f, e]) => `module ${f} failed to load: ${e}`).join("\n");
@@ -280,6 +297,53 @@ function renderMeters(m) {
   };
   set("m-out-l", m.out[0]); set("m-out-r", m.out[1]);
   if (m.in !== null && m.in !== undefined) set("m-in", m.in);
+}
+
+// ---------- arp ----------
+const ARP_RATE = {min: 0.5, max: 20, curve: "exp"};  // slider unit -> Hz
+function renderArp() {
+  const a = state.arp;
+  const row = document.getElementById("arp-on").closest(".row");
+  row.style.display = a ? "" : "none";
+  if (!a) return;
+  document.getElementById("arp-on").checked = a.enabled;
+  const psel = document.getElementById("arp-pattern");
+  psel.innerHTML = a.patterns.map(p =>
+    `<option ${p === a.pattern ? "selected" : ""}>${p}</option>`).join("");
+  if (dragging !== "arp-rate") {
+    document.getElementById("arp-rate").value = toUnit(ARP_RATE, a.rate);
+  }
+  document.getElementById("arp-rate-v").textContent = a.rate.toFixed(1) + "/s";
+  if (dragging !== "arp-gate") document.getElementById("arp-gate").value = a.gate;
+  document.getElementById("arp-gate-v").textContent = Math.round(a.gate * 100) + "%";
+  if (dragging !== "arp-oct") document.getElementById("arp-oct").value = a.octaves;
+  document.getElementById("arp-oct-v").textContent = a.octaves;
+}
+function sendArp() {
+  throttled("arp", () => send({
+    type: "set_arp",
+    enabled: document.getElementById("arp-on").checked,
+    pattern: document.getElementById("arp-pattern").value,
+    rate: fromUnit(ARP_RATE, parseFloat(document.getElementById("arp-rate").value)),
+    gate: parseFloat(document.getElementById("arp-gate").value),
+    octaves: parseInt(document.getElementById("arp-oct").value, 10),
+  }));
+}
+for (const id of ["arp-on", "arp-pattern"]) {
+  document.getElementById(id).addEventListener("change", (e) => { sendArp(); e.target.blur(); });
+}
+for (const id of ["arp-rate", "arp-gate", "arp-oct"]) {
+  const el = document.getElementById(id);
+  el.addEventListener("input", () => {
+    sendArp();
+    if (id === "arp-rate") document.getElementById("arp-rate-v").textContent =
+      fromUnit(ARP_RATE, parseFloat(el.value)).toFixed(1) + "/s";
+    if (id === "arp-gate") document.getElementById("arp-gate-v").textContent =
+      Math.round(parseFloat(el.value) * 100) + "%";
+    if (id === "arp-oct") document.getElementById("arp-oct-v").textContent = el.value;
+  });
+  el.addEventListener("pointerdown", () => dragging = id);
+  el.addEventListener("pointerup", () => dragging = null);
 }
 
 // ---------- throttling ----------
