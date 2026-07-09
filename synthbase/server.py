@@ -4,6 +4,7 @@ Protocol (JSON messages):
 
   client -> server:
     {"type": "set_param", "key": "lowpass", "name": "cutoff", "unit": 0.7}
+    {"type": "set_enabled", "key": "echo", "enabled": false}   (module bypass)
     {"type": "set_volume", "volume": 0.8}
     {"type": "note_on", "note": 60} / {"type": "note_off", "note": 60}
     {"type": "all_notes_off"}
@@ -73,6 +74,9 @@ class GuiServer:
         if t == "set_param":
             self.synth.set_param_unit(m["key"], m["name"], m["unit"])
             # echo to *other* clients only, so the sender's slider isn't fought
+            await self._broadcast_state(exclude=sender)
+        elif t == "set_enabled":
+            self.synth.set_enabled(m["key"], m["enabled"])
             await self._broadcast_state(exclude=sender)
         elif t == "set_volume":
             self.synth.set_volume(m["volume"])

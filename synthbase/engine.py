@@ -11,8 +11,9 @@ import dataclasses
 import sys
 from pathlib import Path
 
-from supriya import AddAction, Options, Server
+from supriya import AddAction, Options, Server, find_free_port
 
+from .audio_devices import find_rate_matched_input
 from .module import Module
 
 
@@ -36,6 +37,7 @@ class Engine:
         block_size: int = 64,
     ) -> None:
         self.options = Options(
+            port=find_free_port(),  # never collide with a stale scsynth
             input_device=input_device,
             output_device=output_device,
             input_bus_channel_count=input_channels,
@@ -45,6 +47,7 @@ class Engine:
         )
         self.server: Server | None = None
         self.root_group = None  # all racks/chains go inside this group
+        self.boot_note: str | None = None  # human-readable boot fallback info
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -54,21 +57,40 @@ class Engine:
             self.server = Server().boot(options=self.options)
         except Exception as exc:
             # macOS: the default input and output devices often run at
-            # different sample rates (bluetooth headset mics especially),
-            # which scsynth refuses. Fall back to output-only rather than
-            # failing to start.
+            # different sample rates (bluetooth headset mics are locked to
+            # 16 kHz), which scsynth refuses. Auto-select an input whose
+            # rate matches the output; failing that, run output-only.
             if "sample rate" not in str(exc).lower():
                 raise
-            print(
-                "[engine] input/output sample rates don't match (bluetooth "
-                "headset mic?) — retrying with audio input disabled.\n"
-                "[engine] to use audio input, pass --in-device with a device "
-                "whose rate matches the output (see Audio MIDI Setup)."
-            )
-            self.options = dataclasses.replace(
-                self.options, input_bus_channel_count=0, input_device=None
-            )
-            self.server = Server().boot(options=self.options)
+            match = None
+            if self.options.input_device is None:
+                match = find_rate_matched_input(self.options.output_device)
+            if match:
+                try:
+                    self.options = dataclasses.replace(
+                        self.options, input_device=match
+                    )
+                    self.server = Server().boot(options=self.options)
+                    self.boot_note = (
+                        f"default input's sample rate can't pair with the "
+                        f"output — using {match!r} instead"
+                    )
+                    print(f"[engine] {self.boot_note}")
+                except Exception:  # noqa: BLE001
+                    match = None
+            if not match:
+                print(
+                    "[engine] no input device matches the output's sample "
+                    "rate — running with audio input disabled."
+                )
+                self.boot_note = (
+                    "audio input disabled (no device matches the output's "
+                    "sample rate — see Audio MIDI Setup)"
+                )
+                self.options = dataclasses.replace(
+                    self.options, input_bus_channel_count=0, input_device=None
+                )
+                self.server = Server().boot(options=self.options)
         self.root_group = self.server.add_group(add_action=AddAction.ADD_TO_TAIL)
         return self
 

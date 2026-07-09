@@ -15,10 +15,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from supriya import AddAction, CalculationRate
+from supriya import AddAction, CalculationRate, synthdef
+from supriya.ugens import In, Out
 
 from .engine import Engine
 from .module import Module
+
+
+@synthdef()
+def _bypass(in_bus=0, out=0):
+    """True bypass for disabled effects: copy input to output unchanged."""
+    Out.ar(bus=out, source=In.ar(bus=in_bus, channel_count=2))
 
 ChainSpec = list  # list of str | (str, dict) — normalized by Rack.build
 
@@ -32,6 +39,7 @@ class Instance:
     settings: dict[str, Any]
     node: Any = None
     bus_group: Any = None  # audio bus group feeding the *next* stage (None for last)
+    enabled: bool = True
 
     @property
     def display(self) -> str:
@@ -67,7 +75,9 @@ class Rack:
         if not stages:
             return
 
-        # Register every synthdef used, then allocate buses and nodes in order.
+        # Register every synthdef used (plus the bypass), then allocate
+        # buses and nodes in order.
+        server.add_synthdefs(_bypass)
         self.engine.register(*(self._lookup(key) for key, _ in stages))
 
         prev_bus_group = None
@@ -122,12 +132,45 @@ class Rack:
     def set_param(self, key: str, name: str, value: float) -> None:
         inst = self.find(key)
         inst.settings[name] = value
-        inst.node.set(**{name: value})
+        if inst.enabled or inst.module.kind == "source":  # paused sources accept sets
+            inst.node.set(**{name: value})
 
     def set_params(self, key: str, **values: float) -> None:
         inst = self.find(key)
         inst.settings.update(values)
-        inst.node.set(**values)
+        if inst.enabled or inst.module.kind == "source":
+            inst.node.set(**values)
+
+    def set_enabled(self, key: str, enabled: bool) -> None:
+        """Toggle a module in the running chain.
+
+        Sources pause/unpause (silence, state kept). Effects are swapped
+        with a passthrough synth so the rest of the chain keeps flowing —
+        a true bypass, not a mute.
+        """
+        inst = self.find(key)
+        enabled = bool(enabled)
+        if inst.enabled == enabled:
+            return
+        server = self.engine.server
+        if inst.module.kind == "source":
+            (inst.node.unpause if enabled else inst.node.pause)()
+        elif enabled:
+            inst.node = server.add_synth(
+                inst.module.synthdef,
+                add_action=AddAction.REPLACE,
+                target_node=inst.node,
+                **inst.settings,
+            )
+        else:
+            inst.node = server.add_synth(
+                _bypass,
+                add_action=AddAction.REPLACE,
+                target_node=inst.node,
+                in_bus=inst.settings["in_bus"],
+                out=inst.settings["out"],
+            )
+        inst.enabled = enabled
 
     # -- hot reload -------------------------------------------------------------
 
@@ -146,12 +189,21 @@ class Rack:
             # Merge: keep live settings, adopt defaults for any new params.
             settings = {name: p.default for name, p in new_module.params.items()}
             settings.update(inst.settings)
+            if not inst.enabled and inst.module.kind == "effect":
+                # Node is currently a passthrough; the new definition takes
+                # over when the module is re-enabled.
+                inst.module = new_module
+                inst.settings = settings
+                replaced = True
+                continue
             new_node = server.add_synth(
                 new_module.synthdef,
                 add_action=AddAction.REPLACE,
                 target_node=inst.node,
                 **settings,
             )
+            if not inst.enabled:  # disabled source: keep it silent
+                new_node.pause()
             inst.module = new_module
             inst.node = new_node
             inst.settings = settings

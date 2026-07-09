@@ -55,7 +55,10 @@
 <div class="wrap">
   <div class="row" style="justify-content: space-between; margin-top: 4px;">
     <h1><span id="status"></span>SuperSynth</h1>
-    <span class="small" id="focusnote">keys play only while this window is focused</span>
+    <span class="small">
+      <label><input type="checkbox" id="keys-on" checked> keyboard plays notes</label>
+      · <span id="focusnote">focused</span>
+    </span>
   </div>
 
   <!-- I/O + master -->
@@ -163,8 +166,9 @@ function renderState() {
     dev.inputs.map(d => opt(d.name, `${d.name} (${d.channels}ch, ${d.sample_rate || "?"})`, state.current_input)).join("");
   outSel.innerHTML = opt(null, "System default", state.current_output) +
     dev.outputs.map(d => opt(d.name, `${d.name} (${d.channels}ch, ${d.sample_rate || "?"})`, state.current_output)).join("");
-  document.getElementById("io-note").textContent = state.input_enabled
-    ? "" : "audio input is off (sample-rate mismatch at boot) — pick an input whose rate matches the output and Apply";
+  document.getElementById("io-note").textContent =
+    state.boot_note || (state.input_enabled ? "" :
+      "audio input is off — pick an input whose sample rate matches the output and Apply");
   document.getElementById("in-meter-note").textContent = state.input_enabled ? "" : "(off)";
 
   // volume
@@ -183,7 +187,15 @@ function renderState() {
   for (const mod of state.chain) {
     const div = document.createElement("div");
     div.className = "module";
-    div.innerHTML = `<h3>${mod.name}<span class="kind">${mod.kind} · ${mod.key}</span></h3>`;
+    div.style.opacity = mod.enabled ? "1" : "0.45";
+    div.innerHTML = `<h3><label style="cursor:pointer">
+      <input type="checkbox" class="mod-on" ${mod.enabled ? "checked" : ""}></label>
+      ${mod.name}<span class="kind">${mod.kind} · ${mod.key}${mod.enabled ? "" : " · bypassed"}</span></h3>`;
+    div.querySelector(".mod-on").addEventListener("change", (e) => {
+      send({type: "set_enabled", key: mod.key, enabled: e.target.checked});
+      div.style.opacity = e.target.checked ? "1" : "0.45";
+      e.target.blur();
+    });
     for (const [pname, p] of Object.entries(mod.params)) {
       const id = `p-${mod.key}-${pname}`;
       const row = document.createElement("div");
@@ -248,10 +260,22 @@ document.getElementById("vol").addEventListener("pointerup", () => dragging = nu
 document.getElementById("patch-sel").addEventListener("change", (e) => {
   send({type: "select_patch", patch: e.target.value});
 });
-document.getElementById("apply-io").addEventListener("click", () => {
+document.getElementById("apply-io").addEventListener("click", (e) => {
   send({type: "set_devices",
         input: document.getElementById("in-sel").value || null,
         output: document.getElementById("out-sel").value || null});
+  e.target.blur();
+});
+document.getElementById("keys-on").addEventListener("change", (e) => {
+  if (!e.target.checked) noteOffAll();
+  e.target.blur();
+});
+// Release focus after using a control, so the page (not the control) has it.
+document.addEventListener("pointerup", (e) => {
+  if (e.target.tagName === "INPUT" && e.target.type === "range") e.target.blur();
+});
+document.addEventListener("change", (e) => {
+  if (e.target.tagName === "SELECT") e.target.blur();
 });
 
 // ---------- computer keyboard as controller ----------
@@ -263,11 +287,17 @@ let octave = 4;                 // C4 = MIDI 60
 const held = new Set();
 const octName = () => `C${octave}`;
 
+function keysEnabled() { return document.getElementById("keys-on").checked; }
 function keyTarget(e) {
-  return ["INPUT", "SELECT", "TEXTAREA", "BUTTON"].includes(e.target.tagName);
+  // Only text-entry and dropdown elements swallow note keys. Sliders,
+  // checkboxes and buttons do NOT — so tweaking a param never kills the keys.
+  const t = e.target;
+  if (!t || !t.tagName) return false;
+  if (t.tagName === "SELECT" || t.tagName === "TEXTAREA") return true;
+  return t.tagName === "INPUT" && !["range", "checkbox"].includes(t.type);
 }
 window.addEventListener("keydown", (e) => {
-  if (e.repeat || keyTarget(e) || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.repeat || !keysEnabled() || keyTarget(e) || e.metaKey || e.ctrlKey || e.altKey) return;
   const k = e.key.toLowerCase();
   if (k === "z") { octave = Math.max(1, octave - 1); noteOffAll(); }
   else if (k === "x") { octave = Math.min(7, octave + 1); noteOffAll(); }

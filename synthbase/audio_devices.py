@@ -35,8 +35,35 @@ def list_audio_devices() -> dict:
             rate = item.get("coreaudio_device_srate")
             in_ch = item.get("coreaudio_device_input") or 0
             out_ch = item.get("coreaudio_device_output") or 0
+            default_in = item.get("coreaudio_default_audio_input_device") == "spaudio_yes"
+            default_out = item.get("coreaudio_default_audio_output_device") == "spaudio_yes"
             if in_ch:
-                inputs.append({"name": name, "channels": in_ch, "sample_rate": rate})
+                inputs.append({"name": name, "channels": in_ch, "sample_rate": rate,
+                               "default": default_in})
             if out_ch:
-                outputs.append({"name": name, "channels": out_ch, "sample_rate": rate})
+                outputs.append({"name": name, "channels": out_ch, "sample_rate": rate,
+                                "default": default_out})
     return {"inputs": inputs, "outputs": outputs}
+
+
+def find_rate_matched_input(output_device: str | None) -> str | None:
+    """Find an input device whose sample rate matches the output's.
+
+    Used when the default input can't pair with the output (bluetooth
+    headset mics run at 16 kHz and can never match). Prefers the built-in
+    microphone. Returns a device name or None.
+    """
+    devices = list_audio_devices()
+    outs, ins = devices["outputs"], devices["inputs"]
+    if output_device:
+        out = next((d for d in outs if d["name"] == output_device), None)
+    else:
+        out = next((d for d in outs if d.get("default")), None)
+    if not out or not out.get("sample_rate"):
+        return None
+    rate = out["sample_rate"]
+    candidates = [d for d in ins if d.get("sample_rate") == rate]
+    for d in candidates:
+        if "macbook" in d["name"].lower() or "built-in" in d["name"].lower():
+            return d["name"]
+    return candidates[0]["name"] if candidates else None

@@ -176,6 +176,11 @@ class SynthApp:
             self.rack.set_param(key, name, value)
             return value
 
+    def set_enabled(self, key: str, enabled: bool) -> None:
+        with self._lock:
+            if self.rack:
+                self.rack.set_enabled(key, enabled)
+
     def set_volume(self, volume: float) -> None:
         with self._lock:
             if self.master:
@@ -210,6 +215,7 @@ class SynthApp:
                         "key": inst.key,
                         "name": inst.module.name,
                         "kind": inst.module.kind,
+                        "enabled": inst.enabled,
                         "params": {
                             pname: {
                                 "min": p.minimum,
@@ -231,6 +237,7 @@ class SynthApp:
                 "input_enabled": bool(
                     self.engine and self.engine.options.input_bus_channel_count > 0
                 ),
+                "boot_note": self.engine.boot_note if self.engine else None,
                 "voice_target": self.voice.target_key if self.voice else None,
                 "module_errors": {k: repr(v) for k, v in self.module_errors.items()},
             }
