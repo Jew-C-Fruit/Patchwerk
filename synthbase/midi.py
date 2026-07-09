@@ -25,7 +25,11 @@ def midi_to_freq(note: int) -> float:
 
 
 def list_inputs() -> list[str]:
-    return mido.get_input_names()
+    try:
+        return mido.get_input_names()
+    except Exception as exc:  # noqa: BLE001 — no MIDI backend is never fatal
+        print(f"[midi] backend unavailable ({exc.__class__.__name__}) — no MIDI")
+        return []
 
 
 class MonoVoice:
@@ -65,10 +69,11 @@ class MidiRouter:
         notes_to: str | None = None,
         port_name: str | None = None,
         verbose: bool = True,
+        voice: MonoVoice | None = None,  # share a voice with other controllers (GUI)
     ) -> None:
         self.rack = rack
         self.cc_bindings = cc_bindings or {}
-        self.voice = MonoVoice(rack, notes_to) if notes_to else None
+        self.voice = voice or (MonoVoice(rack, notes_to) if notes_to else None)
         self.verbose = verbose
         self.port = None
         self.port_name = port_name
@@ -79,7 +84,11 @@ class MidiRouter:
             print("[midi] no MIDI inputs found — running without MIDI")
             return
         name = self.port_name or names[0]
-        self.port = mido.open_input(name, callback=self._handle)
+        try:
+            self.port = mido.open_input(name, callback=self._handle)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[midi] could not open {name!r}: {exc} — running without MIDI")
+            return
         print(f"[midi] listening on {name!r}")
 
     def stop(self) -> None:

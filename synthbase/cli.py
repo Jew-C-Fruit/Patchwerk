@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import threading
 import time
 from pathlib import Path
 
@@ -121,6 +122,31 @@ def cmd_play(args) -> None:
         engine.quit()
 
 
+def cmd_gui(args) -> None:
+    import asyncio
+    import webbrowser
+
+    from .app import SynthApp
+    from .server import GuiServer
+
+    app = SynthApp(
+        input_device=getattr(args, "in_device", None),
+        output_device=getattr(args, "out_device", None),
+        use_midi=not args.no_midi,
+        use_reload=not args.no_reload,
+    )
+    app.start(args.patch)
+    server = GuiServer(app, port=args.port)
+    if not args.no_browser:
+        threading.Timer(0.8, webbrowser.open, [f"http://127.0.0.1:{args.port}"]).start()
+    try:
+        asyncio.run(server.run())
+    except KeyboardInterrupt:
+        print("\nStopping.")
+    finally:
+        app.stop()
+
+
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(prog="synthbase")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -140,6 +166,16 @@ def main(argv=None) -> None:
     p_play.add_argument("--no-midi", action="store_true")
     p_play.add_argument("--no-reload", action="store_true")
     p_play.set_defaults(func=cmd_play)
+
+    p_gui = sub.add_parser("gui", help="run a patch with the browser GUI")
+    p_gui.add_argument("patch", nargs="?", default="demo", help="patch name (default: demo)")
+    p_gui.add_argument("--port", type=int, default=8765)
+    p_gui.add_argument("--in-device", dest="in_device")
+    p_gui.add_argument("--out-device", dest="out_device")
+    p_gui.add_argument("--no-midi", action="store_true")
+    p_gui.add_argument("--no-reload", action="store_true")
+    p_gui.add_argument("--no-browser", action="store_true")
+    p_gui.set_defaults(func=cmd_gui)
 
     args = parser.parse_args(argv)
     args.func(args)

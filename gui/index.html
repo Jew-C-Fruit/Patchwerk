@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SuperSynth</title>
+<style>
+  :root {
+    --plane: #f9f9f7; --surface: #fcfcfb; --ink-1: #0b0b0b; --ink-2: #52514e;
+    --ink-3: #898781; --hairline: #e1e0d9; --border: rgba(11,11,11,0.10);
+    --accent: #2a78d6; --meter: #1baf7a; --warn: #eb6834; --danger: #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --plane: #0d0d0d; --surface: #1a1a19; --ink-1: #ffffff; --ink-2: #c3c2b7;
+      --ink-3: #898781; --hairline: #2c2c2a; --border: rgba(255,255,255,0.10);
+      --accent: #3987e5; --meter: #199e70; --warn: #d95926; --danger: #e66767;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--plane); color: var(--ink-1);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 14px; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 18px; margin: 0; }
+  .card { background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px; margin-top: 12px; }
+  .row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  .grow { flex: 1; min-width: 140px; }
+  label.small, .small { font-size: 11.5px; color: var(--ink-2); }
+  select, button { font: inherit; color: var(--ink-1); background: var(--plane);
+    border: 1px solid var(--hairline); border-radius: 6px; padding: 5px 8px; }
+  button { cursor: pointer; } button:hover { border-color: var(--accent); }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .meterbar { height: 10px; background: var(--hairline); border-radius: 5px; overflow: hidden; }
+  .meterbar > div { height: 100%; width: 0%; background: var(--meter); border-radius: 5px;
+    transition: width 60ms linear; }
+  .meterbar.clip > div { background: var(--danger); }
+  .module { margin-top: 10px; }
+  .module h3 { margin: 0 0 2px; font-size: 14px; }
+  .module .kind { color: var(--ink-3); font-weight: 400; font-size: 11px; margin-left: 6px; }
+  .param { display: grid; grid-template-columns: 110px 1fr 74px; gap: 10px;
+    align-items: center; margin-top: 4px; }
+  .param .val { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+  #status { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+    background: var(--danger); margin-right: 6px; }
+  #status.ok { background: var(--meter); }
+  .kbd-hint { color: var(--ink-2); }
+  .kbd-hint kbd { background: var(--plane); border: 1px solid var(--hairline);
+    border-radius: 4px; padding: 0 5px; font-family: inherit; }
+  #focusnote.active { color: var(--meter); }
+  .err { color: var(--danger); font-size: 12px; margin-top: 6px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="row" style="justify-content: space-between; margin-top: 4px;">
+    <h1><span id="status"></span>SuperSynth</h1>
+    <span class="small" id="focusnote">keys play only while this window is focused</span>
+  </div>
+
+  <!-- I/O + master -->
+  <div class="card">
+    <div class="row">
+      <div class="grow">
+        <label class="small" for="in-sel">AUDIO IN</label><br>
+        <select id="in-sel" style="width:100%"></select>
+      </div>
+      <div class="grow">
+        <label class="small" for="out-sel">AUDIO OUT</label><br>
+        <select id="out-sel" style="width:100%"></select>
+      </div>
+      <div><br><button id="apply-io">Apply I/O</button></div>
+    </div>
+    <div class="small" id="io-note" style="margin-top:6px;"></div>
+    <div class="row" style="margin-top: 12px;">
+      <div class="grow">
+        <label class="small">MASTER VOLUME</label>
+        <input type="range" id="vol" min="0" max="1" step="0.001" value="0.8">
+      </div>
+      <div class="grow">
+        <label class="small">OUT L</label><div class="meterbar" id="m-out-l"><div></div></div>
+        <label class="small">OUT R</label><div class="meterbar" id="m-out-r"><div></div></div>
+      </div>
+      <div class="grow">
+        <label class="small">INPUT <span id="in-meter-note"></span></label>
+        <div class="meterbar" id="m-in"><div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- patch + modules -->
+  <div class="card">
+    <div class="row" style="justify-content: space-between;">
+      <div>
+        <label class="small" for="patch-sel">PATCH</label><br>
+        <select id="patch-sel"></select>
+      </div>
+      <div class="small" id="chain-desc"></div>
+    </div>
+    <div id="modules"></div>
+    <div class="err" id="mod-errors"></div>
+  </div>
+
+  <!-- keyboard help -->
+  <div class="card kbd-hint small">
+    Play notes with <kbd>A</kbd><kbd>W</kbd><kbd>S</kbd><kbd>E</kbd><kbd>D</kbd><kbd>F</kbd><kbd>T</kbd><kbd>G</kbd><kbd>Y</kbd><kbd>H</kbd><kbd>U</kbd><kbd>J</kbd><kbd>K</kbd>…
+    (piano layout) · octave <kbd>Z</kbd>/<kbd>X</kbd> — current: <b id="oct">C4</b>
+    · target: <b id="voice-target">—</b>
+  </div>
+</div>
+
+<script>
+"use strict";
+let ws = null, state = null, dragging = null;
+
+// ---------- websocket ----------
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => document.getElementById("status").classList.add("ok");
+  ws.onclose = () => {
+    document.getElementById("status").classList.remove("ok");
+    setTimeout(connect, 1000);
+  };
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.type === "state") { state = m; renderState(); }
+    else if (m.type === "meters") renderMeters(m);
+    else if (m.type === "error") console.warn("server:", m.message);
+  };
+}
+function send(m) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); }
+
+// ---------- rendering ----------
+function fmt(v) {
+  if (v >= 1000) return v.toFixed(0);
+  if (v >= 100) return v.toFixed(1);
+  if (v >= 10) return v.toFixed(2);
+  return v.toFixed(3);
+}
+function toUnit(p, value) {
+  if (p.curve === "exp") {
+    const lo = Math.max(p.min, 1e-6);
+    return Math.log(value / lo) / Math.log(p.max / lo);
+  }
+  return (value - p.min) / (p.max - p.min);
+}
+function fromUnit(p, u) {
+  if (p.curve === "exp") {
+    const lo = Math.max(p.min, 1e-6);
+    return lo * Math.pow(p.max / lo, u);
+  }
+  return p.min + u * (p.max - p.min);
+}
+
+function renderState() {
+  // devices
+  const inSel = document.getElementById("in-sel");
+  const outSel = document.getElementById("out-sel");
+  const dev = state.devices || {inputs: [], outputs: []};
+  const opt = (name, label, cur) =>
+    `<option value="${name ?? ""}" ${name === cur ? "selected" : ""}>${label}</option>`;
+  inSel.innerHTML = opt(null, "System default", state.current_input) +
+    dev.inputs.map(d => opt(d.name, `${d.name} (${d.channels}ch, ${d.sample_rate || "?"})`, state.current_input)).join("");
+  outSel.innerHTML = opt(null, "System default", state.current_output) +
+    dev.outputs.map(d => opt(d.name, `${d.name} (${d.channels}ch, ${d.sample_rate || "?"})`, state.current_output)).join("");
+  document.getElementById("io-note").textContent = state.input_enabled
+    ? "" : "audio input is off (sample-rate mismatch at boot) — pick an input whose rate matches the output and Apply";
+  document.getElementById("in-meter-note").textContent = state.input_enabled ? "" : "(off)";
+
+  // volume
+  if (dragging !== "vol") document.getElementById("vol").value = state.volume;
+
+  // patches
+  const psel = document.getElementById("patch-sel");
+  psel.innerHTML = state.patches.map(p =>
+    `<option ${p === state.patch ? "selected" : ""}>${p}</option>`).join("");
+  document.getElementById("chain-desc").textContent =
+    state.chain.map(c => c.name).join("  →  ") + "  →  out";
+
+  // modules & params
+  const holder = document.getElementById("modules");
+  holder.innerHTML = "";
+  for (const mod of state.chain) {
+    const div = document.createElement("div");
+    div.className = "module";
+    div.innerHTML = `<h3>${mod.name}<span class="kind">${mod.kind} · ${mod.key}</span></h3>`;
+    for (const [pname, p] of Object.entries(mod.params)) {
+      const id = `p-${mod.key}-${pname}`;
+      const row = document.createElement("div");
+      row.className = "param";
+      row.innerHTML = `<span class="small">${pname}</span>
+        <input type="range" id="${id}" min="0" max="1" step="0.001" value="${toUnit(p, p.value)}">
+        <span class="val" id="${id}-v">${fmt(p.value)}</span>`;
+      holder.appendChild(row);
+      const slider = row.querySelector("input");
+      slider.addEventListener("input", () => {
+        const u = parseFloat(slider.value);
+        document.getElementById(`${id}-v`).textContent = fmt(fromUnit(p, u));
+        throttled(`${mod.key}.${pname}`, () =>
+          send({type: "set_param", key: mod.key, name: pname, unit: u}));
+      });
+      slider.addEventListener("pointerdown", () => dragging = id);
+      slider.addEventListener("pointerup", () => dragging = null);
+      div.appendChild(row);
+    }
+    holder.appendChild(div);
+  }
+  document.getElementById("voice-target").textContent = state.voice_target || "none (no playable source)";
+  const errs = Object.entries(state.module_errors || {});
+  document.getElementById("mod-errors").textContent =
+    errs.map(([f, e]) => `module ${f} failed to load: ${e}`).join("\n");
+}
+
+function renderMeters(m) {
+  const scale = a => {
+    if (!a || a <= 0) return 0;
+    const db = 20 * Math.log10(a);
+    return Math.max(0, Math.min(100, (db + 60) / 60 * 100));
+  };
+  const set = (id, amp) => {
+    const el = document.getElementById(id);
+    el.firstElementChild.style.width = scale(amp) + "%";
+    el.classList.toggle("clip", amp > 0.99);
+  };
+  set("m-out-l", m.out[0]); set("m-out-r", m.out[1]);
+  if (m.in !== null && m.in !== undefined) set("m-in", m.in);
+}
+
+// ---------- throttling ----------
+const timers = {};
+function throttled(key, fn, ms = 33) {
+  if (timers[key]) { timers[key].fn = fn; return; }
+  fn();
+  timers[key] = { fn: null };
+  setTimeout(() => {
+    const pending = timers[key].fn;
+    delete timers[key];
+    if (pending) throttled(key, pending, ms);
+  }, ms);
+}
+
+// ---------- controls ----------
+document.getElementById("vol").addEventListener("input", (e) => {
+  throttled("vol", () => send({type: "set_volume", volume: parseFloat(e.target.value)}));
+});
+document.getElementById("vol").addEventListener("pointerdown", () => dragging = "vol");
+document.getElementById("vol").addEventListener("pointerup", () => dragging = null);
+document.getElementById("patch-sel").addEventListener("change", (e) => {
+  send({type: "select_patch", patch: e.target.value});
+});
+document.getElementById("apply-io").addEventListener("click", () => {
+  send({type: "set_devices",
+        input: document.getElementById("in-sel").value || null,
+        output: document.getElementById("out-sel").value || null});
+});
+
+// ---------- computer keyboard as controller ----------
+// Only fires while this window is focused: browsers deliver keydown/keyup
+// exclusively to the focused page, and we release everything on blur.
+const KEYMAP = {a:0, w:1, s:2, e:3, d:4, f:5, t:6, g:7, y:8, h:9, u:10, j:11,
+                k:12, o:13, l:14, p:15, ";":16};
+let octave = 4;                 // C4 = MIDI 60
+const held = new Set();
+const octName = () => `C${octave}`;
+
+function keyTarget(e) {
+  return ["INPUT", "SELECT", "TEXTAREA", "BUTTON"].includes(e.target.tagName);
+}
+window.addEventListener("keydown", (e) => {
+  if (e.repeat || keyTarget(e) || e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (k === "z") { octave = Math.max(1, octave - 1); noteOffAll(); }
+  else if (k === "x") { octave = Math.min(7, octave + 1); noteOffAll(); }
+  else if (k in KEYMAP) {
+    const note = 12 * (octave + 1) + KEYMAP[k];
+    if (!held.has(note)) { held.add(note); send({type: "note_on", note}); }
+    e.preventDefault();
+  }
+  document.getElementById("oct").textContent = octName();
+});
+window.addEventListener("keyup", (e) => {
+  const k = e.key.toLowerCase();
+  if (k in KEYMAP) {
+    const note = 12 * (octave + 1) + KEYMAP[k];
+    held.delete(note);
+    send({type: "note_off", note});
+  }
+});
+function noteOffAll() { held.clear(); send({type: "all_notes_off"}); }
+window.addEventListener("blur", () => {
+  noteOffAll();
+  document.getElementById("focusnote").classList.remove("active");
+});
+window.addEventListener("focus", () =>
+  document.getElementById("focusnote").classList.add("active"));
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) noteOffAll();
+});
+
+connect();
+if (document.hasFocus()) document.getElementById("focusnote").classList.add("active");
+</script>
+</body>
+</html>
