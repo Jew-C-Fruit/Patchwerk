@@ -35,6 +35,7 @@ class Engine:
         output_channels: int = 2,
         sample_rate: int | None = None,
         block_size: int = 64,
+        hardware_buffer_size: int | None = 256,  # frames; ~5 ms @ 48 kHz
     ) -> None:
         self.options = Options(
             port=find_free_port(),  # never collide with a stale scsynth
@@ -44,6 +45,7 @@ class Engine:
             output_bus_channel_count=output_channels,
             sample_rate=sample_rate,
             block_size=block_size,
+            hardware_buffer_size=hardware_buffer_size,
         )
         self.server: Server | None = None
         self.root_group = None  # all racks/chains go inside this group

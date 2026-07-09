@@ -49,9 +49,11 @@ class SynthApp:
         output_device: str | None = None,
         use_midi: bool = True,
         use_reload: bool = True,
+        hardware_buffer_size: int | None = 256,
     ) -> None:
         self.input_device = input_device
         self.output_device = output_device
+        self.hardware_buffer_size = hardware_buffer_size
         self.use_midi = use_midi
         self.use_reload = use_reload
 
@@ -76,7 +78,9 @@ class SynthApp:
             for fname, exc in self.module_errors.items():
                 print(f"[modules] SKIPPED {fname}: {exc!r}")
             self.engine = Engine(
-                input_device=self.input_device, output_device=self.output_device
+                input_device=self.input_device,
+                output_device=self.output_device,
+                hardware_buffer_size=self.hardware_buffer_size,
             ).boot()
             self.master = MasterSection(self.engine)
             self._build_patch(patch_name)

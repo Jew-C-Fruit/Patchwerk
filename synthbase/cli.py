@@ -36,6 +36,7 @@ def _engine_from_args(args) -> Engine:
     return Engine(
         input_device=getattr(args, "in_device", None),
         output_device=getattr(args, "out_device", None),
+        hardware_buffer_size=getattr(args, "hw_buffer", None) or 256,
     )
 
 
@@ -134,6 +135,7 @@ def cmd_gui(args) -> None:
         output_device=getattr(args, "out_device", None),
         use_midi=not args.no_midi,
         use_reload=not args.no_reload,
+        hardware_buffer_size=getattr(args, "hw_buffer", None) or 256,
     )
     app.start(args.patch)
     server = GuiServer(app, port=args.port)
@@ -156,12 +158,16 @@ def main(argv=None) -> None:
 
     p_test = sub.add_parser("test", help="boot the engine and play a test tone")
     p_test.add_argument("--in-device", dest="in_device")
+    p_test.add_argument("--hw-buffer", dest="hw_buffer", type=int,
+                       help="hardware buffer in frames (default 256; lower = less latency)")
     p_test.add_argument("--out-device", dest="out_device")
     p_test.set_defaults(func=cmd_test)
 
     p_play = sub.add_parser("play", help="run a patch file")
     p_play.add_argument("patch", help="path to a patch file, e.g. patches/demo.py")
     p_play.add_argument("--in-device", dest="in_device")
+    p_play.add_argument("--hw-buffer", dest="hw_buffer", type=int,
+                       help="hardware buffer in frames (default 256; lower = less latency)")
     p_play.add_argument("--out-device", dest="out_device")
     p_play.add_argument("--no-midi", action="store_true")
     p_play.add_argument("--no-reload", action="store_true")
@@ -171,6 +177,8 @@ def main(argv=None) -> None:
     p_gui.add_argument("patch", nargs="?", default="demo", help="patch name (default: demo)")
     p_gui.add_argument("--port", type=int, default=8765)
     p_gui.add_argument("--in-device", dest="in_device")
+    p_gui.add_argument("--hw-buffer", dest="hw_buffer", type=int,
+                       help="hardware buffer in frames (default 256; lower = less latency)")
     p_gui.add_argument("--out-device", dest="out_device")
     p_gui.add_argument("--no-midi", action="store_true")
     p_gui.add_argument("--no-reload", action="store_true")
