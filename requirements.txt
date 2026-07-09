@@ -1,0 +1,5 @@
+supriya>=26.3b0
+mido>=1.3
+python-rtmidi>=1.5
+watchdog>=4.0
+pyserial>=3.5
