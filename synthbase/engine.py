@@ -7,6 +7,7 @@ that racks live in, and synthdef registration.
 
 from __future__ import annotations
 
+import dataclasses
 import sys
 from pathlib import Path
 
@@ -49,7 +50,25 @@ class Engine:
 
     def boot(self) -> "Engine":
         _ensure_synthdef_dir()
-        self.server = Server().boot(options=self.options)
+        try:
+            self.server = Server().boot(options=self.options)
+        except Exception as exc:
+            # macOS: the default input and output devices often run at
+            # different sample rates (bluetooth headset mics especially),
+            # which scsynth refuses. Fall back to output-only rather than
+            # failing to start.
+            if "sample rate" not in str(exc).lower():
+                raise
+            print(
+                "[engine] input/output sample rates don't match (bluetooth "
+                "headset mic?) — retrying with audio input disabled.\n"
+                "[engine] to use audio input, pass --in-device with a device "
+                "whose rate matches the output (see Audio MIDI Setup)."
+            )
+            self.options = dataclasses.replace(
+                self.options, input_bus_channel_count=0, input_device=None
+            )
+            self.server = Server().boot(options=self.options)
         self.root_group = self.server.add_group(add_action=AddAction.ADD_TO_TAIL)
         return self
 
