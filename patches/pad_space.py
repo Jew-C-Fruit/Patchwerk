@@ -16,7 +16,9 @@ PATCH = {
     "bindings": {
         "notes_to": "pulse_pad",
         "cc": {
-            1: ("lowpass", "cutoff"),
+            1: ("lowpass", "cutoff"),      # CP88 mod lever
+            4: ("lowpass", "cutoff"),      # CP88 FC2 jack (wah pedal)
+            11: ("pulse_pad", "amp"),      # CP88 FC1 jack (expression)
             74: ("lowpass", "cutoff"),
             71: ("drive", "gain"),
         },

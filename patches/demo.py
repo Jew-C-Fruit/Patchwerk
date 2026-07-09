@@ -17,7 +17,9 @@ PATCH = {
         "midi_in": None,          # None = first available MIDI input (the CP88)
         "notes_to": "wobble_saw", # mono, last-note priority
         "cc": {
-            1: ("lowpass", "cutoff"),
+            1: ("lowpass", "cutoff"),      # CP88 mod lever
+            4: ("lowpass", "cutoff"),      # CP88 FC2 jack (wah pedal)
+            11: ("wobble_saw", "amp"),     # CP88 FC1 jack (expression)
             74: ("lowpass", "cutoff"),
             71: ("lowpass", "resonance"),
         },

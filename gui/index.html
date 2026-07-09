@@ -113,6 +113,7 @@
     Play notes with <kbd>A</kbd><kbd>W</kbd><kbd>S</kbd><kbd>E</kbd><kbd>D</kbd><kbd>F</kbd><kbd>T</kbd><kbd>G</kbd><kbd>Y</kbd><kbd>H</kbd><kbd>U</kbd><kbd>J</kbd><kbd>K</kbd>…
     (piano layout) · octave <kbd>Z</kbd>/<kbd>X</kbd> — current: <b id="oct">C4</b>
     · target: <b id="voice-target">—</b>
+    &nbsp;·&nbsp; MIDI monitor: <b id="midi-mon">—</b>
   </div>
 </div>
 
@@ -132,6 +133,8 @@ function connect() {
     const m = JSON.parse(ev.data);
     if (m.type === "state") { state = m; renderState(); }
     else if (m.type === "meters") renderMeters(m);
+    else if (m.type === "param") trackParam(m);
+    else if (m.type === "midi") showMidi(m.event);
     else if (m.type === "error") console.warn("server:", m.message);
   };
 }
@@ -233,6 +236,35 @@ function renderState() {
   const errs = Object.entries(state.module_errors || {});
   document.getElementById("mod-errors").textContent =
     errs.map(([f, e]) => `module ${f} failed to load: ${e}`).join("\n");
+}
+
+// Physical control moved -> move the matching virtual slider (unless the
+// user is dragging that very slider right now).
+function trackParam(m) {
+  const id = `p-${m.key}-${m.name}`;
+  const slider = document.getElementById(id);
+  if (!slider) return;
+  if (dragging !== id) slider.value = m.unit;
+  const val = document.getElementById(`${id}-v`);
+  if (val) val.textContent = fmt(m.value);
+  if (state) {  // keep local state in sync so re-renders don't snap back
+    const mod = state.chain.find(c => c.key === m.key);
+    if (mod && mod.params[m.name]) mod.params[m.name].value = m.value;
+  }
+}
+
+function showMidi(e) {
+  const el = document.getElementById("midi-mon");
+  if (!el) return;
+  if (e.kind === "cc") {
+    el.textContent = e.bound
+      ? `CC ${e.cc} → ${e.bound[0]}.${e.bound[1]}`
+      : `CC ${e.cc} = ${(e.unit * 127) | 0} (unbound)`;
+  } else if (e.kind === "bend") {
+    el.textContent = `bend ${e.semitones >= 0 ? "+" : ""}${e.semitones.toFixed(2)} st`;
+  } else if (e.kind === "sustain") {
+    el.textContent = `sustain ${e.on ? "ON" : "off"}`;
+  }
 }
 
 function renderMeters(m) {

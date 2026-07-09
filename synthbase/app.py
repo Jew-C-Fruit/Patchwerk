@@ -67,6 +67,7 @@ class SynthApp:
         self.reloader: Reloader | None = None
         self.voice: MonoVoice | None = None
 
+        self.on_midi_event = None  # set by GuiServer; called from MIDI thread
         self.patch_name: str | None = None
         self.patch: dict | None = None
         self.registry: dict = {}
@@ -131,8 +132,18 @@ class SynthApp:
             port_name=self.midi_port or bindings.get("midi_in"),
             voice=self.voice,
             verbose=False,
+            on_event=self._emit_midi_event,
         )
         self.router.start()
+
+    def _emit_midi_event(self, event: dict) -> None:
+        """Forward MIDI events to whoever is listening (GUI). MIDI thread!"""
+        callback = self.on_midi_event
+        if callback is not None:
+            try:
+                callback(event)
+            except Exception:  # noqa: BLE001
+                pass
 
     def _guess_voice_target(self) -> str | None:
         """First source in the chain that looks note-playable (freq + gate)."""

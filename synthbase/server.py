@@ -38,6 +38,7 @@ class GuiServer:
         self.host = host
         self.port = port
         self.clients: set[web.WebSocketResponse] = set()
+        self.loop: asyncio.AbstractEventLoop | None = None
         self.web_app = web.Application()
         self.web_app.router.add_get("/", self._index)
         self.web_app.router.add_get("/ws", self._ws)
@@ -118,6 +119,23 @@ class GuiServer:
     async def _broadcast_state(self, exclude=None) -> None:
         await self._broadcast({"type": "state", **self.synth.state()}, exclude=exclude)
 
+    # -- physical controls -> GUI ------------------------------------------------
+
+    def _midi_event_from_thread(self, event: dict) -> None:
+        """Called on the MIDI thread; hop onto the server's event loop."""
+        if self.loop is not None and self.clients:
+            asyncio.run_coroutine_threadsafe(self._push_midi(event), self.loop)
+
+    async def _push_midi(self, event: dict) -> None:
+        # A bound CC also updates that one slider (virtual follows physical).
+        if event.get("kind") == "cc" and event.get("bound"):
+            key, name = event["bound"]
+            await self._broadcast({
+                "type": "param", "key": key, "name": name,
+                "value": event["value"], "unit": event["unit"],
+            })
+        await self._broadcast({"type": "midi", "event": event})
+
     # -- meters ---------------------------------------------------------------
 
     async def _meter_loop(self) -> None:
@@ -131,6 +149,8 @@ class GuiServer:
     # -- run -------------------------------------------------------------------
 
     async def run(self) -> None:
+        self.loop = asyncio.get_running_loop()
+        self.synth.on_midi_event = self._midi_event_from_thread
         runner = web.AppRunner(self.web_app)
         await runner.setup()
         site = web.TCPSite(runner, self.host, self.port)
