@@ -10,6 +10,7 @@ Protocol (JSON messages):
     {"type": "all_notes_off"}
     {"type": "select_patch", "patch": "demo"}
     {"type": "set_devices", "input": "MacBook Pro Microphone", "output": null}
+    {"type": "set_midi", "port": "CP88/CP73 Port1", "enabled": true}
 
   server -> client:
     {"type": "state", ...full snapshot...}       (on connect and after changes)
@@ -78,6 +79,9 @@ class GuiServer:
         elif t == "set_enabled":
             self.synth.set_enabled(m["key"], m["enabled"])
             await self._broadcast_state(exclude=sender)
+        elif t == "set_midi":
+            self.synth.set_midi(m.get("port"), m.get("enabled", True))
+            await self._broadcast_state()
         elif t == "set_volume":
             self.synth.set_volume(m["volume"])
         elif t == "note_on":

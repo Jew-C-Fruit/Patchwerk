@@ -77,24 +77,29 @@ class MidiRouter:
         self.verbose = verbose
         self.port = None
         self.port_name = port_name
+        self.active_port: str | None = None  # what actually got opened
 
     def start(self) -> None:
         names = list_inputs()
         if not names:
             print("[midi] no MIDI inputs found — running without MIDI")
             return
-        name = self.port_name or names[0]
+        # Default: prefer real hardware over virtual IAC buses.
+        hardware = [n for n in names if "iac" not in n.lower()]
+        name = self.port_name or (hardware[0] if hardware else names[0])
         try:
             self.port = mido.open_input(name, callback=self._handle)
         except Exception as exc:  # noqa: BLE001
             print(f"[midi] could not open {name!r}: {exc} — running without MIDI")
             return
+        self.active_port = name
         print(f"[midi] listening on {name!r}")
 
     def stop(self) -> None:
         if self.port is not None:
             self.port.close()
             self.port = None
+        self.active_port = None
 
     # -- message handling ---------------------------------------------------
 

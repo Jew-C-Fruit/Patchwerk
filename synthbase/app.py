@@ -19,6 +19,7 @@ from .audio_devices import list_audio_devices
 from .engine import Engine
 from .master import MasterSection
 from .midi import MidiRouter, MonoVoice
+from .midi import list_inputs as _list_midi_inputs
 from .module import load_all_modules
 from .rack import Rack
 from .watcher import Reloader
@@ -56,6 +57,8 @@ class SynthApp:
         self.hardware_buffer_size = hardware_buffer_size
         self.use_midi = use_midi
         self.use_reload = use_reload
+        self.midi_enabled = use_midi
+        self.midi_port: str | None = None  # None = auto (prefer hardware)
 
         self.engine: Engine | None = None
         self.rack: Rack | None = None
@@ -110,18 +113,26 @@ class SynthApp:
         bindings = patch.get("bindings", {})
         target = bindings.get("notes_to") or self._guess_voice_target()
         self.voice = MonoVoice(self.rack, target) if target else None
-        if self.use_midi:
-            self.router = MidiRouter(
-                self.rack,
-                cc_bindings=bindings.get("cc"),
-                port_name=bindings.get("midi_in"),
-                voice=self.voice,
-                verbose=False,
-            )
-            self.router.start()
-
         self.patch_name = patch_name
         self.patch = patch
+        self._restart_midi()
+
+    def _restart_midi(self) -> None:
+        """(Re)open the MIDI router against the current rack/voice/port."""
+        if self.router:
+            self.router.stop()
+            self.router = None
+        if not (self.use_midi and self.midi_enabled and self.rack):
+            return
+        bindings = (self.patch or {}).get("bindings", {})
+        self.router = MidiRouter(
+            self.rack,
+            cc_bindings=bindings.get("cc"),
+            port_name=self.midi_port or bindings.get("midi_in"),
+            voice=self.voice,
+            verbose=False,
+        )
+        self.router.start()
 
     def _guess_voice_target(self) -> str | None:
         """First source in the chain that looks note-playable (freq + gate)."""
@@ -179,6 +190,13 @@ class SynthApp:
             value = p.from_unit(float(unit_value))
             self.rack.set_param(key, name, value)
             return value
+
+    def set_midi(self, port_name: str | None, enabled: bool) -> None:
+        """Choose the MIDI note/CC source (or turn MIDI off)."""
+        with self._lock:
+            self.midi_port = port_name
+            self.midi_enabled = bool(enabled)
+            self._restart_midi()
 
     def set_enabled(self, key: str, enabled: bool) -> None:
         with self._lock:
@@ -243,5 +261,8 @@ class SynthApp:
                 ),
                 "boot_note": self.engine.boot_note if self.engine else None,
                 "voice_target": self.voice.target_key if self.voice else None,
+                "midi_inputs": _list_midi_inputs(),
+                "midi_port": self.router.active_port if self.router else None,
+                "midi_enabled": self.midi_enabled,
                 "module_errors": {k: repr(v) for k, v in self.module_errors.items()},
             }

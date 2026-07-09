@@ -56,8 +56,12 @@
   <div class="row" style="justify-content: space-between; margin-top: 4px;">
     <h1><span id="status"></span>SuperSynth</h1>
     <span class="small">
-      <label><input type="checkbox" id="keys-on" checked> keyboard plays notes</label>
-      · <span id="focusnote">focused</span>
+      NOTES:
+      <label><input type="checkbox" id="keys-on" checked> computer keys</label>
+      <span id="focusnote"></span>
+      &nbsp;·&nbsp;
+      <label><input type="checkbox" id="midi-on" checked> MIDI</label>
+      <select id="midi-sel" style="max-width:180px"></select>
     </span>
   </div>
 
@@ -171,6 +175,14 @@ function renderState() {
       "audio input is off — pick an input whose sample rate matches the output and Apply");
   document.getElementById("in-meter-note").textContent = state.input_enabled ? "" : "(off)";
 
+  // midi note source
+  const msel = document.getElementById("midi-sel");
+  const mins = state.midi_inputs || [];
+  msel.innerHTML = `<option value="">auto</option>` + mins.map(n =>
+    `<option value="${n}" ${n === state.midi_port ? "selected" : ""}>${n}</option>`).join("");
+  msel.disabled = !state.midi_enabled;
+  document.getElementById("midi-on").checked = !!state.midi_enabled;
+
   // volume
   if (dragging !== "vol") document.getElementById("vol").value = state.volume;
 
@@ -270,6 +282,15 @@ document.getElementById("keys-on").addEventListener("change", (e) => {
   if (!e.target.checked) noteOffAll();
   e.target.blur();
 });
+function sendMidiChoice() {
+  send({type: "set_midi",
+        port: document.getElementById("midi-sel").value || null,
+        enabled: document.getElementById("midi-on").checked});
+}
+document.getElementById("midi-on").addEventListener("change", (e) => {
+  sendMidiChoice(); e.target.blur();
+});
+document.getElementById("midi-sel").addEventListener("change", sendMidiChoice);
 // Release focus after using a control, so the page (not the control) has it.
 document.addEventListener("pointerup", (e) => {
   if (e.target.tagName === "INPUT" && e.target.type === "range") e.target.blur();
@@ -317,18 +338,19 @@ window.addEventListener("keyup", (e) => {
   }
 });
 function noteOffAll() { held.clear(); send({type: "all_notes_off"}); }
-window.addEventListener("blur", () => {
-  noteOffAll();
-  document.getElementById("focusnote").classList.remove("active");
-});
-window.addEventListener("focus", () =>
-  document.getElementById("focusnote").classList.add("active"));
+function setFocusNote(focused) {
+  const el = document.getElementById("focusnote");
+  el.classList.toggle("active", focused);
+  el.textContent = focused ? "(live)" : "(needs window focus)";
+}
+window.addEventListener("blur", () => { noteOffAll(); setFocusNote(false); });
+window.addEventListener("focus", () => setFocusNote(true));
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) noteOffAll();
 });
 
 connect();
-if (document.hasFocus()) document.getElementById("focusnote").classList.add("active");
+setFocusNote(document.hasFocus());
 </script>
 </body>
 </html>
