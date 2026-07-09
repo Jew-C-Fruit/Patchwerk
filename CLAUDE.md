@@ -52,6 +52,10 @@ Rules:
 6. **Keep one module per file** unless variants truly belong together.
 7. Smoothing: wrap params that will be twiddled in `Lag.kr(source=p,
    lag_time=0.02)` to avoid zipper noise.
+8. **Pitch offsets are always in semitones or cents**, never raw frequency
+   ratios — convert inside the DSP with `.semitones_to_ratio()` (e.g.
+   `(cents / 100).semitones_to_ratio()`). Voice-level pitch bend already
+   follows this convention (±2 semitones).
 
 UGen naming: supriya mirrors SuperCollider UGens with snake_case keyword args
 (`SinOsc.ar(frequency=...)`, `RLPF.ar(source=..., frequency=...,
