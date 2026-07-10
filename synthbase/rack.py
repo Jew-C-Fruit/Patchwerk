@@ -40,6 +40,7 @@ class Instance:
     node: Any = None
     bus_group: Any = None  # audio bus group feeding the *next* stage (None for last)
     enabled: bool = True
+    service: bool = False  # side-instance (drone, LFO) rather than a chain stage
 
     @property
     def display(self) -> str:
@@ -140,7 +141,9 @@ class Rack:
             target_node=self.engine.root_group,
             **settings,
         )
-        inst = Instance(key=module.key, module=module, settings=settings, node=node)
+        inst = Instance(
+            key=module.key, module=module, settings=settings, node=node, service=True
+        )
         self.instances.append(inst)
         self.registry[module.key] = module
         return inst

@@ -242,12 +242,13 @@ function renderState() {
   psel.innerHTML = state.patches.map(p =>
     `<option ${p === state.patch ? "selected" : ""}>${p}</option>`).join("");
   document.getElementById("chain-desc").textContent =
-    state.chain.map(c => c.name).join("  →  ") + "  →  out";
+    state.chain.filter(c => !c.service).map(c => c.name).join("  →  ") + "  →  out";
 
   // modules & params
   const holder = document.getElementById("modules");
   holder.innerHTML = "";
-  for (const mod of state.chain) {
+  const ordered = [...state.chain.filter(c => c.service), ...state.chain.filter(c => !c.service)];
+  for (const mod of ordered) {
     const div = document.createElement("div");
     div.className = "module";
     div.style.opacity = mod.enabled ? "1" : "0.45";

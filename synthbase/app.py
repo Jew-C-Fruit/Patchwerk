@@ -319,6 +319,7 @@ class SynthApp:
                         "name": inst.module.name,
                         "kind": inst.module.kind,
                         "enabled": inst.enabled,
+                        "service": inst.service,
                         "params": {
                             pname: {
                                 "min": p.minimum,
