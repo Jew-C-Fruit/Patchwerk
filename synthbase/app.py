@@ -16,6 +16,7 @@ import threading
 from pathlib import Path
 
 from .arp import Arpeggiator
+from .transport import Transport, _click
 from .audio_devices import list_audio_devices
 from .engine import Engine
 from .master import MasterSection
@@ -69,6 +70,8 @@ class SynthApp:
         self.voice: MonoVoice | None = None
         self.arp: Arpeggiator | None = None
         self._arp_settings: dict = {}  # persists across patch switches
+        self.transport = Transport()
+        self.on_beat_event = None  # set by GuiServer; called from the beat thread
 
         self.on_midi_event = None  # set by GuiServer; called from MIDI thread
         self.patch_name: str | None = None
@@ -90,6 +93,10 @@ class SynthApp:
                 hardware_buffer_size=self.hardware_buffer_size,
             ).boot()
             self.master = MasterSection(self.engine)
+            self.engine.server.add_synthdefs(_click)
+            self.engine.server.sync()
+            self.transport.on_beat = self._handle_beat
+            self.transport.start()
             self._build_patch(patch_name)
             if self.use_reload:
                 self.reloader = Reloader(self.engine, self.rack, MODULES_DIR)
@@ -103,6 +110,9 @@ class SynthApp:
         if self.router:
             self.router.stop()
             self.router = None
+        if self.arp:
+            self.arp.shutdown()
+            self.arp = None
         if self.master and self.master._master_node is not None:
             self.master.stop()
         if self.rack:
@@ -116,12 +126,9 @@ class SynthApp:
 
         bindings = patch.get("bindings", {})
         target = bindings.get("notes_to") or self._guess_voice_target()
-        if self.arp:
-            self.arp.shutdown()
-            self.arp = None
         self.voice = MonoVoice(self.rack, target) if target else None
         if self.voice:
-            self.arp = Arpeggiator(self.voice)
+            self.arp = Arpeggiator(self.voice, self.transport)
             self.arp.configure(**{**self._arp_settings, **patch.get("arp", {})})
             self._arp_settings = {
                 k: v for k, v in self.arp.settings().items() if k != "patterns"
@@ -166,8 +173,36 @@ class SynthApp:
                 return inst.key
         return None
 
+    def _handle_beat(self, bar: int, beat: int) -> None:
+        """Runs on the transport's beat thread."""
+        if self.transport.click_enabled and self.engine and self.engine.root_group:
+            try:
+                self.engine.root_group.add_synth(
+                    _click,
+                    add_action="add_to_tail",
+                    freq=2000 if beat == 0 else 1400,   # accent the downbeat
+                    amp=0.3 if beat == 0 else 0.18,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        callback = self.on_beat_event
+        if callback is not None:
+            try:
+                callback(bar, beat)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def set_transport(self, bpm=None, beats_per_bar=None, click=None) -> None:
+        if bpm is not None:
+            self.transport.set_bpm(bpm)
+        if beats_per_bar is not None:
+            self.transport.set_meter(beats_per_bar)
+        if click is not None:
+            self.transport.click_enabled = bool(click)
+
     def stop(self) -> None:
         with self._lock:
+            self.transport.shutdown()
             if self.reloader:
                 self.reloader.stop()
                 self.reloader = None
@@ -299,5 +334,6 @@ class SynthApp:
                 "midi_port": self.router.active_port if self.router else None,
                 "midi_enabled": self.midi_enabled,
                 "arp": self.arp.settings() if self.arp else None,
+                "transport": self.transport.settings(),
                 "module_errors": {k: repr(v) for k, v in self.module_errors.items()},
             }

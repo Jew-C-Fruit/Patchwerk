@@ -79,6 +79,21 @@
       <div><br><button id="apply-io">Apply I/O</button></div>
     </div>
     <div class="small" id="io-note" style="margin-top:6px;"></div>
+    <div class="row" style="margin-top: 12px; border-top:1px solid var(--hairline); padding-top:10px;">
+      <div>
+        <label class="small">TEMPO <span id="bpm-v"></span></label><br>
+        <input type="range" id="bpm" min="40" max="240" step="1" style="width:130px">
+      </div>
+      <div>
+        <label class="small">METER</label><br>
+        <select id="meter">
+          <option value="2">2/4</option><option value="3">3/4</option>
+          <option value="4" selected>4/4</option><option value="6">6/8</option>
+        </select>
+      </div>
+      <label class="small"><input type="checkbox" id="click-on"> click</label>
+      <span class="small">position: <b id="beat-pos">—</b> <span id="beat-dot" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--hairline);"></span></span>
+    </div>
     <div class="row" style="margin-top: 12px;">
       <div class="grow">
         <label class="small">MASTER VOLUME</label>
@@ -107,9 +122,9 @@
     <div class="row" style="margin-top:10px; border-top:1px solid var(--hairline); padding-top:10px;">
       <label class="small"><input type="checkbox" id="arp-on"> <b>ARP</b></label>
       <select id="arp-pattern" class="small"></select>
-      <div class="grow">
-        <label class="small">RATE <span id="arp-rate-v"></span></label>
-        <input type="range" id="arp-rate" min="0" max="1" step="0.001">
+      <div>
+        <label class="small">DIV</label><br>
+        <select id="arp-div"></select>
       </div>
       <div class="grow">
         <label class="small">GATE <span id="arp-gate-v"></span></label>
@@ -151,6 +166,7 @@ function connect() {
     else if (m.type === "meters") renderMeters(m);
     else if (m.type === "param") trackParam(m);
     else if (m.type === "midi") showMidi(m.event);
+    else if (m.type === "beat") onBeat(m);
     else if (m.type === "error") console.warn("server:", m.message);
   };
 }
@@ -250,6 +266,7 @@ function renderState() {
   }
   document.getElementById("voice-target").textContent = state.voice_target || "none (no playable source)";
   renderArp();
+  renderTransport();
   const errs = Object.entries(state.module_errors || {});
   document.getElementById("mod-errors").textContent =
     errs.map(([f, e]) => `module ${f} failed to load: ${e}`).join("\n");
@@ -300,7 +317,6 @@ function renderMeters(m) {
 }
 
 // ---------- arp ----------
-const ARP_RATE = {min: 0.5, max: 20, curve: "exp"};  // slider unit -> Hz
 function renderArp() {
   const a = state.arp;
   const row = document.getElementById("arp-on").closest(".row");
@@ -310,40 +326,68 @@ function renderArp() {
   const psel = document.getElementById("arp-pattern");
   psel.innerHTML = a.patterns.map(p =>
     `<option ${p === a.pattern ? "selected" : ""}>${p}</option>`).join("");
-  if (dragging !== "arp-rate") {
-    document.getElementById("arp-rate").value = toUnit(ARP_RATE, a.rate);
-  }
-  document.getElementById("arp-rate-v").textContent = a.rate.toFixed(1) + "/s";
+  const dsel = document.getElementById("arp-div");
+  dsel.innerHTML = a.divisions.map(d =>
+    `<option ${d === a.division ? "selected" : ""}>${d}</option>`).join("");
   if (dragging !== "arp-gate") document.getElementById("arp-gate").value = a.gate;
   document.getElementById("arp-gate-v").textContent = Math.round(a.gate * 100) + "%";
   if (dragging !== "arp-oct") document.getElementById("arp-oct").value = a.octaves;
   document.getElementById("arp-oct-v").textContent = a.octaves;
+}
+function renderTransport() {
+  const t = state.transport;
+  if (!t) return;
+  if (dragging !== "bpm") document.getElementById("bpm").value = t.bpm;
+  document.getElementById("bpm-v").textContent = Math.round(t.bpm) + " bpm";
+  document.getElementById("meter").value = String(t.beats_per_bar);
+  document.getElementById("click-on").checked = !!t.click;
 }
 function sendArp() {
   throttled("arp", () => send({
     type: "set_arp",
     enabled: document.getElementById("arp-on").checked,
     pattern: document.getElementById("arp-pattern").value,
-    rate: fromUnit(ARP_RATE, parseFloat(document.getElementById("arp-rate").value)),
+    division: document.getElementById("arp-div").value,
     gate: parseFloat(document.getElementById("arp-gate").value),
     octaves: parseInt(document.getElementById("arp-oct").value, 10),
   }));
 }
-for (const id of ["arp-on", "arp-pattern"]) {
+function sendTransport() {
+  throttled("transport", () => send({
+    type: "set_transport",
+    bpm: parseFloat(document.getElementById("bpm").value),
+    beats_per_bar: parseInt(document.getElementById("meter").value, 10),
+    click: document.getElementById("click-on").checked,
+  }));
+}
+for (const id of ["arp-on", "arp-pattern", "arp-div"]) {
   document.getElementById(id).addEventListener("change", (e) => { sendArp(); e.target.blur(); });
 }
-for (const id of ["arp-rate", "arp-gate", "arp-oct"]) {
+for (const id of ["arp-gate", "arp-oct"]) {
   const el = document.getElementById(id);
   el.addEventListener("input", () => {
     sendArp();
-    if (id === "arp-rate") document.getElementById("arp-rate-v").textContent =
-      fromUnit(ARP_RATE, parseFloat(el.value)).toFixed(1) + "/s";
     if (id === "arp-gate") document.getElementById("arp-gate-v").textContent =
       Math.round(parseFloat(el.value) * 100) + "%";
     if (id === "arp-oct") document.getElementById("arp-oct-v").textContent = el.value;
   });
   el.addEventListener("pointerdown", () => dragging = id);
   el.addEventListener("pointerup", () => dragging = null);
+}
+document.getElementById("bpm").addEventListener("input", () => {
+  document.getElementById("bpm-v").textContent = document.getElementById("bpm").value + " bpm";
+  sendTransport();
+});
+document.getElementById("bpm").addEventListener("pointerdown", () => dragging = "bpm");
+document.getElementById("bpm").addEventListener("pointerup", (e) => { dragging = null; e.target.blur(); });
+for (const id of ["meter", "click-on"]) {
+  document.getElementById(id).addEventListener("change", (e) => { sendTransport(); e.target.blur(); });
+}
+function onBeat(m) {
+  document.getElementById("beat-pos").textContent = `${m.bar + 1}.${m.beat + 1}`;
+  const dot = document.getElementById("beat-dot");
+  dot.style.background = m.beat === 0 ? "var(--accent)" : "var(--meter)";
+  setTimeout(() => { dot.style.background = "var(--hairline)"; }, 90);
 }
 
 // ---------- throttling ----------

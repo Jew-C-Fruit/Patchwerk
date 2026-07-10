@@ -11,7 +11,8 @@ Protocol (JSON messages):
     {"type": "select_patch", "patch": "demo"}
     {"type": "set_devices", "input": "MacBook Pro Microphone", "output": null}
     {"type": "set_midi", "port": "CP88/CP73 Port1", "enabled": true}
-    {"type": "set_arp", "enabled": true, "rate": 8, "gate": 0.6, "octaves": 2, "pattern": "updown"}
+    {"type": "set_arp", "enabled": true, "division": "1/8", "gate": 0.6, "octaves": 2, "pattern": "updown"}
+    {"type": "set_transport", "bpm": 110, "beats_per_bar": 4, "click": true}
 
   server -> client:
     {"type": "state", ...full snapshot...}       (on connect and after changes)
@@ -81,10 +82,17 @@ class GuiServer:
         elif t == "set_enabled":
             self.synth.set_enabled(m["key"], m["enabled"])
             await self._broadcast_state(exclude=sender)
+        elif t == "set_transport":
+            self.synth.set_transport(
+                bpm=m.get("bpm"), beats_per_bar=m.get("beats_per_bar"),
+                click=m.get("click"),
+            )
+            await self._broadcast_state(exclude=sender)
         elif t == "set_arp":
             self.synth.set_arp(
-                enabled=m.get("enabled"), rate=m.get("rate"), gate=m.get("gate"),
-                octaves=m.get("octaves"), pattern=m.get("pattern"),
+                enabled=m.get("enabled"), division=m.get("division"),
+                gate=m.get("gate"), octaves=m.get("octaves"),
+                pattern=m.get("pattern"),
             )
             await self._broadcast_state(exclude=sender)
         elif t == "set_midi":
@@ -128,6 +136,12 @@ class GuiServer:
 
     # -- physical controls -> GUI ------------------------------------------------
 
+    def _beat_from_thread(self, bar: int, beat: int) -> None:
+        if self.loop is not None and self.clients:
+            asyncio.run_coroutine_threadsafe(
+                self._broadcast({"type": "beat", "bar": bar, "beat": beat}), self.loop
+            )
+
     def _midi_event_from_thread(self, event: dict) -> None:
         """Called on the MIDI thread; hop onto the server's event loop."""
         if self.loop is not None and self.clients:
@@ -158,6 +172,7 @@ class GuiServer:
     async def run(self) -> None:
         self.loop = asyncio.get_running_loop()
         self.synth.on_midi_event = self._midi_event_from_thread
+        self.synth.on_beat_event = self._beat_from_thread
         runner = web.AppRunner(self.web_app)
         await runner.setup()
         site = web.TCPSite(runner, self.host, self.port)
