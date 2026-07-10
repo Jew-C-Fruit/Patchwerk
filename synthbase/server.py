@@ -88,16 +88,18 @@ class GuiServer:
             )
         elif t == "set_enabled":
             self.synth.set_enabled(m["key"], m["enabled"])
-            await self._broadcast_state(exclude=sender)
+            await self._broadcast_state()
         elif t == "set_drone":
             self.synth.set_drone(
                 enabled=m.get("enabled"), every=m.get("every"), octave=m.get("octave"),
             )
-            await self._broadcast_state(exclude=sender)
+            # broadcast to EVERYONE incl. sender — enabling adds the drone's
+            # module card, which the clicking client needs to see too
+            await self._broadcast_state()
         elif t == "set_transport":
             self.synth.set_transport(
                 bpm=m.get("bpm"), beats_per_bar=m.get("beats_per_bar"),
-                click=m.get("click"),
+                click=m.get("click"), accent=m.get("accent"),
             )
             await self._broadcast_state(exclude=sender)
         elif t == "set_arp":

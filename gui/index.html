@@ -38,8 +38,11 @@
   .module { margin-top: 10px; }
   .module h3 { margin: 0 0 2px; font-size: 14px; }
   .module .kind { color: var(--ink-3); font-weight: 400; font-size: 11px; margin-left: 6px; }
-  .param { display: grid; grid-template-columns: 110px 1fr 74px; gap: 10px;
+  .param { display: grid; grid-template-columns: 110px 1fr 74px 22px; gap: 8px;
     align-items: center; margin-top: 4px; }
+  .reset { border: none; background: none; color: var(--ink-3); cursor: pointer;
+    font-size: 13px; padding: 0; }
+  .reset:hover { color: var(--accent); }
   .param .val { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-2); }
   #status { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
     background: var(--danger); margin-right: 6px; }
@@ -92,6 +95,7 @@
         </select>
       </div>
       <label class="small"><input type="checkbox" id="click-on"> click</label>
+      <label class="small"><input type="checkbox" id="accent-on" checked> hi&nbsp;1</label>
       <span class="small">position: <b id="beat-pos">—</b> <span id="beat-dot" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--hairline);"></span></span>
     </div>
     <div class="row" style="margin-top: 12px;">
@@ -262,7 +266,7 @@ function renderState() {
       if (p.curve === "toggle") {
         row.innerHTML = `<span class="small">${pname}</span>
           <label><input type="checkbox" id="${id}" ${p.value >= (p.min + p.max) / 2 ? "checked" : ""}></label>
-          <span class="val" id="${id}-v">${p.value >= (p.min + p.max) / 2 ? "on" : "off"}</span>`;
+          <span class="val" id="${id}-v">${p.value >= (p.min + p.max) / 2 ? "on" : "off"}</span><span></span>`;
         holder.appendChild(row);
         const box = row.querySelector("input");
         box.addEventListener("change", () => {
@@ -275,8 +279,16 @@ function renderState() {
       }
       row.innerHTML = `<span class="small">${pname}</span>
         <input type="range" id="${id}" min="0" max="1" step="0.001" value="${toUnit(p, p.value)}">
-        <span class="val" id="${id}-v">${fmt(p.value)}</span>`;
+        <span class="val" id="${id}-v">${fmt(p.value)}</span>
+        <button class="reset" title="reset to ${fmt(p.default)}">&#8634;</button>`;
       holder.appendChild(row);
+      row.querySelector(".reset").addEventListener("click", (e) => {
+        const u = toUnit(p, p.default);
+        row.querySelector("input[type=range]").value = u;
+        document.getElementById(`${id}-v`).textContent = fmt(p.default);
+        send({type: "set_param", key: mod.key, name: pname, unit: u});
+        e.target.blur();
+      });
       const slider = row.querySelector("input");
       slider.addEventListener("input", () => {
         const u = parseFloat(slider.value);
@@ -404,6 +416,7 @@ function renderTransport() {
   document.getElementById("bpm-v").textContent = Math.round(t.bpm) + " bpm";
   document.getElementById("meter").value = String(t.beats_per_bar);
   document.getElementById("click-on").checked = !!t.click;
+  document.getElementById("accent-on").checked = t.accent !== false;
 }
 function sendArp() {
   throttled("arp", () => send({
@@ -421,6 +434,7 @@ function sendTransport() {
     bpm: parseFloat(document.getElementById("bpm").value),
     beats_per_bar: parseInt(document.getElementById("meter").value, 10),
     click: document.getElementById("click-on").checked,
+    accent: document.getElementById("accent-on").checked,
   }));
 }
 for (const id of ["arp-on", "arp-pattern", "arp-div"]) {
@@ -443,7 +457,7 @@ document.getElementById("bpm").addEventListener("input", () => {
 });
 document.getElementById("bpm").addEventListener("pointerdown", () => dragging = "bpm");
 document.getElementById("bpm").addEventListener("pointerup", (e) => { dragging = null; e.target.blur(); });
-for (const id of ["meter", "click-on"]) {
+for (const id of ["meter", "click-on", "accent-on"]) {
   document.getElementById(id).addEventListener("change", (e) => { sendTransport(); e.target.blur(); });
 }
 function onBeat(m) {

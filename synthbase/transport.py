@@ -50,6 +50,7 @@ class Transport:
         self.bpm = float(bpm)
         self.beats_per_bar = int(beats_per_bar)
         self.click_enabled = False
+        self.click_accent = True   # high tick on the downbeat
         self.on_beat: Callable[[int, int], None] | None = None  # (bar, beat_in_bar)
 
         self._epoch = time.monotonic()  # wall time of...
@@ -116,6 +117,7 @@ class Transport:
             "bpm": self.bpm,
             "beats_per_bar": self.beats_per_bar,
             "click": self.click_enabled,
+            "accent": self.click_accent,
             "divisions": list(DIVISIONS),
         }
 

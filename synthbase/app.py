@@ -181,11 +181,12 @@ class SynthApp:
         """Runs on the transport's beat thread."""
         if self.transport.click_enabled and self.engine and self.engine.root_group:
             try:
+                hi = beat == 0 and self.transport.click_accent
                 self.engine.root_group.add_synth(
                     _click,
                     add_action="add_to_tail",
-                    freq=2000 if beat == 0 else 1400,   # accent the downbeat
-                    amp=0.3 if beat == 0 else 0.18,
+                    freq=2000 if hi else 1400,   # high tick on the 1 (toggleable)
+                    amp=0.3 if hi else 0.18,
                 )
             except Exception:  # noqa: BLE001
                 pass
@@ -200,7 +201,9 @@ class SynthApp:
         with self._lock:
             self.drone.configure(**settings)
 
-    def set_transport(self, bpm=None, beats_per_bar=None, click=None) -> None:
+    def set_transport(self, bpm=None, beats_per_bar=None, click=None, accent=None) -> None:
+        if accent is not None:
+            self.transport.click_accent = bool(accent)
         if bpm is not None:
             self.transport.set_bpm(bpm)
         if beats_per_bar is not None:
@@ -321,6 +324,7 @@ class SynthApp:
                                 "min": p.minimum,
                                 "max": p.maximum,
                                 "curve": p.curve,
+                                "default": p.default,
                                 "value": inst.settings.get(pname, p.default),
                             }
                             for pname, p in inst.module.params.items()
