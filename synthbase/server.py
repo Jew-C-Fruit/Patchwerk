@@ -32,7 +32,7 @@ from aiohttp import WSMsgType, web
 from .app import SynthApp
 
 GUI_DIR = Path(__file__).resolve().parent.parent / "gui"
-METER_INTERVAL = 1 / 15
+METER_INTERVAL = 1 / 20
 
 
 class GuiServer:
@@ -44,12 +44,20 @@ class GuiServer:
         self.loop: asyncio.AbstractEventLoop | None = None
         self.web_app = web.Application()
         self.web_app.router.add_get("/", self._index)
+        self.web_app.router.add_get("/graph", self._graph)
         self.web_app.router.add_get("/ws", self._ws)
 
     # -- http ----------------------------------------------------------------
 
     async def _index(self, request: web.Request) -> web.FileResponse:
-        return web.FileResponse(GUI_DIR / "index.html")
+        return web.FileResponse(
+            GUI_DIR / "index.html", headers={"Cache-Control": "no-store"},
+        )
+
+    async def _graph(self, request: web.Request) -> web.FileResponse:
+        return web.FileResponse(
+            GUI_DIR / "graph.html", headers={"Cache-Control": "no-store"},
+        )
 
     # -- websocket --------------------------------------------------------------
 
@@ -88,6 +96,35 @@ class GuiServer:
             )
         elif t == "set_enabled":
             self.synth.set_enabled(m["key"], m["enabled"])
+            await self._broadcast_state()
+        elif t == "set_transpose":
+            self.synth.set_transpose(m.get("semitones", 0))
+            await self._broadcast_state(exclude=sender)
+        elif t == "set_drums":
+            self.synth.set_drums(enabled=m.get("enabled"), patterns=m.get("patterns"),
+                                 levels=m.get("levels"))
+            await self._broadcast_state()
+        elif t == "set_looper":
+            self.synth.set_looper(action=m.get("action"), bars=m.get("bars"),
+                                  level=m.get("level"), overdub=m.get("overdub"))
+            await self._broadcast_state()
+        elif t == "lfo_assign":
+            await loop.run_in_executor(None, lambda: self.synth.lfo_assign(m["key"], m["name"]))
+            await self._broadcast_state()
+        elif t == "lfo_unassign":
+            await loop.run_in_executor(None, lambda: self.synth.lfo_unassign(m["id"]))
+            await self._broadcast_state()
+        elif t == "lfo_set":
+            self.synth.lfo_set(m["id"], rate=m.get("rate"), depth=m.get("depth"),
+                               center=m.get("center"), shape=m.get("shape"))
+        elif t == "save_preset":
+            await loop.run_in_executor(None, self.synth.save_preset, m["name"])
+            await self._broadcast_state()
+        elif t == "load_preset":
+            await loop.run_in_executor(None, self.synth.load_preset, m["name"])
+            await self._broadcast_state()
+        elif t == "delete_preset":
+            self.synth.delete_preset(m["name"])
             await self._broadcast_state()
         elif t == "set_drone":
             self.synth.set_drone(
@@ -175,10 +212,15 @@ class GuiServer:
 
     async def _meter_loop(self) -> None:
         loop = asyncio.get_running_loop()
+        tick = 0
         while True:
             if self.clients:
                 levels = await loop.run_in_executor(None, self.synth.levels)
                 await self._broadcast({"type": "meters", **levels})
+                tick += 1
+                if tick % 4 == 0:  # tonic strip ~5 Hz
+                    tonic = await loop.run_in_executor(None, self.synth.tonic_state)
+                    await self._broadcast({"type": "tonic", **tonic})
             await asyncio.sleep(METER_INTERVAL)
 
     # -- run -------------------------------------------------------------------

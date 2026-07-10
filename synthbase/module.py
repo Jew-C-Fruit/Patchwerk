@@ -25,7 +25,8 @@ class Param:
     minimum: float
     maximum: float
     default: float
-    curve: str = "lin"  # "lin", "exp", or "toggle" (on/off checkbox)
+    curve: str = "lin"  # "lin", "exp", "toggle", or "select" (labeled options)
+    options: tuple = ()  # labels for curve="select"; value = option index
 
     def from_unit(self, value: float) -> float:
         """Map a normalized 0..1 control value (MIDI CC, sensor, GUI slider)
@@ -33,15 +34,22 @@ class Param:
         value = min(1.0, max(0.0, value))
         if self.curve == "toggle":
             return self.maximum if value >= 0.5 else self.minimum
+        if self.curve == "select":
+            n = max(1, len(self.options))
+            return float(min(n - 1, int(value * n)))
         if self.curve == "exp":
             lo = max(self.minimum, 1e-6)
             return lo * (self.maximum / lo) ** value
         return self.minimum + value * (self.maximum - self.minimum)
 
 
-def param(minimum: float, maximum: float, default: float, curve: str = "lin") -> Param:
+def param(minimum: float, maximum: float, default: float, curve: str = "lin",
+          options=()) -> Param:
     """Shorthand constructor used in module files."""
-    return Param(minimum, maximum, default, curve)
+    if options:
+        curve = "select"
+        minimum, maximum = 0.0, float(len(options) - 1)
+    return Param(minimum, maximum, default, curve, tuple(options))
 
 
 @dataclass

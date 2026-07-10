@@ -17,6 +17,10 @@ from pathlib import Path
 
 from .arp import Arpeggiator
 from .drone import DroneBrain
+from .drums import DrumMachine
+from .lfo import LFOManager
+from .looper import Looper
+from . import presets as presets_mod
 from .transport import Transport, _click
 from .audio_devices import list_audio_devices
 from .engine import Engine
@@ -73,6 +77,9 @@ class SynthApp:
         self._arp_settings: dict = {}  # persists across patch switches
         self.transport = Transport()
         self.drone = DroneBrain(self)
+        self.drums = DrumMachine(self)
+        self.lfos = LFOManager(self)
+        self.looper = Looper(self)
         self.on_beat_event = None  # set by GuiServer; called from the beat thread
 
         self.on_midi_event = None  # set by GuiServer; called from MIDI thread
@@ -132,14 +139,24 @@ class SynthApp:
         if self.voice:
             self.arp = Arpeggiator(self.voice, self.transport)
             self.arp.on_note = self.drone.observe
+            self.voice.on_voiced = self._emit_voiced
             self.arp.configure(**{**self._arp_settings, **patch.get("arp", {})})
             self._arp_settings = {
                 k: v for k, v in self.arp.settings().items() if k != "patterns"
             }
         self.patch_name = patch_name
         self.patch = patch
+        self.rack.on_node_replaced = self._on_node_replaced
+        self.lfos.assignments.clear()  # old rack's nodes are gone with it
+        self.rack.mapped.clear()
         self.drone.spawn()  # re-add the drone to the fresh rack if enabled
         self._restart_midi()
+
+    def _on_node_replaced(self, key: str) -> None:
+        self.lfos.on_node_replaced(key)
+
+    def _emit_voiced(self, note: int, on: bool) -> None:
+        self._emit_midi_event({"kind": "voiced", "note": int(note), "on": bool(on)})
 
     def _restart_midi(self) -> None:
         """(Re)open the MIDI router against the current rack/voice/port."""
@@ -197,6 +214,52 @@ class SynthApp:
             except Exception:  # noqa: BLE001
                 pass
 
+    def set_transpose(self, semitones: int) -> None:
+        with self._lock:
+            if self.voice:
+                self.voice.transpose = max(-24, min(24, int(semitones)))
+
+    def set_drums(self, **settings) -> None:
+        with self._lock:
+            self.drums.configure(**settings)
+
+    def set_looper(self, **settings) -> None:
+        with self._lock:
+            self.looper.configure(**settings)
+
+    def lfo_assign(self, key: str, name: str, **cfg) -> None:
+        with self._lock:
+            self.lfos.assign(key, name, **cfg)
+
+    def lfo_unassign(self, aid: str) -> None:
+        with self._lock:
+            self.lfos.unassign(aid)
+
+    def lfo_set(self, aid: str, **cfg) -> None:
+        with self._lock:
+            self.lfos.configure(aid, **cfg)
+
+    def save_preset(self, name: str) -> str:
+        return presets_mod.save_preset(self, name)
+
+    def load_preset(self, name: str) -> None:
+        presets_mod.load_preset(self, name)
+
+    def delete_preset(self, name: str) -> None:
+        presets_mod.delete_preset(name)
+
+    def tonic_state(self) -> dict:
+        with self.drone._lock:
+            self.drone._decay(__import__("time").monotonic())
+            weights = list(self.drone._weights)
+        total = max(sum(weights), 1e-9)
+        est = self.drone.estimate()
+        from .drone import NOTE_NAMES
+        return {
+            "weights": [round(w / total, 4) for w in weights],
+            "root": NOTE_NAMES[est] if est is not None else None,
+        }
+
     def set_drone(self, **settings) -> None:
         with self._lock:
             self.drone.configure(**settings)
@@ -213,6 +276,9 @@ class SynthApp:
 
     def stop(self) -> None:
         with self._lock:
+            self.looper.shutdown()
+            self.drums.shutdown()
+            self.lfos.clear()
             self.drone.shutdown()
             self.transport.shutdown()
             if self.reloader:
@@ -256,11 +322,15 @@ class SynthApp:
                 self.rack.set_param(key, name, float(value))
 
     def set_param_unit(self, key: str, name: str, unit_value: float) -> float:
-        """Set a param from a normalized 0..1 value (GUI sliders, sensors)."""
+        """Set a param from a normalized 0..1 value (GUI sliders, sensors).
+        If the param is LFO-mapped, the value steers the LFO's center."""
         with self._lock:
             inst = self.rack.find(key)
             p = inst.module.params[name]
             value = p.from_unit(float(unit_value))
+            if self.lfos.set_center_unit(key, name, float(unit_value)):
+                inst.settings[name] = value  # remembered for unassign-restore
+                return value
             self.rack.set_param(key, name, value)
             return value
 
@@ -325,7 +395,9 @@ class SynthApp:
                                 "min": p.minimum,
                                 "max": p.maximum,
                                 "curve": p.curve,
+                                "options": list(p.options),
                                 "default": p.default,
+                                "lfo": (inst.key, pname) in self.rack.mapped,
                                 "value": inst.settings.get(pname, p.default),
                             }
                             for pname, p in inst.module.params.items()
@@ -344,11 +416,16 @@ class SynthApp:
                 ),
                 "boot_note": self.engine.boot_note if self.engine else None,
                 "voice_target": self.voice.target_key if self.voice else None,
+                "transpose": self.voice.transpose if self.voice else 0,
                 "midi_inputs": _list_midi_inputs(),
                 "midi_port": self.router.active_port if self.router else None,
                 "midi_enabled": self.midi_enabled,
                 "arp": self.arp.settings() if self.arp else None,
                 "transport": self.transport.settings(),
                 "drone": self.drone.settings(),
+                "drums": self.drums.settings(),
+                "looper": self.looper.settings(),
+                "lfos": self.lfos.state(),
+                "presets": presets_mod.list_presets(),
                 "module_errors": {k: repr(v) for k, v in self.module_errors.items()},
             }

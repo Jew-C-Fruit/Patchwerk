@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SuperSynth — Signal Graph</title>
+<style>
+  :root {
+    --plane: #f9f9f7; --surface: #fcfcfb; --ink-1: #0b0b0b; --ink-2: #52514e;
+    --hairline: #e1e0d9; --border: rgba(11,11,11,0.10);
+    --audio: #2a78d6; --ctrl: #1baf7a; --lfo: #4a3aa7; --off: #898781;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --plane: #0d0d0d; --surface: #1a1a19; --ink-1: #ffffff; --ink-2: #c3c2b7;
+      --hairline: #2c2c2a; --border: rgba(255,255,255,0.10);
+      --audio: #3987e5; --ctrl: #199e70; --lfo: #9085e9;
+    }
+  }
+  body { margin: 0; background: var(--plane); color: var(--ink-1);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 17px; } h1 a { font-size: 12px; margin-left: 10px; }
+  svg { width: 100%; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; }
+  .legend { font-size: 12px; color: var(--ink-2); margin-top: 6px; }
+  .legend span { display: inline-block; width: 26px; height: 3px; margin: 0 6px 2px 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>SuperSynth — live signal graph <a href="/">← controls</a></h1>
+  <svg id="g" viewBox="0 0 1160 640"></svg>
+  <div class="legend">
+    cables:
+    <span style="background:var(--audio)"></span>audio
+    <span style="background:var(--ctrl)"></span>notes / control
+    <span style="background:var(--lfo)"></span>LFO → param
+    · read-only view; wiring edits come with the editable graph
+  </div>
+</div>
+<script>
+"use strict";
+const svg = document.getElementById("g");
+const NS = "http://www.w3.org/2000/svg";
+
+function el(tag, attrs, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (text) e.textContent = text;
+  return e;
+}
+function css(v) { return getComputedStyle(document.body).getPropertyValue(v).trim(); }
+
+function cable(x1, y1, x2, y2, color, dashed) {
+  const dx = Math.max(40, (x2 - x1) / 2);
+  const p = el("path", {
+    d: `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`,
+    fill: "none", stroke: color, "stroke-width": 2.2,
+    ...(dashed ? {"stroke-dasharray": "6 5"} : {}),
+  });
+  svg.appendChild(p);
+}
+function box(x, y, w, h, title, sub, dim) {
+  const g = el("g", {});
+  g.appendChild(el("rect", {x, y, width: w, height: h, rx: 8,
+    fill: css("--plane"), stroke: css("--border"), opacity: dim ? 0.5 : 1}));
+  g.appendChild(el("text", {x: x + 10, y: y + 20, fill: css("--ink-1"),
+    "font-size": 13, "font-weight": 600, opacity: dim ? 0.6 : 1}, title));
+  if (sub) g.appendChild(el("text", {x: x + 10, y: y + 36, fill: css("--ink-2"),
+    "font-size": 10.5}, sub));
+  svg.appendChild(g);
+  return {x, y, w, h, right: [x + w, y + h / 2], left: [x, y + h / 2],
+          bottom: [x + w / 2, y + h], top: [x + w / 2, y]};
+}
+
+function draw(state) {
+  svg.innerHTML = "";
+  const audio = css("--audio"), ctrl = css("--ctrl"), lfoC = css("--lfo");
+
+  // controllers column
+  const kb = box(20, 60, 150, 44, "Controllers", "keys · CP88 · GUI piano");
+  const arp = box(20, 150, 150, 44, "Arp" + (state.arp?.enabled ? " ●" : ""),
+                  state.arp?.enabled ? `${state.arp.pattern} · ${state.arp.division}` : "passthrough");
+  const voice = box(20, 240, 150, 44, "Mono Voice", `→ ${state.voice_target || "?"}`);
+  cable(...kb.bottom, ...arp.top, ctrl, true);
+  cable(...arp.bottom, ...voice.top, ctrl, true);
+
+  // chain columns
+  const chain = state.chain.filter(c => !c.service);
+  const services = state.chain.filter(c => c.service);
+  const x0 = 240, dx = Math.min(170, 820 / Math.max(chain.length, 1));
+  let prev = null;
+  const nodes = {};
+  chain.forEach((c, i) => {
+    const b = box(x0 + i * dx, 200, Math.min(150, dx - 14), 48, c.name,
+                  c.kind + (c.enabled ? "" : " · bypassed"), !c.enabled);
+    nodes[c.key] = b;
+    if (prev) cable(...prev.right, ...b.left, audio);
+    prev = b;
+  });
+  const master = box(1010, 200, 130, 48, "Master", "volume · meters");
+  if (prev) cable(...prev.right, ...master.left, audio);
+  const out = box(1010, 300, 130, 44, "Audio Out", state.current_output || "default");
+  cable(...master.bottom, ...out.top, audio);
+
+  // voice drives the first source
+  const first = chain[0] && nodes[chain[0].key];
+  if (first) cable(...voice.right, ...first.left, ctrl, true);
+
+  // service sources (drone) into the head bus
+  services.forEach((s, i) => {
+    const b = box(x0, 90 + i * 60, 150, 44, s.name + " ●",
+                  s.key === "drone" ? `root: ${state.drone?.root || "?"}` : "service", !s.enabled);
+    nodes[s.key] = b;
+    if (first) cable(...b.bottom, ...first.top, audio);
+  });
+
+  // drums + looper + click straight to master
+  let sideY = 320;
+  if (state.drums?.enabled) {
+    const d = box(x0, sideY, 150, 44, "Drums ●", "16-step grid");
+    cable(...d.right, ...master.left, audio); sideY += 60;
+  }
+  if (state.looper && state.looper.state !== "empty") {
+    const l = box(x0, sideY, 150, 44, `Looper (${state.looper.state})`,
+                  `${state.looper.bars} bars`);
+    cable(...l.right, ...master.left, audio); sideY += 60;
+  }
+  if (state.transport?.click) {
+    const c = box(x0, sideY, 150, 44, "Click ●",
+                  `${Math.round(state.transport.bpm)} bpm`);
+    cable(...c.right, ...master.left, audio); sideY += 60;
+  }
+
+  // LFOs
+  (state.lfos || []).forEach((l, i) => {
+    const b = box(240 + i * 180, 480, 160, 44, `LFO ∿ ${l.shapes[l.shape]}`,
+                  `${l.rate.toFixed(2)} Hz → ${l.key}.${l.param}`);
+    const target = nodes[l.key];
+    if (target) cable(...b.top, ...target.bottom, lfoC, true);
+  });
+
+  // transport strip
+  box(20, 480, 170, 44, "Transport",
+      `${Math.round(state.transport?.bpm || 0)} bpm · ${state.transport?.beats_per_bar}/4`);
+}
+
+let ws;
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.type === "state") draw(m);
+  };
+  ws.onclose = () => setTimeout(connect, 1000);
+}
+connect();
+</script>
+</body>
+</html>

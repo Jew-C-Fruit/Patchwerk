@@ -9,9 +9,9 @@ PATCH = {
         ("pulse_pad", {"freq": 110}),
         ("drive", {"gain": 2.5, "mix": 0.6}),
         ("lowpass", {"cutoff": 2200}),
-        ("autopan", {"rate": 0.25, "depth": 0.6}),
         ("echo", {"time": 0.45, "feedback": 0.35, "mix": 0.25}),
         ("reverb", {"room": 0.8, "mix": 0.35}),
+        ("autopan", {"rate": 0.25, "depth": 0.6}),  # last: pans the full mix
     ],
     "bindings": {
         "notes_to": "pulse_pad",

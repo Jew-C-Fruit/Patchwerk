@@ -52,6 +52,8 @@ class Rack:
         self.engine = engine
         self.registry = registry
         self.instances: list[Instance] = []
+        self.mapped: set[tuple[str, str]] = set()   # (key, param) driven by LFOs
+        self.on_node_replaced = None                 # callback(key) after respawn/re-enable
 
     # -- building ------------------------------------------------------------
 
@@ -167,14 +169,17 @@ class Rack:
     def set_param(self, key: str, name: str, value: float) -> None:
         inst = self.find(key)
         inst.settings[name] = value
+        if (key, name) in self.mapped:
+            return  # LFO drives this param; value is stored for later restore
         if inst.enabled or inst.module.kind == "source":  # paused sources accept sets
             inst.node.set(**{name: value})
 
     def set_params(self, key: str, **values: float) -> None:
         inst = self.find(key)
         inst.settings.update(values)
-        if inst.enabled or inst.module.kind == "source":
-            inst.node.set(**values)
+        live = {k: v for k, v in values.items() if (key, k) not in self.mapped}
+        if live and (inst.enabled or inst.module.kind == "source"):
+            inst.node.set(**live)
 
     def set_enabled(self, key: str, enabled: bool) -> None:
         """Toggle a module in the running chain.
@@ -206,6 +211,11 @@ class Rack:
                 out=inst.settings["out"],
             )
         inst.enabled = enabled
+        if enabled and self.on_node_replaced:
+            try:
+                self.on_node_replaced(key)
+            except Exception:  # noqa: BLE001
+                pass
 
     # -- hot reload -------------------------------------------------------------
 
@@ -243,6 +253,11 @@ class Rack:
             inst.node = new_node
             inst.settings = settings
             replaced = True
+            if self.on_node_replaced:
+                try:
+                    self.on_node_replaced(inst.key)
+                except Exception:  # noqa: BLE001
+                    pass
         if replaced:
             self.registry[new_module.key] = new_module
         return replaced

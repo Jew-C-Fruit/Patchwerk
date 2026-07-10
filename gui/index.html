@@ -9,166 +9,236 @@
     --plane: #f9f9f7; --surface: #fcfcfb; --ink-1: #0b0b0b; --ink-2: #52514e;
     --ink-3: #898781; --hairline: #e1e0d9; --border: rgba(11,11,11,0.10);
     --accent: #2a78d6; --meter: #1baf7a; --warn: #eb6834; --danger: #d03b3b;
+    --lfo: #4a3aa7;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --plane: #0d0d0d; --surface: #1a1a19; --ink-1: #ffffff; --ink-2: #c3c2b7;
       --ink-3: #898781; --hairline: #2c2c2a; --border: rgba(255,255,255,0.10);
       --accent: #3987e5; --meter: #199e70; --warn: #d95926; --danger: #e66767;
+      --lfo: #9085e9;
     }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--plane); color: var(--ink-1);
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 14px; }
-  .wrap { max-width: 980px; margin: 0 auto; padding: 16px; }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 14px; }
   h1 { font-size: 18px; margin: 0; }
   .card { background: var(--surface); border: 1px solid var(--border);
-    border-radius: 10px; padding: 14px 16px; margin-top: 12px; }
-  .row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
-  .grow { flex: 1; min-width: 140px; }
+    border-radius: 10px; padding: 12px 14px; margin-top: 10px; }
+  .row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  .grow { flex: 1; min-width: 130px; }
   label.small, .small { font-size: 11.5px; color: var(--ink-2); }
-  select, button { font: inherit; color: var(--ink-1); background: var(--plane);
-    border: 1px solid var(--hairline); border-radius: 6px; padding: 5px 8px; }
+  select, button, input[type=text] { font: inherit; color: var(--ink-1); background: var(--plane);
+    border: 1px solid var(--hairline); border-radius: 6px; padding: 4px 8px; }
   button { cursor: pointer; } button:hover { border-color: var(--accent); }
+  button.rec { color: var(--danger); font-weight: 700; }
   input[type=range] { width: 100%; accent-color: var(--accent); }
-  .meterbar { height: 10px; background: var(--hairline); border-radius: 5px; overflow: hidden; }
+  .meterbar { height: 9px; background: var(--hairline); border-radius: 5px; overflow: hidden; }
   .meterbar > div { height: 100%; width: 0%; background: var(--meter); border-radius: 5px;
-    transition: width 60ms linear; }
+    transition: width 50ms linear; }
   .meterbar.clip > div { background: var(--danger); }
-  .module { margin-top: 10px; }
-  .module h3 { margin: 0 0 2px; font-size: 14px; }
+  .module { margin-top: 8px; border-top: 1px dashed var(--hairline); padding-top: 6px; }
+  .module h3 { margin: 0; font-size: 14px; cursor: pointer; user-select: none; }
+  .module h3 .caret { color: var(--ink-3); font-size: 11px; margin-right: 4px; }
   .module .kind { color: var(--ink-3); font-weight: 400; font-size: 11px; margin-left: 6px; }
-  .param { display: grid; grid-template-columns: 110px 1fr 74px 22px; gap: 8px;
-    align-items: center; margin-top: 4px; }
-  .reset { border: none; background: none; color: var(--ink-3); cursor: pointer;
+  .module.collapsed .params { display: none; }
+  .param { display: grid; grid-template-columns: 96px 1fr 70px 20px 20px; gap: 7px;
+    align-items: center; margin-top: 3px; }
+  .param .val { text-align: right; font-variant-numeric: tabular-nums;
+    color: var(--ink-2); font-size: 12px; }
+  .param.mapped input[type=range] { accent-color: var(--lfo); }
+  .reset, .lfobtn { border: none; background: none; color: var(--ink-3); cursor: pointer;
     font-size: 13px; padding: 0; }
   .reset:hover { color: var(--accent); }
-  .param .val { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+  .lfobtn:hover, .lfobtn.on { color: var(--lfo); }
+  .lfobtn.on { font-weight: 700; }
   #status { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
     background: var(--danger); margin-right: 6px; }
   #status.ok { background: var(--meter); }
-  .kbd-hint { color: var(--ink-2); }
-  .kbd-hint kbd { background: var(--plane); border: 1px solid var(--hairline);
-    border-radius: 4px; padding: 0 5px; font-family: inherit; }
-  #focusnote.active { color: var(--meter); }
-  .err { color: var(--danger); font-size: 12px; margin-top: 6px; white-space: pre-wrap; }
+  kbd { background: var(--plane); border: 1px solid var(--hairline);
+    border-radius: 4px; padding: 0 4px; font-family: inherit; font-size: 11px; }
+  .err { color: var(--danger); font-size: 12px; white-space: pre-wrap; }
+  /* viz */
+  .tonic { display: grid; grid-template-columns: repeat(12, 1fr); gap: 2px; height: 26px; }
+  .tonic div { border-radius: 3px; background: var(--hairline); position: relative;
+    overflow: hidden; }
+  .tonic div span { position: absolute; bottom: 0; left: 0; right: 0;
+    background: var(--accent); transition: height 120ms linear; }
+  .tonic div.root span { background: var(--warn); }
+  .tonic div i { position: absolute; top: 1px; left: 0; right: 0; text-align: center;
+    font-style: normal; font-size: 9px; color: var(--ink-2); z-index: 2; }
+  canvas.viz { width: 100%; background: var(--plane); border: 1px solid var(--hairline);
+    border-radius: 6px; display: block; }
+  /* drums */
+  .drumgrid { display: grid; grid-template-columns: 58px repeat(16, 1fr) 70px; gap: 3px;
+    align-items: center; margin-top: 4px; }
+  .step { aspect-ratio: 1; border-radius: 3px; background: var(--hairline);
+    cursor: pointer; border: none; padding: 0; min-width: 14px; }
+  .step.on { background: var(--accent); }
+  .step.q { outline: 1px solid var(--ink-3); }
+  .step.play { box-shadow: inset 0 0 0 2px var(--warn); }
+  /* piano */
+  .piano { position: relative; height: 64px; margin-top: 6px; user-select: none; }
+  .piano .wk, .piano .bk { position: absolute; top: 0; border: 1px solid var(--hairline);
+    border-radius: 0 0 4px 4px; cursor: pointer; }
+  .piano .wk { background: var(--surface); height: 100%; z-index: 1; }
+  .piano .bk { background: var(--ink-1); height: 60%; z-index: 2; }
+  .piano .held { background: var(--accent) !important; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="row" style="justify-content: space-between; margin-top: 4px;">
-    <h1><span id="status"></span>SuperSynth</h1>
+  <div class="row" style="justify-content: space-between; margin-top: 2px;">
+    <h1><span id="status"></span>SuperSynth <a href="/graph" class="small" style="margin-left:8px">graph →</a></h1>
     <span class="small">
       NOTES:
       <label><input type="checkbox" id="keys-on" checked> computer keys</label>
       <span id="focusnote"></span>
       &nbsp;·&nbsp;
       <label><input type="checkbox" id="midi-on" checked> MIDI</label>
-      <select id="midi-sel" style="max-width:180px"></select>
+      <select id="midi-sel" style="max-width:170px"></select>
     </span>
   </div>
 
-  <!-- I/O + master -->
+  <!-- I/O + transport + master -->
   <div class="card">
     <div class="row">
-      <div class="grow">
-        <label class="small" for="in-sel">AUDIO IN</label><br>
-        <select id="in-sel" style="width:100%"></select>
-      </div>
-      <div class="grow">
-        <label class="small" for="out-sel">AUDIO OUT</label><br>
-        <select id="out-sel" style="width:100%"></select>
-      </div>
+      <div class="grow"><label class="small">AUDIO IN</label><br>
+        <select id="in-sel" style="width:100%"></select></div>
+      <div class="grow"><label class="small">AUDIO OUT</label><br>
+        <select id="out-sel" style="width:100%"></select></div>
       <div><br><button id="apply-io">Apply I/O</button></div>
-    </div>
-    <div class="small" id="io-note" style="margin-top:6px;"></div>
-    <div class="row" style="margin-top: 12px; border-top:1px solid var(--hairline); padding-top:10px;">
-      <div>
-        <label class="small">TEMPO <span id="bpm-v"></span></label><br>
-        <input type="range" id="bpm" min="40" max="240" step="1" style="width:130px">
-      </div>
-      <div>
-        <label class="small">METER</label><br>
-        <select id="meter">
-          <option value="2">2/4</option><option value="3">3/4</option>
-          <option value="4" selected>4/4</option><option value="6">6/8</option>
-        </select>
-      </div>
-      <label class="small"><input type="checkbox" id="click-on"> click</label>
-      <label class="small"><input type="checkbox" id="accent-on" checked> hi&nbsp;1</label>
-      <span class="small">position: <b id="beat-pos">—</b> <span id="beat-dot" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--hairline);"></span></span>
-    </div>
-    <div class="row" style="margin-top: 12px;">
       <div class="grow">
         <label class="small">MASTER VOLUME</label>
         <input type="range" id="vol" min="0" max="1" step="0.001" value="0.8">
       </div>
+    </div>
+    <div class="small" id="io-note"></div>
+    <div class="row" style="margin-top: 8px; border-top:1px solid var(--hairline); padding-top:8px;">
+      <div><label class="small">TEMPO <span id="bpm-v"></span></label><br>
+        <input type="range" id="bpm" min="40" max="240" step="1" style="width:120px"></div>
+      <div><label class="small">METER</label><br>
+        <select id="meter"><option value="2">2/4</option><option value="3">3/4</option>
+          <option value="4" selected>4/4</option><option value="6">6/8</option></select></div>
+      <label class="small"><input type="checkbox" id="click-on"> click</label>
+      <label class="small"><input type="checkbox" id="accent-on" checked> hi&nbsp;1</label>
+      <span class="small">position: <b id="beat-pos">—</b>
+        <span id="beat-dot" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--hairline);"></span></span>
       <div class="grow">
-        <label class="small">OUT L</label><div class="meterbar" id="m-out-l"><div></div></div>
-        <label class="small">OUT R</label><div class="meterbar" id="m-out-r"><div></div></div>
+        <label class="small">OUT</label><div class="meterbar" id="m-out-l"><div></div></div>
+        <div class="meterbar" id="m-out-r" style="margin-top:2px"><div></div></div>
       </div>
-      <div class="grow">
+      <div style="min-width:90px">
         <label class="small">INPUT <span id="in-meter-note"></span></label>
         <div class="meterbar" id="m-in"><div></div></div>
       </div>
     </div>
+    <!-- LOOPER -->
+    <div class="row" style="margin-top: 8px; border-top:1px solid var(--hairline); padding-top:8px;">
+      <b class="small">LOOPER</b>
+      <span class="small">state: <b id="loop-state">empty</b></span>
+      <div><label class="small">BARS</label>
+        <select id="loop-bars"><option>1</option><option selected>2</option>
+          <option>4</option><option>8</option></select></div>
+      <button id="loop-rec" class="rec">● rec</button>
+      <button id="loop-stop">■ stop</button>
+      <button id="loop-play">▶ play</button>
+      <button id="loop-clear">✕ clear</button>
+      <label class="small"><input type="checkbox" id="loop-dub"> overdub</label>
+      <div class="grow" style="max-width:160px">
+        <label class="small">LEVEL</label>
+        <input type="range" id="loop-level" min="0" max="1" step="0.01" value="0.9">
+      </div>
+    </div>
   </div>
 
-  <!-- patch + modules -->
+  <!-- viz -->
+  <div class="card">
+    <div class="row">
+      <div style="flex:1; min-width:220px">
+        <label class="small">TONIC &nbsp;<b id="tonic-root">—</b></label>
+        <div class="tonic" id="tonic"></div>
+      </div>
+      <div style="flex:2; min-width:320px">
+        <label class="small">NOTES (rolling, beat grid)</label>
+        <canvas class="viz" id="noteroll" height="72"></canvas>
+      </div>
+    </div>
+    <div style="margin-top:6px">
+      <label class="small">OUTPUT</label>
+      <canvas class="viz" id="wavestrip" height="42"></canvas>
+    </div>
+  </div>
+
+  <!-- patch / presets / arp / drone -->
   <div class="card">
     <div class="row" style="justify-content: space-between;">
-      <div>
-        <label class="small" for="patch-sel">PATCH</label><br>
-        <select id="patch-sel"></select>
+      <div><label class="small">PATCH</label><br><select id="patch-sel"></select></div>
+      <div class="row">
+        <div><label class="small">PRESET</label><br><select id="preset-sel"></select></div>
+        <div><br><button id="preset-load">load</button></div>
+        <div><label class="small">SAVE AS</label><br>
+          <input type="text" id="preset-name" size="10" placeholder="name"></div>
+        <div><br><button id="preset-save">save</button>
+          <button id="preset-del" title="delete selected">✕</button></div>
       </div>
       <div class="small" id="chain-desc"></div>
     </div>
-    <div class="row" style="margin-top:10px; border-top:1px solid var(--hairline); padding-top:10px;">
+    <div class="row" style="margin-top:8px; border-top:1px solid var(--hairline); padding-top:8px;">
       <label class="small"><input type="checkbox" id="arp-on"> <b>ARP</b></label>
       <select id="arp-pattern" class="small"></select>
-      <div>
-        <label class="small">DIV</label><br>
-        <select id="arp-div"></select>
-      </div>
-      <div class="grow">
+      <div><label class="small">DIV</label><br><select id="arp-div"></select></div>
+      <div class="grow" style="max-width:170px">
         <label class="small">GATE <span id="arp-gate-v"></span></label>
         <input type="range" id="arp-gate" min="0.05" max="1" step="0.01">
       </div>
-      <div>
-        <label class="small">OCT <span id="arp-oct-v"></span></label><br>
-        <input type="range" id="arp-oct" min="1" max="3" step="1" style="width:70px">
-      </div>
+      <div><label class="small">OCT <span id="arp-oct-v"></span></label><br>
+        <input type="range" id="arp-oct" min="1" max="3" step="1" style="width:64px"></div>
     </div>
-    <div class="row" style="margin-top:8px;">
+    <div class="row" style="margin-top:6px;">
       <label class="small"><input type="checkbox" id="drone-on"> <b>DRONE</b></label>
-      <div>
-        <label class="small">EVERY</label><br>
-        <select id="drone-every"></select>
-      </div>
-      <div>
-        <label class="small">OCT <span id="drone-oct-v"></span></label><br>
-        <input type="range" id="drone-oct" min="0" max="4" step="1" style="width:70px">
-      </div>
+      <div><label class="small">EVERY</label><br><select id="drone-every"></select></div>
+      <div><label class="small">OCT <span id="drone-oct-v"></span></label><br>
+        <input type="range" id="drone-oct" min="0" max="4" step="1" style="width:64px"></div>
       <span class="small">root: <b id="drone-root">—</b></span>
     </div>
     <div id="modules"></div>
     <div class="err" id="mod-errors"></div>
   </div>
 
-  <!-- keyboard help -->
-  <div class="card kbd-hint small">
-    Play notes with <kbd>A</kbd><kbd>W</kbd><kbd>S</kbd><kbd>E</kbd><kbd>D</kbd><kbd>F</kbd><kbd>T</kbd><kbd>G</kbd><kbd>Y</kbd><kbd>H</kbd><kbd>U</kbd><kbd>J</kbd><kbd>K</kbd>…
-    (piano layout) · octave <kbd>Z</kbd>/<kbd>X</kbd> — current: <b id="oct">C4</b>
-    · target: <b id="voice-target">—</b>
-    &nbsp;·&nbsp; MIDI monitor: <b id="midi-mon">—</b>
+  <!-- LFOs -->
+  <div class="card" id="lfo-card" style="display:none">
+    <b class="small">LFOs</b> <span class="small">(assign with the ∿ button on any param)</span>
+    <div id="lfo-list"></div>
+  </div>
+
+  <!-- drums -->
+  <div class="card">
+    <div class="row">
+      <label class="small"><input type="checkbox" id="drums-on"> <b>DRUMS</b></label>
+      <span class="small">16 steps · 1/16 grid · rides the transport</span>
+    </div>
+    <div id="drumgrids"></div>
+  </div>
+
+  <!-- keyboard -->
+  <div class="card">
+    <div class="row small" style="justify-content: space-between;">
+      <span>Keys <kbd>A</kbd>–<kbd>;</kbd> play (piano layout) · octave <kbd>Z</kbd>/<kbd>X</kbd>:
+        <b id="oct">C4</b> · target: <b id="voice-target">—</b>
+        · transpose <select id="transpose"></select> st</span>
+      <span>MIDI monitor: <b id="midi-mon">—</b></span>
+    </div>
+    <div class="piano" id="piano"></div>
   </div>
 </div>
 
 <script>
 "use strict";
 let ws = null, state = null, dragging = null;
+const collapsed = new Set();
 
-// ---------- websocket ----------
 function connect() {
   ws = new WebSocket(`ws://${location.host}/ws`);
   ws.onopen = () => document.getElementById("status").classList.add("ok");
@@ -179,16 +249,17 @@ function connect() {
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
     if (m.type === "state") { state = m; renderState(); }
-    else if (m.type === "meters") renderMeters(m);
+    else if (m.type === "meters") { renderMeters(m); pushWave(m); }
     else if (m.type === "param") trackParam(m);
-    else if (m.type === "midi") showMidi(m.event);
+    else if (m.type === "midi") handleEvent(m.event);
     else if (m.type === "beat") onBeat(m);
+    else if (m.type === "tonic") renderTonic(m);
     else if (m.type === "error") console.warn("server:", m.message);
   };
 }
 function send(m) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); }
 
-// ---------- rendering ----------
+// ---------- helpers ----------
 function fmt(v) {
   if (v >= 1000) return v.toFixed(0);
   if (v >= 100) return v.toFixed(1);
@@ -200,7 +271,7 @@ function toUnit(p, value) {
     const lo = Math.max(p.min, 1e-6);
     return Math.log(value / lo) / Math.log(p.max / lo);
   }
-  return (value - p.min) / (p.max - p.min);
+  return (value - p.min) / (p.max - p.min || 1);
 }
 function fromUnit(p, u) {
   if (p.curve === "exp") {
@@ -209,141 +280,260 @@ function fromUnit(p, u) {
   }
   return p.min + u * (p.max - p.min);
 }
+const timers = {};
+function throttled(key, fn, ms = 33) {
+  if (timers[key]) { timers[key].fn = fn; return; }
+  fn();
+  timers[key] = { fn: null };
+  setTimeout(() => {
+    const pending = timers[key].fn;
+    delete timers[key];
+    if (pending) throttled(key, pending, ms);
+  }, ms);
+}
 
+// ---------- state rendering ----------
 function renderState() {
-  // devices
-  const inSel = document.getElementById("in-sel");
-  const outSel = document.getElementById("out-sel");
+  const opt = (v, label, cur) =>
+    `<option value="${v ?? ""}" ${v === cur ? "selected" : ""}>${label}</option>`;
   const dev = state.devices || {inputs: [], outputs: []};
-  const opt = (name, label, cur) =>
-    `<option value="${name ?? ""}" ${name === cur ? "selected" : ""}>${label}</option>`;
-  inSel.innerHTML = opt(null, "System default", state.current_input) +
-    dev.inputs.map(d => opt(d.name, `${d.name} (${d.channels}ch, ${d.sample_rate || "?"})`, state.current_input)).join("");
-  outSel.innerHTML = opt(null, "System default", state.current_output) +
-    dev.outputs.map(d => opt(d.name, `${d.name} (${d.channels}ch, ${d.sample_rate || "?"})`, state.current_output)).join("");
+  document.getElementById("in-sel").innerHTML = opt(null, "System default", state.current_input) +
+    dev.inputs.map(d => opt(d.name, `${d.name} (${d.sample_rate || "?"})`, state.current_input)).join("");
+  document.getElementById("out-sel").innerHTML = opt(null, "System default", state.current_output) +
+    dev.outputs.map(d => opt(d.name, `${d.name} (${d.sample_rate || "?"})`, state.current_output)).join("");
   document.getElementById("io-note").textContent =
-    state.boot_note || (state.input_enabled ? "" :
-      "audio input is off — pick an input whose sample rate matches the output and Apply");
+    state.boot_note || (state.input_enabled ? "" : "audio input off — match sample rates and Apply");
   document.getElementById("in-meter-note").textContent = state.input_enabled ? "" : "(off)";
-
-  // midi note source
-  const msel = document.getElementById("midi-sel");
-  const mins = state.midi_inputs || [];
-  msel.innerHTML = `<option value="">auto</option>` + mins.map(n =>
-    `<option value="${n}" ${n === state.midi_port ? "selected" : ""}>${n}</option>`).join("");
-  msel.disabled = !state.midi_enabled;
-  document.getElementById("midi-on").checked = !!state.midi_enabled;
-
-  // volume
   if (dragging !== "vol") document.getElementById("vol").value = state.volume;
 
-  // patches
-  const psel = document.getElementById("patch-sel");
-  psel.innerHTML = state.patches.map(p =>
-    `<option ${p === state.patch ? "selected" : ""}>${p}</option>`).join("");
+  document.getElementById("patch-sel").innerHTML =
+    state.patches.map(p => `<option ${p === state.patch ? "selected" : ""}>${p}</option>`).join("");
+  document.getElementById("preset-sel").innerHTML =
+    (state.presets || []).map(p => `<option>${p}</option>`).join("");
   document.getElementById("chain-desc").textContent =
-    state.chain.filter(c => !c.service).map(c => c.name).join("  →  ") + "  →  out";
+    state.chain.filter(c => !c.service).map(c => c.name).join(" → ") + " → out";
 
-  // modules & params
-  const holder = document.getElementById("modules");
-  holder.innerHTML = "";
-  const ordered = [...state.chain.filter(c => c.service), ...state.chain.filter(c => !c.service)];
-  for (const mod of ordered) {
-    const div = document.createElement("div");
-    div.className = "module";
-    div.style.opacity = mod.enabled ? "1" : "0.45";
-    div.innerHTML = `<h3><label style="cursor:pointer">
-      <input type="checkbox" class="mod-on" ${mod.enabled ? "checked" : ""}></label>
-      ${mod.name}<span class="kind">${mod.kind} · ${mod.key}${mod.enabled ? "" : " · bypassed"}</span></h3>`;
-    div.querySelector(".mod-on").addEventListener("change", (e) => {
-      send({type: "set_enabled", key: mod.key, enabled: e.target.checked});
-      div.style.opacity = e.target.checked ? "1" : "0.45";
-      e.target.blur();
-    });
-    for (const [pname, p] of Object.entries(mod.params)) {
-      const id = `p-${mod.key}-${pname}`;
-      const row = document.createElement("div");
-      row.className = "param";
-      if (p.curve === "toggle") {
-        row.innerHTML = `<span class="small">${pname}</span>
-          <label><input type="checkbox" id="${id}" ${p.value >= (p.min + p.max) / 2 ? "checked" : ""}></label>
-          <span class="val" id="${id}-v">${p.value >= (p.min + p.max) / 2 ? "on" : "off"}</span><span></span>`;
-        holder.appendChild(row);
-        const box = row.querySelector("input");
-        box.addEventListener("change", () => {
-          document.getElementById(`${id}-v`).textContent = box.checked ? "on" : "off";
-          send({type: "set_param", key: mod.key, name: pname, unit: box.checked ? 1 : 0});
-          box.blur();
-        });
-        div.appendChild(row);
-        continue;
-      }
-      row.innerHTML = `<span class="small">${pname}</span>
-        <input type="range" id="${id}" min="0" max="1" step="0.001" value="${toUnit(p, p.value)}">
-        <span class="val" id="${id}-v">${fmt(p.value)}</span>
-        <button class="reset" title="reset to ${fmt(p.default)}">&#8634;</button>`;
-      holder.appendChild(row);
-      row.querySelector(".reset").addEventListener("click", (e) => {
-        const u = toUnit(p, p.default);
-        row.querySelector("input[type=range]").value = u;
-        document.getElementById(`${id}-v`).textContent = fmt(p.default);
-        send({type: "set_param", key: mod.key, name: pname, unit: u});
-        e.target.blur();
-      });
-      const slider = row.querySelector("input");
-      slider.addEventListener("input", () => {
-        const u = parseFloat(slider.value);
-        document.getElementById(`${id}-v`).textContent = fmt(fromUnit(p, u));
-        throttled(`${mod.key}.${pname}`, () =>
-          send({type: "set_param", key: mod.key, name: pname, unit: u}));
-      });
-      slider.addEventListener("pointerdown", () => dragging = id);
-      slider.addEventListener("pointerup", () => dragging = null);
-      div.appendChild(row);
-    }
-    holder.appendChild(div);
-  }
-  document.getElementById("voice-target").textContent = state.voice_target || "none (no playable source)";
-  renderArp();
-  renderTransport();
-  renderDrone();
+  renderModules();
+  renderArp(); renderDrone(); renderTransport(); renderLooper(); renderDrums(); renderLfos();
+  document.getElementById("voice-target").textContent = state.voice_target || "—";
   const errs = Object.entries(state.module_errors || {});
   document.getElementById("mod-errors").textContent =
     errs.map(([f, e]) => `module ${f} failed to load: ${e}`).join("\n");
 }
 
-// Physical control moved -> move the matching virtual slider (unless the
-// user is dragging that very slider right now).
+function renderModules() {
+  const holder = document.getElementById("modules");
+  holder.innerHTML = "";
+  const ordered = [...state.chain.filter(c => c.service), ...state.chain.filter(c => !c.service)];
+  for (const mod of ordered) {
+    const div = document.createElement("div");
+    div.className = "module" + (collapsed.has(mod.key) ? " collapsed" : "");
+    div.style.opacity = mod.enabled ? "1" : "0.45";
+    const h = document.createElement("h3");
+    h.innerHTML = `<span class="caret">${collapsed.has(mod.key) ? "▸" : "▾"}</span>
+      <label style="cursor:pointer" onclick="event.stopPropagation()">
+        <input type="checkbox" class="mod-on" ${mod.enabled ? "checked" : ""}></label>
+      ${mod.name}<span class="kind">${mod.kind} · ${mod.key}${mod.enabled ? "" : " · bypassed"}</span>`;
+    h.addEventListener("click", () => {
+      if (collapsed.has(mod.key)) collapsed.delete(mod.key); else collapsed.add(mod.key);
+      div.classList.toggle("collapsed");
+      h.querySelector(".caret").textContent = collapsed.has(mod.key) ? "▸" : "▾";
+    });
+    h.querySelector(".mod-on").addEventListener("change", (e) => {
+      send({type: "set_enabled", key: mod.key, enabled: e.target.checked});
+      e.target.blur();
+    });
+    div.appendChild(h);
+    const pwrap = document.createElement("div");
+    pwrap.className = "params";
+    for (const [pname, p] of Object.entries(mod.params)) {
+      pwrap.appendChild(paramRow(mod, pname, p));
+    }
+    div.appendChild(pwrap);
+    holder.appendChild(div);
+  }
+}
+
+function paramRow(mod, pname, p) {
+  const id = `p-${mod.key}-${pname}`;
+  const row = document.createElement("div");
+  row.className = "param" + (p.lfo ? " mapped" : "");
+  if (p.curve === "toggle") {
+    row.innerHTML = `<span class="small">${pname}</span>
+      <label><input type="checkbox" id="${id}" ${p.value >= (p.min + p.max) / 2 ? "checked" : ""}></label>
+      <span class="val" id="${id}-v">${p.value >= (p.min + p.max) / 2 ? "on" : "off"}</span><span></span><span></span>`;
+    row.querySelector("input").addEventListener("change", (e) => {
+      document.getElementById(`${id}-v`).textContent = e.target.checked ? "on" : "off";
+      send({type: "set_param", key: mod.key, name: pname, unit: e.target.checked ? 1 : 0});
+      e.target.blur();
+    });
+    return row;
+  }
+  if (p.curve === "select") {
+    row.innerHTML = `<span class="small">${pname}</span>
+      <select id="${id}">${p.options.map((o, i) =>
+        `<option value="${i}" ${i === Math.round(p.value) ? "selected" : ""}>${o}</option>`).join("")}</select>
+      <span class="val" id="${id}-v">${p.options[Math.round(p.value)] ?? ""}</span><span></span><span></span>`;
+    row.querySelector("select").addEventListener("change", (e) => {
+      const i = parseInt(e.target.value, 10);
+      document.getElementById(`${id}-v`).textContent = p.options[i];
+      send({type: "set_param", key: mod.key, name: pname,
+            unit: (i + 0.5) / p.options.length});
+      e.target.blur();
+    });
+    return row;
+  }
+  row.innerHTML = `<span class="small">${pname}${p.lfo ? " ∿" : ""}</span>
+    <input type="range" id="${id}" min="0" max="1" step="0.001" value="${toUnit(p, p.value)}"
+      title="${p.lfo ? "LFO mapped — slider steers the LFO center" : ""}">
+    <span class="val" id="${id}-v">${fmt(p.value)}</span>
+    <button class="reset" title="reset to ${fmt(p.default)}">&#8634;</button>
+    <button class="lfobtn ${p.lfo ? "on" : ""}" title="${p.lfo ? "remove LFO" : "assign LFO"}">∿</button>`;
+  const slider = row.querySelector("input");
+  slider.addEventListener("input", () => {
+    const u = parseFloat(slider.value);
+    document.getElementById(`${id}-v`).textContent = fmt(fromUnit(p, u));
+    throttled(`${mod.key}.${pname}`, () =>
+      send({type: "set_param", key: mod.key, name: pname, unit: u}));
+  });
+  slider.addEventListener("pointerdown", () => dragging = id);
+  slider.addEventListener("pointerup", () => dragging = null);
+  row.querySelector(".reset").addEventListener("click", (e) => {
+    const u = toUnit(p, p.default);
+    slider.value = u;
+    document.getElementById(`${id}-v`).textContent = fmt(p.default);
+    send({type: "set_param", key: mod.key, name: pname, unit: u});
+    e.target.blur();
+  });
+  row.querySelector(".lfobtn").addEventListener("click", (e) => {
+    if (p.lfo) send({type: "lfo_unassign", id: `${mod.key}.${pname}`});
+    else send({type: "lfo_assign", key: mod.key, name: pname});
+    e.target.blur();
+  });
+  return row;
+}
+
 function trackParam(m) {
   const id = `p-${m.key}-${m.name}`;
   const slider = document.getElementById(id);
   if (!slider) return;
-  if (dragging !== id) slider.value = m.unit;
+  if (dragging !== id && slider.type === "range") slider.value = m.unit;
   const val = document.getElementById(`${id}-v`);
   if (val) val.textContent = fmt(m.value);
-  if (state) {  // keep local state in sync so re-renders don't snap back
+  if (state) {
     const mod = state.chain.find(c => c.key === m.key);
     if (mod && mod.params[m.name]) mod.params[m.name].value = m.value;
   }
 }
 
-function showMidi(e) {
-  const el = document.getElementById("midi-mon");
-  if (!el) return;
-  if (e.kind === "cc") {
-    el.textContent = e.bound
-      ? `CC ${e.cc} → ${e.bound[0]}.${e.bound[1]}`
-      : `CC ${e.cc} = ${(e.unit * 127) | 0} (unbound)`;
-  } else if (e.kind === "bend") {
-    el.textContent = `bend ${e.semitones >= 0 ? "+" : ""}${e.semitones.toFixed(2)} st`;
-  } else if (e.kind === "sustain") {
-    el.textContent = `sustain ${e.on ? "ON" : "off"}`;
-  } else if (e.kind === "drone") {
-    el.textContent = `drone root → ${e.root}`;
-    document.getElementById("drone-root").textContent = e.root;
+// ---------- section renderers ----------
+function renderArp() {
+  const a = state.arp;
+  const row = document.getElementById("arp-on").closest(".row");
+  row.style.display = a ? "" : "none";
+  if (!a) return;
+  document.getElementById("arp-on").checked = a.enabled;
+  document.getElementById("arp-pattern").innerHTML = a.patterns.map(p =>
+    `<option ${p === a.pattern ? "selected" : ""}>${p}</option>`).join("");
+  document.getElementById("arp-div").innerHTML = a.divisions.map(d =>
+    `<option ${d === a.division ? "selected" : ""}>${d}</option>`).join("");
+  if (dragging !== "arp-gate") document.getElementById("arp-gate").value = a.gate;
+  document.getElementById("arp-gate-v").textContent = Math.round(a.gate * 100) + "%";
+  if (dragging !== "arp-oct") document.getElementById("arp-oct").value = a.octaves;
+  document.getElementById("arp-oct-v").textContent = a.octaves;
+}
+function renderDrone() {
+  const d = state.drone;
+  if (!d) return;
+  document.getElementById("drone-on").checked = d.enabled;
+  document.getElementById("drone-every").innerHTML = d.everies.map(e =>
+    `<option ${e === d.every ? "selected" : ""}>${e}</option>`).join("");
+  if (dragging !== "drone-oct") document.getElementById("drone-oct").value = d.octave;
+  document.getElementById("drone-oct-v").textContent = d.octave;
+  document.getElementById("drone-root").textContent = d.root || "listening…";
+}
+function renderTransport() {
+  const t = state.transport;
+  if (!t) return;
+  if (dragging !== "bpm") document.getElementById("bpm").value = t.bpm;
+  document.getElementById("bpm-v").textContent = Math.round(t.bpm) + " bpm";
+  document.getElementById("meter").value = String(t.beats_per_bar);
+  document.getElementById("click-on").checked = !!t.click;
+  document.getElementById("accent-on").checked = t.accent !== false;
+}
+function renderLooper() {
+  const l = state.looper;
+  if (!l) return;
+  document.getElementById("loop-state").textContent = l.state;
+  document.getElementById("loop-bars").value = String(l.bars);
+  document.getElementById("loop-dub").checked = !!l.overdub;
+  if (dragging !== "loop-level") document.getElementById("loop-level").value = l.level;
+}
+function renderLfos() {
+  const list = state.lfos || [];
+  document.getElementById("lfo-card").style.display = list.length ? "" : "none";
+  const holder = document.getElementById("lfo-list");
+  holder.innerHTML = "";
+  for (const l of list) {
+    const div = document.createElement("div");
+    div.className = "param";
+    div.style.gridTemplateColumns = "150px 1fr 1fr 1fr 90px 20px";
+    div.innerHTML = `<span class="small"><b>∿</b> ${l.key}.${l.param}</span>
+      <span><label class="small">rate ${l.rate.toFixed(2)}Hz</label>
+        <input type="range" data-k="rate" min="0.02" max="20" step="0.01" value="${l.rate}"></span>
+      <span><label class="small">depth ${(l.depth*100)|0}%</label>
+        <input type="range" data-k="depth" min="0" max="1" step="0.01" value="${l.depth}"></span>
+      <span><label class="small">center</label>
+        <input type="range" data-k="center" min="0" max="1" step="0.01" value="${l.center}"></span>
+      <select data-k="shape">${l.shapes.map((s, i) =>
+        `<option value="${i}" ${i === l.shape ? "selected" : ""}>${s}</option>`).join("")}</select>
+      <button class="reset" title="remove">✕</button>`;
+    for (const inp of div.querySelectorAll("input,select")) {
+      inp.addEventListener("input", () => {
+        const msg = {type: "lfo_set", id: l.id};
+        msg[inp.dataset.k] = parseFloat(inp.value);
+        throttled(`lfo-${l.id}-${inp.dataset.k}`, () => send(msg));
+      });
+    }
+    div.querySelector("button").addEventListener("click", () =>
+      send({type: "lfo_unassign", id: l.id}));
+    holder.appendChild(div);
+  }
+}
+function renderDrums() {
+  const d = state.drums;
+  if (!d) return;
+  document.getElementById("drums-on").checked = d.enabled;
+  const holder = document.getElementById("drumgrids");
+  holder.innerHTML = "";
+  for (const lane of d.lanes) {
+    const row = document.createElement("div");
+    row.className = "drumgrid";
+    let html = `<span class="small">${lane}</span>`;
+    for (let s = 0; s < d.steps; s++) {
+      html += `<button class="step ${d.patterns[lane][s] ? "on" : ""} ${s % 4 === 0 ? "q" : ""}"
+        data-lane="${lane}" data-step="${s}"></button>`;
+    }
+    html += `<input type="range" min="0" max="1" step="0.01" value="${d.levels[lane]}"
+      data-lane="${lane}" title="level">`;
+    row.innerHTML = html;
+    for (const btn of row.querySelectorAll(".step")) {
+      btn.addEventListener("click", () => {
+        const lane = btn.dataset.lane, s = parseInt(btn.dataset.step, 10);
+        d.patterns[lane][s] = d.patterns[lane][s] ? 0 : 1;
+        btn.classList.toggle("on");
+        throttled("drums", () => send({type: "set_drums", patterns: d.patterns}));
+      });
+    }
+    row.querySelector("input[type=range]").addEventListener("input", (e) => {
+      d.levels[lane] = parseFloat(e.target.value);
+      throttled("drumlvl", () => send({type: "set_drums", levels: d.levels}));
+    });
+    holder.appendChild(row);
   }
 }
 
+// ---------- meters + viz ----------
 function renderMeters(m) {
   const scale = a => {
     if (!a || a <= 0) return 0;
@@ -358,128 +548,108 @@ function renderMeters(m) {
   set("m-out-l", m.out[0]); set("m-out-r", m.out[1]);
   if (m.in !== null && m.in !== undefined) set("m-in", m.in);
 }
-
-// ---------- arp ----------
-function renderArp() {
-  const a = state.arp;
-  const row = document.getElementById("arp-on").closest(".row");
-  row.style.display = a ? "" : "none";
-  if (!a) return;
-  document.getElementById("arp-on").checked = a.enabled;
-  const psel = document.getElementById("arp-pattern");
-  psel.innerHTML = a.patterns.map(p =>
-    `<option ${p === a.pattern ? "selected" : ""}>${p}</option>`).join("");
-  const dsel = document.getElementById("arp-div");
-  dsel.innerHTML = a.divisions.map(d =>
-    `<option ${d === a.division ? "selected" : ""}>${d}</option>`).join("");
-  if (dragging !== "arp-gate") document.getElementById("arp-gate").value = a.gate;
-  document.getElementById("arp-gate-v").textContent = Math.round(a.gate * 100) + "%";
-  if (dragging !== "arp-oct") document.getElementById("arp-oct").value = a.octaves;
-  document.getElementById("arp-oct-v").textContent = a.octaves;
+const NOTE_NAMES = ["C","C#","D","Eb","E","F","F#","G","Ab","A","Bb","B"];
+(function initTonic() {
+  const el = document.getElementById("tonic");
+  el.innerHTML = NOTE_NAMES.map(n => `<div><i>${n}</i><span style="height:0%"></span></div>`).join("");
+})();
+function renderTonic(m) {
+  document.getElementById("tonic-root").textContent = m.root || "—";
+  const cells = document.getElementById("tonic").children;
+  const peak = Math.max(...m.weights, 0.001);
+  for (let i = 0; i < 12; i++) {
+    cells[i].classList.toggle("root", NOTE_NAMES[i] === m.root);
+    cells[i].firstElementChild.nextElementSibling.style.height =
+      Math.round(m.weights[i] / peak * 100) + "%";
+  }
 }
-function renderDrone() {
-  const d = state.drone;
-  const row = document.getElementById("drone-on").closest(".row");
-  row.style.display = d ? "" : "none";
-  if (!d) return;
-  document.getElementById("drone-on").checked = d.enabled;
-  const esel = document.getElementById("drone-every");
-  esel.innerHTML = d.everies.map(e =>
-    `<option ${e === d.every ? "selected" : ""}>${e}</option>`).join("");
-  if (dragging !== "drone-oct") document.getElementById("drone-oct").value = d.octave;
-  document.getElementById("drone-oct-v").textContent = d.octave;
-  document.getElementById("drone-root").textContent = d.root || "listening…";
-}
-function sendDrone() {
-  throttled("drone", () => send({
-    type: "set_drone",
-    enabled: document.getElementById("drone-on").checked,
-    every: document.getElementById("drone-every").value,
-    octave: parseInt(document.getElementById("drone-oct").value, 10),
-  }));
-}
-for (const id of ["drone-on", "drone-every"]) {
-  document.getElementById(id).addEventListener("change", (e) => { sendDrone(); e.target.blur(); });
-}
-{
-  const el = document.getElementById("drone-oct");
-  el.addEventListener("input", () => {
-    document.getElementById("drone-oct-v").textContent = el.value;
-    sendDrone();
-  });
-  el.addEventListener("pointerdown", () => dragging = "drone-oct");
-  el.addEventListener("pointerup", (e) => { dragging = null; e.target.blur(); });
-}
-function renderTransport() {
-  const t = state.transport;
-  if (!t) return;
-  if (dragging !== "bpm") document.getElementById("bpm").value = t.bpm;
-  document.getElementById("bpm-v").textContent = Math.round(t.bpm) + " bpm";
-  document.getElementById("meter").value = String(t.beats_per_bar);
-  document.getElementById("click-on").checked = !!t.click;
-  document.getElementById("accent-on").checked = t.accent !== false;
-}
-function sendArp() {
-  throttled("arp", () => send({
-    type: "set_arp",
-    enabled: document.getElementById("arp-on").checked,
-    pattern: document.getElementById("arp-pattern").value,
-    division: document.getElementById("arp-div").value,
-    gate: parseFloat(document.getElementById("arp-gate").value),
-    octaves: parseInt(document.getElementById("arp-oct").value, 10),
-  }));
-}
-function sendTransport() {
-  throttled("transport", () => send({
-    type: "set_transport",
-    bpm: parseFloat(document.getElementById("bpm").value),
-    beats_per_bar: parseInt(document.getElementById("meter").value, 10),
-    click: document.getElementById("click-on").checked,
-    accent: document.getElementById("accent-on").checked,
-  }));
-}
-for (const id of ["arp-on", "arp-pattern", "arp-div"]) {
-  document.getElementById(id).addEventListener("change", (e) => { sendArp(); e.target.blur(); });
-}
-for (const id of ["arp-gate", "arp-oct"]) {
-  const el = document.getElementById(id);
-  el.addEventListener("input", () => {
-    sendArp();
-    if (id === "arp-gate") document.getElementById("arp-gate-v").textContent =
-      Math.round(parseFloat(el.value) * 100) + "%";
-    if (id === "arp-oct") document.getElementById("arp-oct-v").textContent = el.value;
-  });
-  el.addEventListener("pointerdown", () => dragging = id);
-  el.addEventListener("pointerup", () => dragging = null);
-}
-document.getElementById("bpm").addEventListener("input", () => {
-  document.getElementById("bpm-v").textContent = document.getElementById("bpm").value + " bpm";
-  sendTransport();
-});
-document.getElementById("bpm").addEventListener("pointerdown", () => dragging = "bpm");
-document.getElementById("bpm").addEventListener("pointerup", (e) => { dragging = null; e.target.blur(); });
-for (const id of ["meter", "click-on", "accent-on"]) {
-  document.getElementById(id).addEventListener("change", (e) => { sendTransport(); e.target.blur(); });
+// note roll
+const rollNotes = [];   // {note, t0, t1|null}
+let beatAnchor = null;  // {time(ms), beatIndexApprox}
+function handleEvent(e) {
+  const mon = document.getElementById("midi-mon");
+  if (e.kind === "voiced") {
+    if (e.on) rollNotes.push({note: e.note, t0: performance.now(), t1: null});
+    else for (let i = rollNotes.length - 1; i >= 0; i--)
+      if (rollNotes[i].note === e.note && rollNotes[i].t1 === null) { rollNotes[i].t1 = performance.now(); break; }
+  } else if (e.kind === "cc") {
+    mon.textContent = e.bound ? `CC ${e.cc} → ${e.bound[0]}.${e.bound[1]}`
+                              : `CC ${e.cc} = ${(e.unit * 127) | 0} (unbound)`;
+  } else if (e.kind === "bend") {
+    mon.textContent = `bend ${e.semitones >= 0 ? "+" : ""}${e.semitones.toFixed(2)} st`;
+  } else if (e.kind === "sustain") {
+    mon.textContent = `sustain ${e.on ? "ON" : "off"}`;
+  } else if (e.kind === "drone") {
+    mon.textContent = `drone root → ${e.root}`;
+    document.getElementById("drone-root").textContent = e.root;
+  } else if (e.kind === "drum_step") {
+    for (const btn of document.querySelectorAll(".step.play")) btn.classList.remove("play");
+    for (const btn of document.querySelectorAll(`.step[data-step="${e.step}"]`)) btn.classList.add("play");
+  } else if (e.kind === "looper") {
+    document.getElementById("loop-state").textContent = e.state;
+  }
 }
 function onBeat(m) {
   document.getElementById("beat-pos").textContent = `${m.bar + 1}.${m.beat + 1}`;
   const dot = document.getElementById("beat-dot");
   dot.style.background = m.beat === 0 ? "var(--accent)" : "var(--meter)";
   setTimeout(() => { dot.style.background = "var(--hairline)"; }, 90);
+  beatAnchor = {time: performance.now(), downbeat: m.beat === 0};
 }
-
-// ---------- throttling ----------
-const timers = {};
-function throttled(key, fn, ms = 33) {
-  if (timers[key]) { timers[key].fn = fn; return; }
-  fn();
-  timers[key] = { fn: null };
-  setTimeout(() => {
-    const pending = timers[key].fn;
-    delete timers[key];
-    if (pending) throttled(key, pending, ms);
-  }, ms);
+// waveform strip (output envelope)
+const wave = new Array(360).fill(0);
+function pushWave(m) {
+  wave.push(Math.max(m.out[0] || 0, m.out[1] || 0));
+  if (wave.length > 360) wave.shift();
 }
+function drawViz() {
+  // wave strip
+  const wc = document.getElementById("wavestrip");
+  if (wc.width !== wc.clientWidth) wc.width = wc.clientWidth;
+  const wctx = wc.getContext("2d");
+  wctx.clearRect(0, 0, wc.width, wc.height);
+  wctx.fillStyle = getComputedStyle(document.body).getPropertyValue("--meter");
+  const mid = wc.height / 2, n = wave.length;
+  for (let i = 0; i < n; i++) {
+    const a = Math.min(1, Math.pow(wave[i], 0.5));
+    const h = Math.max(1, a * (wc.height - 4));
+    const x = (i / n) * wc.width;
+    wctx.fillRect(x, mid - h / 2, Math.max(1, wc.width / n - 0.5), h);
+  }
+  // note roll
+  const nc = document.getElementById("noteroll");
+  if (nc.width !== nc.clientWidth) nc.width = nc.clientWidth;
+  const ctx = nc.getContext("2d");
+  ctx.clearRect(0, 0, nc.width, nc.height);
+  const now = performance.now();
+  const bpm = state?.transport?.bpm || 100;
+  const pxPerMs = nc.width / (16 * 60000 / bpm);   // window = 16 beats
+  // beat gridlines
+  ctx.strokeStyle = getComputedStyle(document.body).getPropertyValue("--hairline");
+  ctx.lineWidth = 1;
+  if (beatAnchor) {
+    const beatMs = 60000 / bpm;
+    for (let k = 0; k < 20; k++) {
+      const t = beatAnchor.time - k * beatMs;
+      const x = nc.width - (now - t) * pxPerMs;
+      if (x < 0) break;
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, nc.height); ctx.stroke();
+    }
+  }
+  // notes
+  ctx.fillStyle = getComputedStyle(document.body).getPropertyValue("--accent");
+  const lo = 36, hi = 96;
+  while (rollNotes.length && rollNotes[0].t1 !== null &&
+         (now - rollNotes[0].t1) * pxPerMs > nc.width) rollNotes.shift();
+  for (const ev of rollNotes) {
+    const x0 = nc.width - (now - ev.t0) * pxPerMs;
+    const x1 = ev.t1 === null ? nc.width : nc.width - (now - ev.t1) * pxPerMs;
+    const y = nc.height - ((Math.min(hi, Math.max(lo, ev.note)) - lo) / (hi - lo)) * (nc.height - 6) - 3;
+    ctx.fillRect(Math.max(0, x0), y - 2, Math.max(2, x1 - x0), 4);
+  }
+  requestAnimationFrame(drawViz);
+}
+requestAnimationFrame(drawViz);
 
 // ---------- controls ----------
 document.getElementById("vol").addEventListener("input", (e) => {
@@ -496,55 +666,138 @@ document.getElementById("apply-io").addEventListener("click", (e) => {
         output: document.getElementById("out-sel").value || null});
   e.target.blur();
 });
-document.getElementById("keys-on").addEventListener("change", (e) => {
-  if (!e.target.checked) noteOffAll();
-  e.target.blur();
-});
 function sendMidiChoice() {
   send({type: "set_midi",
         port: document.getElementById("midi-sel").value || null,
         enabled: document.getElementById("midi-on").checked});
 }
-document.getElementById("midi-on").addEventListener("change", (e) => {
-  sendMidiChoice(); e.target.blur();
-});
+document.getElementById("midi-on").addEventListener("change", (e) => { sendMidiChoice(); e.target.blur(); });
 document.getElementById("midi-sel").addEventListener("change", sendMidiChoice);
-// Release focus after using a control, so the page (not the control) has it.
-document.addEventListener("pointerup", (e) => {
-  if (e.target.tagName === "INPUT" && e.target.type === "range") e.target.blur();
-  if (e.target.tagName === "BUTTON") e.target.blur();
+function renderMidiControls() {
+  const msel = document.getElementById("midi-sel");
+  const mins = state.midi_inputs || [];
+  msel.innerHTML = `<option value="">auto</option>` + mins.map(n =>
+    `<option value="${n}" ${n === state.midi_port ? "selected" : ""}>${n}</option>`).join("");
+  msel.disabled = !state.midi_enabled;
+  document.getElementById("midi-on").checked = !!state.midi_enabled;
+}
+const origRender = renderState;
+renderState = function() { origRender(); renderMidiControls(); };
+
+function sendArp() {
+  throttled("arp", () => send({
+    type: "set_arp",
+    enabled: document.getElementById("arp-on").checked,
+    pattern: document.getElementById("arp-pattern").value,
+    division: document.getElementById("arp-div").value,
+    gate: parseFloat(document.getElementById("arp-gate").value),
+    octaves: parseInt(document.getElementById("arp-oct").value, 10),
+  }));
+}
+for (const id of ["arp-on", "arp-pattern", "arp-div"])
+  document.getElementById(id).addEventListener("change", (e) => { sendArp(); e.target.blur(); });
+for (const id of ["arp-gate", "arp-oct"]) {
+  const el = document.getElementById(id);
+  el.addEventListener("input", () => {
+    sendArp();
+    if (id === "arp-gate") document.getElementById("arp-gate-v").textContent =
+      Math.round(parseFloat(el.value) * 100) + "%";
+    if (id === "arp-oct") document.getElementById("arp-oct-v").textContent = el.value;
+  });
+  el.addEventListener("pointerdown", () => dragging = id);
+  el.addEventListener("pointerup", () => dragging = null);
+}
+function sendDrone() {
+  throttled("drone", () => send({
+    type: "set_drone",
+    enabled: document.getElementById("drone-on").checked,
+    every: document.getElementById("drone-every").value,
+    octave: parseInt(document.getElementById("drone-oct").value, 10),
+  }));
+}
+for (const id of ["drone-on", "drone-every"])
+  document.getElementById(id).addEventListener("change", (e) => { sendDrone(); e.target.blur(); });
+{
+  const el = document.getElementById("drone-oct");
+  el.addEventListener("input", () => {
+    document.getElementById("drone-oct-v").textContent = el.value;
+    sendDrone();
+  });
+  el.addEventListener("pointerdown", () => dragging = "drone-oct");
+  el.addEventListener("pointerup", (e) => { dragging = null; e.target.blur(); });
+}
+function sendTransport() {
+  throttled("transport", () => send({
+    type: "set_transport",
+    bpm: parseFloat(document.getElementById("bpm").value),
+    beats_per_bar: parseInt(document.getElementById("meter").value, 10),
+    click: document.getElementById("click-on").checked,
+    accent: document.getElementById("accent-on").checked,
+  }));
+}
+document.getElementById("bpm").addEventListener("input", () => {
+  document.getElementById("bpm-v").textContent = document.getElementById("bpm").value + " bpm";
+  sendTransport();
 });
-document.addEventListener("change", (e) => {
-  if (e.target.tagName === "SELECT") e.target.blur();
-});
-// A select that was clicked but not changed keeps focus and swallows note
-// keys (type-ahead) — drop its focus the moment you click anywhere else.
-document.addEventListener("pointerdown", (e) => {
-  const a = document.activeElement;
-  if (a && (a.tagName === "SELECT" || a.tagName === "BUTTON") &&
-      e.target !== a && !a.contains(e.target)) {
-    a.blur();
-  }
+document.getElementById("bpm").addEventListener("pointerdown", () => dragging = "bpm");
+document.getElementById("bpm").addEventListener("pointerup", (e) => { dragging = null; e.target.blur(); });
+for (const id of ["meter", "click-on", "accent-on"])
+  document.getElementById(id).addEventListener("change", (e) => { sendTransport(); e.target.blur(); });
+
+// looper
+function sendLooper(action) {
+  send({type: "set_looper", action,
+        bars: parseInt(document.getElementById("loop-bars").value, 10),
+        level: parseFloat(document.getElementById("loop-level").value),
+        overdub: document.getElementById("loop-dub").checked});
+}
+document.getElementById("loop-rec").addEventListener("click", (e) => { sendLooper("record"); e.target.blur(); });
+document.getElementById("loop-stop").addEventListener("click", (e) => { sendLooper("stop"); e.target.blur(); });
+document.getElementById("loop-play").addEventListener("click", (e) => { sendLooper("play"); e.target.blur(); });
+document.getElementById("loop-clear").addEventListener("click", (e) => { sendLooper("clear"); e.target.blur(); });
+document.getElementById("loop-dub").addEventListener("change", (e) => { sendLooper(null); e.target.blur(); });
+document.getElementById("loop-level").addEventListener("input", () =>
+  throttled("looplvl", () => sendLooper(null)));
+document.getElementById("loop-level").addEventListener("pointerdown", () => dragging = "loop-level");
+document.getElementById("loop-level").addEventListener("pointerup", () => dragging = null);
+document.getElementById("loop-bars").addEventListener("change", (e) => { sendLooper(null); e.target.blur(); });
+
+// drums enable
+document.getElementById("drums-on").addEventListener("change", (e) => {
+  send({type: "set_drums", enabled: e.target.checked});
+  e.target.blur();
 });
 
-// ---------- computer keyboard as controller ----------
-// Only fires while this window is focused: browsers deliver keydown/keyup
-// exclusively to the focused page, and we release everything on blur.
-const KEYMAP = {a:0, w:1, s:2, e:3, d:4, f:5, t:6, g:7, y:8, h:9, u:10, j:11,
-                k:12, o:13, l:14, p:15, ";":16};
-let octave = 4;                 // C4 = MIDI 60
-const held = new Set();
-const octName = () => `C${octave}`;
+// presets
+document.getElementById("preset-save").addEventListener("click", (e) => {
+  const name = document.getElementById("preset-name").value.trim() ||
+               document.getElementById("preset-sel").value || "untitled";
+  send({type: "save_preset", name});
+  e.target.blur();
+});
+document.getElementById("preset-load").addEventListener("click", (e) => {
+  const name = document.getElementById("preset-sel").value;
+  if (name) send({type: "load_preset", name});
+  e.target.blur();
+});
+document.getElementById("preset-del").addEventListener("click", (e) => {
+  const name = document.getElementById("preset-sel").value;
+  if (name) send({type: "delete_preset", name});
+  e.target.blur();
+});
 
+// ---------- computer keyboard + piano ----------
 function keysEnabled() { return document.getElementById("keys-on").checked; }
 function keyTarget(e) {
-  // Only text-entry and dropdown elements swallow note keys. Sliders,
-  // checkboxes and buttons do NOT — so tweaking a param never kills the keys.
   const t = e.target;
   if (!t || !t.tagName) return false;
   if (t.tagName === "SELECT" || t.tagName === "TEXTAREA") return true;
   return t.tagName === "INPUT" && !["range", "checkbox"].includes(t.type);
 }
+const KEYMAP = {a:0, w:1, s:2, e:3, d:4, f:5, t:6, g:7, y:8, h:9, u:10, j:11,
+                k:12, o:13, l:14, p:15, ";":16};
+let octave = 4;
+const held = new Set();
 window.addEventListener("keydown", (e) => {
   if (e.repeat || !keysEnabled() || keyTarget(e) || e.metaKey || e.ctrlKey || e.altKey) return;
   const k = e.key.toLowerCase();
@@ -552,30 +805,103 @@ window.addEventListener("keydown", (e) => {
   else if (k === "x") { octave = Math.min(7, octave + 1); noteOffAll(); }
   else if (k in KEYMAP) {
     const note = 12 * (octave + 1) + KEYMAP[k];
-    if (!held.has(note)) { held.add(note); send({type: "note_on", note}); }
+    if (!held.has(note)) { held.add(note); send({type: "note_on", note}); pianoLight(note, true); }
     e.preventDefault();
   }
-  document.getElementById("oct").textContent = octName();
+  document.getElementById("oct").textContent = `C${octave}`;
 });
 window.addEventListener("keyup", (e) => {
   const k = e.key.toLowerCase();
   if (k in KEYMAP) {
     const note = 12 * (octave + 1) + KEYMAP[k];
-    held.delete(note);
-    send({type: "note_off", note});
+    held.delete(note); send({type: "note_off", note}); pianoLight(note, false);
   }
 });
-function noteOffAll() { held.clear(); send({type: "all_notes_off"}); }
-function setFocusNote(focused) {
+function noteOffAll() { held.clear(); send({type: "all_notes_off"});
+  for (const el of document.querySelectorAll(".piano .held")) el.classList.remove("held"); }
+function setFocusNote(f) {
   const el = document.getElementById("focusnote");
-  el.classList.toggle("active", focused);
-  el.textContent = focused ? "(live)" : "(needs window focus)";
+  el.classList.toggle("active", f);
+  el.textContent = f ? "(live)" : "(needs window focus)";
 }
 window.addEventListener("blur", () => { noteOffAll(); setFocusNote(false); });
 window.addEventListener("focus", () => setFocusNote(true));
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden) noteOffAll();
+document.addEventListener("visibilitychange", () => { if (document.hidden) noteOffAll(); });
+document.getElementById("keys-on").addEventListener("change", (e) => {
+  if (!e.target.checked) noteOffAll();
+  e.target.blur();
 });
+document.addEventListener("pointerup", (e) => {
+  if (e.target.tagName === "INPUT" && e.target.type === "range") e.target.blur();
+  if (e.target.tagName === "BUTTON") e.target.blur();
+});
+document.addEventListener("change", (e) => {
+  if (e.target.tagName === "SELECT") e.target.blur();
+});
+document.addEventListener("pointerdown", (e) => {
+  const a = document.activeElement;
+  if (a && (a.tagName === "SELECT" || a.tagName === "BUTTON") &&
+      e.target !== a && !a.contains(e.target)) a.blur();
+});
+
+// on-screen piano: 2 octaves from C3 (48)
+(function buildPiano() {
+  const el = document.getElementById("piano");
+  const base = 48, whites = [0,2,4,5,7,9,11], blacks = {1:0.5, 3:1.5, 6:3.5, 8:4.5, 10:5.5};
+  const nWhite = 15, w = 100 / nWhite;
+  let wi = 0;
+  for (let o = 0; o < 2.2; o++) {
+    for (const pc of whites) {
+      const note = base + o * 12 + pc;
+      if (wi >= nWhite) break;
+      const k = document.createElement("div");
+      k.className = "wk"; k.dataset.note = note;
+      k.style.left = (wi * w) + "%"; k.style.width = w + "%";
+      el.appendChild(k); wi++;
+    }
+  }
+  for (let o = 0; o < 3; o++) {
+    for (const [pc, offset] of Object.entries(blacks)) {
+      const note = base + o * 12 + parseInt(pc, 10);
+      const pos = (o * 7 + parseFloat(offset) + 0.72) * w;
+      if (pos > 97) continue;
+      const k = document.createElement("div");
+      k.className = "bk"; k.dataset.note = note;
+      k.style.left = pos + "%"; k.style.width = (w * 0.6) + "%";
+      el.appendChild(k);
+    }
+  }
+  const down = (e) => {
+    const note = parseInt(e.target.dataset.note ?? "", 10);
+    if (!note) return;
+    e.target.setPointerCapture?.(e.pointerId);
+    send({type: "note_on", note}); e.target.classList.add("held");
+    const up = () => { send({type: "note_off", note}); e.target.classList.remove("held"); };
+    e.target.addEventListener("pointerup", up, {once: true});
+    e.target.addEventListener("pointerleave", up, {once: true});
+  };
+  el.addEventListener("pointerdown", down);
+})();
+function pianoLight(note, on) {
+  const k = document.querySelector(`.piano [data-note="${note}"]`);
+  if (k) k.classList.toggle("held", on);
+}
+
+(function initTranspose() {
+  const sel = document.getElementById("transpose");
+  sel.innerHTML = Array.from({length: 25}, (_, i) => i - 12).map(v =>
+    `<option value="${v}" ${v === 0 ? "selected" : ""}>${v > 0 ? "+" + v : v}</option>`).join("");
+  sel.addEventListener("change", (e) => {
+    send({type: "set_transpose", semitones: parseInt(sel.value, 10)});
+    e.target.blur();
+  });
+})();
+const origRender2 = renderState;
+renderState = function() {
+  origRender2();
+  const sel = document.getElementById("transpose");
+  if (document.activeElement !== sel) sel.value = String(state.transpose ?? 0);
+};
 
 connect();
 setFocusNote(document.hasFocus());

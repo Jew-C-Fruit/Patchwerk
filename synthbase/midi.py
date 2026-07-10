@@ -56,13 +56,15 @@ class MonoVoice:
     def __init__(self, rack: Rack, target_key: str) -> None:
         self.rack = rack
         self.target_key = target_key
+        self.on_voiced = None  # viz tap: (note, on) for what actually sounds
+        self.transpose = 0     # semitones, applied to every note
         self._held: list[int] = []  # note stack, most recent last
         self._sounding: int | None = None  # note currently voiced (incl. sustained)
         self.bend = 0.0  # semitones
         self.sustain = False
 
     def _freq(self, note: int) -> float:
-        return midi_to_freq(note) * 2 ** (self.bend / 12)
+        return midi_to_freq(note + self.transpose) * 2 ** (self.bend / 12)
 
     def note_on(self, note: int, velocity: int) -> None:
         if note in self._held:
@@ -70,6 +72,11 @@ class MonoVoice:
         self._held.append(note)
         self._sounding = note
         self.rack.set_params(self.target_key, freq=self._freq(note), gate=1)
+        if self.on_voiced:
+            try:
+                self.on_voiced(note, True)
+            except Exception:  # noqa: BLE001
+                pass
 
     def note_off(self, note: int) -> None:
         if note in self._held:
@@ -82,6 +89,11 @@ class MonoVoice:
         else:
             self._sounding = None
             self.rack.set_params(self.target_key, gate=0)
+            if self.on_voiced:
+                try:
+                    self.on_voiced(note, False)
+                except Exception:  # noqa: BLE001
+                    pass
 
     def set_sustain(self, on: bool) -> None:
         self.sustain = on
