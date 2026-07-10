@@ -25,12 +25,14 @@ class Param:
     minimum: float
     maximum: float
     default: float
-    curve: str = "lin"  # "lin" or "exp"
+    curve: str = "lin"  # "lin", "exp", or "toggle" (on/off checkbox)
 
     def from_unit(self, value: float) -> float:
         """Map a normalized 0..1 control value (MIDI CC, sensor, GUI slider)
         onto this parameter's range using its curve."""
         value = min(1.0, max(0.0, value))
+        if self.curve == "toggle":
+            return self.maximum if value >= 0.5 else self.minimum
         if self.curve == "exp":
             lo = max(self.minimum, 1e-6)
             return lo * (self.maximum / lo) ** value

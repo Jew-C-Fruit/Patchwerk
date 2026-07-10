@@ -135,6 +135,18 @@
         <input type="range" id="arp-oct" min="1" max="3" step="1" style="width:70px">
       </div>
     </div>
+    <div class="row" style="margin-top:8px;">
+      <label class="small"><input type="checkbox" id="drone-on"> <b>DRONE</b></label>
+      <div>
+        <label class="small">EVERY</label><br>
+        <select id="drone-every"></select>
+      </div>
+      <div>
+        <label class="small">OCT <span id="drone-oct-v"></span></label><br>
+        <input type="range" id="drone-oct" min="0" max="4" step="1" style="width:70px">
+      </div>
+      <span class="small">root: <b id="drone-root">—</b></span>
+    </div>
     <div id="modules"></div>
     <div class="err" id="mod-errors"></div>
   </div>
@@ -247,6 +259,20 @@ function renderState() {
       const id = `p-${mod.key}-${pname}`;
       const row = document.createElement("div");
       row.className = "param";
+      if (p.curve === "toggle") {
+        row.innerHTML = `<span class="small">${pname}</span>
+          <label><input type="checkbox" id="${id}" ${p.value >= (p.min + p.max) / 2 ? "checked" : ""}></label>
+          <span class="val" id="${id}-v">${p.value >= (p.min + p.max) / 2 ? "on" : "off"}</span>`;
+        holder.appendChild(row);
+        const box = row.querySelector("input");
+        box.addEventListener("change", () => {
+          document.getElementById(`${id}-v`).textContent = box.checked ? "on" : "off";
+          send({type: "set_param", key: mod.key, name: pname, unit: box.checked ? 1 : 0});
+          box.blur();
+        });
+        div.appendChild(row);
+        continue;
+      }
       row.innerHTML = `<span class="small">${pname}</span>
         <input type="range" id="${id}" min="0" max="1" step="0.001" value="${toUnit(p, p.value)}">
         <span class="val" id="${id}-v">${fmt(p.value)}</span>`;
@@ -267,6 +293,7 @@ function renderState() {
   document.getElementById("voice-target").textContent = state.voice_target || "none (no playable source)";
   renderArp();
   renderTransport();
+  renderDrone();
   const errs = Object.entries(state.module_errors || {});
   document.getElementById("mod-errors").textContent =
     errs.map(([f, e]) => `module ${f} failed to load: ${e}`).join("\n");
@@ -298,6 +325,9 @@ function showMidi(e) {
     el.textContent = `bend ${e.semitones >= 0 ? "+" : ""}${e.semitones.toFixed(2)} st`;
   } else if (e.kind === "sustain") {
     el.textContent = `sustain ${e.on ? "ON" : "off"}`;
+  } else if (e.kind === "drone") {
+    el.textContent = `drone root → ${e.root}`;
+    document.getElementById("drone-root").textContent = e.root;
   }
 }
 
@@ -333,6 +363,39 @@ function renderArp() {
   document.getElementById("arp-gate-v").textContent = Math.round(a.gate * 100) + "%";
   if (dragging !== "arp-oct") document.getElementById("arp-oct").value = a.octaves;
   document.getElementById("arp-oct-v").textContent = a.octaves;
+}
+function renderDrone() {
+  const d = state.drone;
+  const row = document.getElementById("drone-on").closest(".row");
+  row.style.display = d ? "" : "none";
+  if (!d) return;
+  document.getElementById("drone-on").checked = d.enabled;
+  const esel = document.getElementById("drone-every");
+  esel.innerHTML = d.everies.map(e =>
+    `<option ${e === d.every ? "selected" : ""}>${e}</option>`).join("");
+  if (dragging !== "drone-oct") document.getElementById("drone-oct").value = d.octave;
+  document.getElementById("drone-oct-v").textContent = d.octave;
+  document.getElementById("drone-root").textContent = d.root || "listening…";
+}
+function sendDrone() {
+  throttled("drone", () => send({
+    type: "set_drone",
+    enabled: document.getElementById("drone-on").checked,
+    every: document.getElementById("drone-every").value,
+    octave: parseInt(document.getElementById("drone-oct").value, 10),
+  }));
+}
+for (const id of ["drone-on", "drone-every"]) {
+  document.getElementById(id).addEventListener("change", (e) => { sendDrone(); e.target.blur(); });
+}
+{
+  const el = document.getElementById("drone-oct");
+  el.addEventListener("input", () => {
+    document.getElementById("drone-oct-v").textContent = el.value;
+    sendDrone();
+  });
+  el.addEventListener("pointerdown", () => dragging = "drone-oct");
+  el.addEventListener("pointerup", (e) => { dragging = null; e.target.blur(); });
 }
 function renderTransport() {
   const t = state.transport;
@@ -434,9 +497,19 @@ document.getElementById("midi-sel").addEventListener("change", sendMidiChoice);
 // Release focus after using a control, so the page (not the control) has it.
 document.addEventListener("pointerup", (e) => {
   if (e.target.tagName === "INPUT" && e.target.type === "range") e.target.blur();
+  if (e.target.tagName === "BUTTON") e.target.blur();
 });
 document.addEventListener("change", (e) => {
   if (e.target.tagName === "SELECT") e.target.blur();
+});
+// A select that was clicked but not changed keeps focus and swallows note
+// keys (type-ahead) — drop its focus the moment you click anywhere else.
+document.addEventListener("pointerdown", (e) => {
+  const a = document.activeElement;
+  if (a && (a.tagName === "SELECT" || a.tagName === "BUTTON") &&
+      e.target !== a && !a.contains(e.target)) {
+    a.blur();
+  }
 });
 
 // ---------- computer keyboard as controller ----------

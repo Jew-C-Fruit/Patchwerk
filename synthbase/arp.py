@@ -43,6 +43,7 @@ class Arpeggiator:
         self.pattern = "up"
         self.sustain = False
 
+        self.on_note = None             # optional tap: DroneBrain listens here
         self._pool: list[int] = []      # notes in play, insertion order
         self._held: set[int] = set()    # physically held right now
         self._sustained: set[int] = set()
@@ -56,6 +57,12 @@ class Arpeggiator:
     # -- note-sink interface (mirrors MonoVoice) ------------------------------
 
     def note_on(self, note: int, velocity: int = 100) -> None:
+        tap = self.on_note
+        if tap is not None:
+            try:
+                tap(note)
+            except Exception:  # noqa: BLE001
+                pass
         with self._lock:
             self._held.add(note)
             self._sustained.discard(note)

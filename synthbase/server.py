@@ -13,6 +13,7 @@ Protocol (JSON messages):
     {"type": "set_midi", "port": "CP88/CP73 Port1", "enabled": true}
     {"type": "set_arp", "enabled": true, "division": "1/8", "gate": 0.6, "octaves": 2, "pattern": "updown"}
     {"type": "set_transport", "bpm": 110, "beats_per_bar": 4, "click": true}
+    {"type": "set_drone", "enabled": true, "every": "1 bar", "octave": 2}
 
   server -> client:
     {"type": "state", ...full snapshot...}       (on connect and after changes)
@@ -76,11 +77,22 @@ class GuiServer:
         t = m.get("type")
         loop = asyncio.get_running_loop()
         if t == "set_param":
-            self.synth.set_param_unit(m["key"], m["name"], m["unit"])
-            # echo to *other* clients only, so the sender's slider isn't fought
-            await self._broadcast_state(exclude=sender)
+            value = self.synth.set_param_unit(m["key"], m["name"], m["unit"])
+            # Tiny targeted echo to *other* clients only — never a full state
+            # snapshot (state building is for structural changes, not knob
+            # streams; see the audio_devices cache note).
+            await self._broadcast(
+                {"type": "param", "key": m["key"], "name": m["name"],
+                 "value": value, "unit": m["unit"]},
+                exclude=sender,
+            )
         elif t == "set_enabled":
             self.synth.set_enabled(m["key"], m["enabled"])
+            await self._broadcast_state(exclude=sender)
+        elif t == "set_drone":
+            self.synth.set_drone(
+                enabled=m.get("enabled"), every=m.get("every"), octave=m.get("octave"),
+            )
             await self._broadcast_state(exclude=sender)
         elif t == "set_transport":
             self.synth.set_transport(

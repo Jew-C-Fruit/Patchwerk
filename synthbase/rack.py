@@ -121,6 +121,38 @@ class Rack:
                 inst.bus_group.free()
         self.instances = []
 
+    # -- service sources (drone, future LFO modules) -----------------------------
+
+    def add_service_source(self, module: Module, overrides: dict | None = None) -> Instance:
+        """Add an extra source alongside the chain's head, writing into the
+        same bus as the first source so it rides the whole effect chain."""
+        assert self.engine.server is not None and self.instances, "rack not built"
+        if module.kind != "source":
+            raise ValueError("service instances must be sources")
+        first = self.instances[0]
+        settings = {name: p.default for name, p in module.params.items()}
+        settings.update(overrides or {})
+        settings["out"] = first.settings["out"]
+        self.engine.register(module)
+        node = self.engine.server.add_synth(
+            module.synthdef,
+            add_action=AddAction.ADD_TO_HEAD,
+            target_node=self.engine.root_group,
+            **settings,
+        )
+        inst = Instance(key=module.key, module=module, settings=settings, node=node)
+        self.instances.append(inst)
+        self.registry[module.key] = module
+        return inst
+
+    def remove_instance(self, key: str) -> None:
+        inst = self.find(key)
+        if inst.node is not None:
+            inst.node.free()
+        if inst.bus_group is not None:
+            inst.bus_group.free()
+        self.instances.remove(inst)
+
     # -- runtime control -------------------------------------------------------
 
     def find(self, key: str) -> Instance:

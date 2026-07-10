@@ -16,6 +16,7 @@ import threading
 from pathlib import Path
 
 from .arp import Arpeggiator
+from .drone import DroneBrain
 from .transport import Transport, _click
 from .audio_devices import list_audio_devices
 from .engine import Engine
@@ -71,6 +72,7 @@ class SynthApp:
         self.arp: Arpeggiator | None = None
         self._arp_settings: dict = {}  # persists across patch switches
         self.transport = Transport()
+        self.drone = DroneBrain(self)
         self.on_beat_event = None  # set by GuiServer; called from the beat thread
 
         self.on_midi_event = None  # set by GuiServer; called from MIDI thread
@@ -129,12 +131,14 @@ class SynthApp:
         self.voice = MonoVoice(self.rack, target) if target else None
         if self.voice:
             self.arp = Arpeggiator(self.voice, self.transport)
+            self.arp.on_note = self.drone.observe
             self.arp.configure(**{**self._arp_settings, **patch.get("arp", {})})
             self._arp_settings = {
                 k: v for k, v in self.arp.settings().items() if k != "patterns"
             }
         self.patch_name = patch_name
         self.patch = patch
+        self.drone.spawn()  # re-add the drone to the fresh rack if enabled
         self._restart_midi()
 
     def _restart_midi(self) -> None:
@@ -192,6 +196,10 @@ class SynthApp:
             except Exception:  # noqa: BLE001
                 pass
 
+    def set_drone(self, **settings) -> None:
+        with self._lock:
+            self.drone.configure(**settings)
+
     def set_transport(self, bpm=None, beats_per_bar=None, click=None) -> None:
         if bpm is not None:
             self.transport.set_bpm(bpm)
@@ -202,6 +210,7 @@ class SynthApp:
 
     def stop(self) -> None:
         with self._lock:
+            self.drone.shutdown()
             self.transport.shutdown()
             if self.reloader:
                 self.reloader.stop()
@@ -335,5 +344,6 @@ class SynthApp:
                 "midi_enabled": self.midi_enabled,
                 "arp": self.arp.settings() if self.arp else None,
                 "transport": self.transport.settings(),
+                "drone": self.drone.settings(),
                 "module_errors": {k: repr(v) for k, v in self.module_errors.items()},
             }

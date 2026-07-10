@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import Callable
 
+import time
+
 import mido
 
 from .rack import Rack
@@ -31,12 +33,21 @@ def midi_to_freq(note: int) -> float:
     return A4_FREQ * 2 ** ((note - A4_MIDI) / 12)
 
 
-def list_inputs() -> list[str]:
+_ports_cache: dict = {"t": 0.0, "names": None}
+
+
+def list_inputs(force: bool = False) -> list[str]:
+    now = time.monotonic()
+    if not force and _ports_cache["names"] is not None and now - _ports_cache["t"] < 3.0:
+        return _ports_cache["names"]
     try:
-        return mido.get_input_names()
+        names = mido.get_input_names()
     except Exception as exc:  # noqa: BLE001 — no MIDI backend is never fatal
         print(f"[midi] backend unavailable ({exc.__class__.__name__}) — no MIDI")
-        return []
+        names = []
+    _ports_cache["names"] = names
+    _ports_cache["t"] = now
+    return names
 
 
 class MonoVoice:

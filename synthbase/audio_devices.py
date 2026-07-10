@@ -10,13 +10,25 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
+
+_CACHE_TTL = 5.0
+_cache: dict = {"t": 0.0, "data": None}
 
 
-def list_audio_devices() -> dict:
+def list_audio_devices(force: bool = False) -> dict:
     """Returns {"inputs": [...], "outputs": [...]} of
-    {"name", "channels", "sample_rate"} dicts."""
+    {"name", "channels", "sample_rate"} dicts.
+
+    CACHED (5 s TTL): system_profiler takes 1-3 SECONDS — calling it per
+    GUI state snapshot was the great slider-freeze bug of 2026-07-10.
+    Pass force=True where freshness matters (engine boot, device switch).
+    """
     if sys.platform != "darwin":
         return {"inputs": [], "outputs": []}
+    now = time.monotonic()
+    if not force and _cache["data"] is not None and now - _cache["t"] < _CACHE_TTL:
+        return _cache["data"]
     try:
         raw = subprocess.run(
             ["system_profiler", "SPAudioDataType", "-json"],
@@ -24,7 +36,7 @@ def list_audio_devices() -> dict:
         ).stdout
         data = json.loads(raw)
     except Exception:
-        return {"inputs": [], "outputs": []}
+        return _cache["data"] or {"inputs": [], "outputs": []}
 
     inputs, outputs = [], []
     for section in data.get("SPAudioDataType", []):
@@ -43,7 +55,9 @@ def list_audio_devices() -> dict:
             if out_ch:
                 outputs.append({"name": name, "channels": out_ch, "sample_rate": rate,
                                 "default": default_out})
-    return {"inputs": inputs, "outputs": outputs}
+    _cache["data"] = {"inputs": inputs, "outputs": outputs}
+    _cache["t"] = now
+    return _cache["data"]
 
 
 def find_rate_matched_input(output_device: str | None) -> str | None:
@@ -53,7 +67,7 @@ def find_rate_matched_input(output_device: str | None) -> str | None:
     headset mics run at 16 kHz and can never match). Prefers the built-in
     microphone. Returns a device name or None.
     """
-    devices = list_audio_devices()
+    devices = list_audio_devices(force=True)  # boot-time decision: be fresh
     outs, ins = devices["outputs"], devices["inputs"]
     if output_device:
         out = next((d for d in outs if d["name"] == output_device), None)
