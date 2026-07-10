@@ -51,6 +51,7 @@ class Transport:
         self.beats_per_bar = int(beats_per_bar)
         self.click_enabled = False
         self.click_accent = True   # high tick on the downbeat
+        self.running = True        # transport stop/play (position freezes)
         self.on_beat: Callable[[int, int], None] | None = None  # (bar, beat_in_bar)
 
         self._epoch = time.monotonic()  # wall time of...
@@ -67,6 +68,8 @@ class Transport:
 
     def beats_now(self) -> float:
         with self._lock:
+            if not self.running:
+                return self._epoch_beat
             return self._epoch_beat + (time.monotonic() - self._epoch) / self.beat_duration
 
     def time_of_beat(self, beat: float) -> float:
@@ -82,6 +85,20 @@ class Transport:
             self._epoch_beat += (now - self._epoch) / self.beat_duration
             self._epoch = now
             self.bpm = bpm
+
+    def set_running(self, running: bool) -> None:
+        running = bool(running)
+        if running == self.running:
+            return
+        with self._lock:
+            now = time.monotonic()
+            if not running:  # freeze position
+                self._epoch_beat += (now - self._epoch) / self.beat_duration
+            self._epoch = now
+        self.running = running
+
+    def beats_now_running(self) -> float:
+        return self.beats_now()
 
     def set_meter(self, beats_per_bar: int) -> None:
         self.beats_per_bar = min(12, max(1, int(beats_per_bar)))
@@ -118,6 +135,7 @@ class Transport:
             "beats_per_bar": self.beats_per_bar,
             "click": self.click_enabled,
             "accent": self.click_accent,
+            "running": self.running,
             "divisions": list(DIVISIONS),
         }
 
@@ -132,8 +150,14 @@ class Transport:
     def _run(self) -> None:
         nb = math.floor(self.beats_now()) + 1
         while not self._quit.is_set():
+            if not self.running:
+                time.sleep(0.1)
+                nb = math.floor(self.beats_now()) + 1
+                continue
             if not self._sleep_until(self.time_of_beat(nb)):
                 return
+            if not self.running:
+                continue
             callback = self.on_beat
             if callback is not None:
                 try:

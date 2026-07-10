@@ -1,11 +1,12 @@
-"""Tape-deck looper: bar-synced record / loop / overdub of the master output.
+"""MIDI looper: bar-synced record / replay of note events.
 
-Records what you hear (the summed bus after all chains and drums, before the
-master volume node reads it) into a server-side buffer sized to a whole
-number of bars at the tempo when recording starts. Recording arms and starts
-at the NEXT DOWNBEAT; after N bars it flips seamlessly into looped playback.
-Overdub keeps the record head running with feedback < 1 so layers pile up
-tape-style. All timing rides the shared transport.
+Records what you PLAY (voiced note on/offs with their beat positions) for N
+bars from the next downbeat, then replays the phrase in a loop through the
+current patch — change modules under a running loop and the loop wears the
+new sound. Overdub adds passes on top. All timing rides the transport.
+
+(v1 was an audio looper; scsynth buffer reads returned allocation garbage
+through supriya on this setup — see docs/HISTORY.md. Notes are deterministic.)
 """
 
 from __future__ import annotations
@@ -13,24 +14,7 @@ from __future__ import annotations
 import threading
 import time
 
-from supriya import AddAction, synthdef
-from supriya.ugens import In, Lag, Out, PlayBuf, RecordBuf
-
 STATES = ("empty", "armed", "recording", "playing", "overdubbing", "stopped")
-
-
-@synthdef()
-def _loop_rec(buf=0, run=1, pre=0.0, out=0):
-    sig = In.ar(bus=0, channel_count=2)
-    RecordBuf.ar(source=sig, buffer_id=buf, loop=1, run=run,
-                 preexisting_level=pre, record_level=1.0)
-    Out.ar(bus=out, source=[0.0, 0.0])  # silent; exists for its side effect
-
-
-@synthdef()
-def _loop_play(buf=0, level=0.9, out=0):
-    sig = PlayBuf.ar(channel_count=2, buffer_id=buf, loop=1)
-    Out.ar(bus=out, source=sig * Lag.kr(source=level, lag_time=0.05))
 
 
 class Looper:
@@ -38,14 +22,25 @@ class Looper:
         self.app = app
         self.state = "empty"
         self.bars = 2
-        self.level = 0.9
+        self.level = 0.9          # kept for GUI compat; scales velocity
         self.overdub = False
-        self._buffer = None
-        self._rec_node = None
-        self._play_node = None
-        self._registered = False
+        self._events: list[tuple[float, int, bool]] = []  # (beat offset, note, on)
+        self._loop_beats = 8.0
+        self._record_start_beat = 0.0
         self._lock = threading.RLock()
+        self._quit = threading.Event()
+        self._thread: threading.Thread | None = None
         self._timer: threading.Timer | None = None
+        self._sounding: set[int] = set()
+
+    # -- note tap (called from app on voiced events) ---------------------------
+
+    def observe(self, note: int, on: bool) -> None:
+        if self.state not in ("recording", "overdubbing"):
+            return
+        beat = self.app.transport.beats_now() - self._record_start_beat
+        with self._lock:
+            self._events.append((beat % self._loop_beats, int(note), bool(on)))
 
     # -- public API -------------------------------------------------------------
 
@@ -55,13 +50,14 @@ class Looper:
                 self.bars = min(8, max(1, int(bars)))
             if level is not None:
                 self.level = min(1.0, max(0.0, float(level)))
-                if self._play_node is not None:
-                    try:
-                        self._play_node.set(level=self.level)
-                    except Exception:  # noqa: BLE001
-                        pass
             if overdub is not None:
-                self._set_overdub(bool(overdub))
+                self.overdub = bool(overdub)
+                if self.state == "playing" and self.overdub:
+                    self.state = "overdubbing"
+                    self._emit()
+                elif self.state == "overdubbing" and not self.overdub:
+                    self.state = "playing"
+                    self._emit()
             if action == "record":
                 self._arm()
             elif action == "stop":
@@ -73,64 +69,45 @@ class Looper:
 
     def settings(self) -> dict:
         return {"state": self.state, "bars": self.bars, "level": self.level,
-                "overdub": self.overdub}
+                "overdub": self.overdub, "midi": True,
+                "events": len(self._events)}
 
     def shutdown(self) -> None:
-        with self._lock:
-            if self._timer:
-                self._timer.cancel()
-            self._teardown_nodes()
-            if self._buffer is not None:
-                try:
-                    self._buffer.free()
-                except Exception:  # noqa: BLE001
-                    pass
-                self._buffer = None
-            self.state = "empty"
+        self._quit.set()
+        if self._timer:
+            self._timer.cancel()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=1)
+        self._release_all()
+
+    def reset(self) -> None:
+        pass  # no server resources
 
     # -- internals -----------------------------------------------------------------
 
-    def _ensure_registered(self) -> None:
-        if not self._registered and self.app.engine and self.app.engine.server:
-            self.app.engine.server.add_synthdefs(_loop_rec, _loop_play)
-            self.app.engine.server.sync()
-            self._registered = True
+    def _sink(self):
+        return self.app.arp or self.app.voice
 
-    def reset(self) -> None:
-        self._registered = False
-
-    def _schedule(self, delay: float, fn) -> None:
-        if self._timer:
-            self._timer.cancel()
-        self._timer = threading.Timer(max(0.0, delay), fn)
-        self._timer.daemon = True
-        self._timer.start()
+    def _release_all(self) -> None:
+        sink = self._sink()
+        if sink is None:
+            self._sounding.clear()
+            return
+        for n in list(self._sounding):
+            try:
+                sink.note_off(n)
+            except Exception:  # noqa: BLE001
+                pass
+        self._sounding.clear()
 
     def _arm(self) -> None:
         if self.state in ("armed", "recording"):
             return
-        self._ensure_registered()
         transport = self.app.transport
-        server = self.app.engine.server
-        self._teardown_nodes()
-        # size the buffer to N bars at the current tempo
-        try:
-            sr = float(server.status.actual_sample_rate)
-        except Exception:  # noqa: BLE001
-            sr = float(self.app.engine.options.sample_rate or 44100)
-        frames = int(
-            self.bars * transport.beats_per_bar * transport.beat_duration * sr
-        )
-        if self._buffer is not None:
-            try:
-                self._buffer.free()
-            except Exception:  # noqa: BLE001
-                pass
-        self._buffer = server.add_buffer(channel_count=2, frame_count=max(frames, 1024))
-        server.sync()
-        # start recording at the next downbeat
-        bar_beats = float(transport.beats_per_bar)
-        _, t_start = transport.next_grid(bar_beats)
+        self._loop_beats = float(self.bars * transport.beats_per_bar)
+        if not self.overdub:
+            self._events = []
+        start_beat, t_start = transport.next_grid(float(transport.beats_per_bar))
         self.state = "armed"
         self._emit()
 
@@ -138,93 +115,105 @@ class Looper:
             with self._lock:
                 if self.state != "armed":
                     return
-                try:
-                    self._rec_node = self.app.engine.root_group.add_synth(
-                        _loop_rec, add_action=AddAction.ADD_TO_TAIL,
-                        buf=int(self._buffer), run=1, pre=0.0,
-                    )
-                    self.state = "recording"
-                    self._emit()
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[looper] record failed: {exc}")
-                    self.state = "empty"
-                    return
-                loop_dur = self.bars * bar_beats * self.app.transport.beat_duration
-                self._schedule(loop_dur, self._finish_recording)
+                self._record_start_beat = start_beat
+                self.state = "recording"
+                self._emit()
+            if self._timer:
+                self._timer.cancel()
+            self._timer = threading.Timer(
+                self._loop_beats * transport.beat_duration, self._finish_recording)
+            self._timer.daemon = True
+            self._timer.start()
 
-        self._schedule(t_start - time.monotonic(), start_recording)
+        if self._timer:
+            self._timer.cancel()
+        self._timer = threading.Timer(max(0.0, t_start - time.monotonic()),
+                                      start_recording)
+        self._timer.daemon = True
+        self._timer.start()
 
     def _finish_recording(self) -> None:
         with self._lock:
             if self.state != "recording":
                 return
-            # flip: recorder becomes overdub-gated, player starts at loop top
-            try:
-                if self.overdub:
-                    self._rec_node.set(pre=0.75)  # tape-style layering
-                else:
-                    self._rec_node.set(run=0)
-                self._play_node = self.app.engine.root_group.add_synth(
-                    _loop_play, add_action=AddAction.ADD_TO_TAIL,
-                    buf=int(self._buffer), level=self.level,
-                )
-                self.state = "overdubbing" if self.overdub else "playing"
-            except Exception as exc:  # noqa: BLE001
-                print(f"[looper] playback failed: {exc}")
-                self.state = "empty"
+            self.state = "overdubbing" if self.overdub else "playing"
             self._emit()
-
-    def _set_overdub(self, on: bool) -> None:
-        self.overdub = on
-        if self._rec_node is not None and self.state in ("playing", "overdubbing"):
-            try:
-                self._rec_node.set(run=1 if on else 0, pre=0.75 if on else 1.0)
-                self.state = "overdubbing" if on else "playing"
-                self._emit()
-            except Exception:  # noqa: BLE001
-                pass
+        self._ensure_thread()
 
     def _play(self) -> None:
-        if self.state != "stopped" or self._buffer is None:
-            return
-        self._ensure_registered()
-        try:
-            self._play_node = self.app.engine.root_group.add_synth(
-                _loop_play, add_action=AddAction.ADD_TO_TAIL,
-                buf=int(self._buffer), level=self.level,
-            )
+        if self.state == "stopped" and self._events:
             self.state = "playing"
             self._emit()
-        except Exception as exc:  # noqa: BLE001
-            print(f"[looper] play failed: {exc}")
+            self._ensure_thread()
 
     def _stop(self) -> None:
         if self._timer:
             self._timer.cancel()
-        self._teardown_nodes()
-        self.state = "stopped" if self._buffer is not None else "empty"
+        self.state = "stopped" if self._events else "empty"
+        self._release_all()
         self._emit()
 
     def _clear(self) -> None:
         self._stop()
-        if self._buffer is not None:
-            try:
-                self._buffer.free()
-            except Exception:  # noqa: BLE001
-                pass
-            self._buffer = None
+        self._events = []
         self.state = "empty"
         self._emit()
 
-    def _teardown_nodes(self) -> None:
-        for attr in ("_rec_node", "_play_node"):
-            node = getattr(self, attr)
-            if node is not None:
+    # -- the replay thread ------------------------------------------------------
+
+    def _ensure_thread(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._quit.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _sleep_until(self, t: float) -> bool:
+        while not self._quit.is_set():
+            dt = t - time.monotonic()
+            if dt <= 0:
+                return True
+            time.sleep(min(dt, 0.05))
+        return False
+
+    def _run(self) -> None:
+        transport = self.app.transport
+        while not self._quit.is_set() and self.state in ("playing", "overdubbing"):
+            with self._lock:
+                events = sorted(self._events)
+            if not events:
+                time.sleep(0.1)
+                continue
+            now_beat = transport.beats_now()
+            phase = (now_beat - self._record_start_beat) % self._loop_beats
+            todo = [e for e in events if e[0] > phase + 1e-3]
+            if not todo:  # wait for the loop top
+                next_top = now_beat + (self._loop_beats - phase)
+                if not self._sleep_until(transport.time_of_beat(next_top)):
+                    break
+                continue
+            cycle = (now_beat - self._record_start_beat) // self._loop_beats
+            for beat_off, note, on in todo:
+                if self._quit.is_set() or self.state not in ("playing", "overdubbing"):
+                    break
+                target = self._record_start_beat + cycle * self._loop_beats + beat_off
+                if not self._sleep_until(transport.time_of_beat(target)):
+                    break
+                if not getattr(transport, "running", True):
+                    continue  # transport stopped: skip firing
+                sink = self._sink()
+                if sink is None:
+                    continue
                 try:
-                    node.free()
+                    if on:
+                        sink.note_on(note, int(100 * self.level))
+                        self._sounding.add(note)
+                    else:
+                        sink.note_off(note)
+                        self._sounding.discard(note)
                 except Exception:  # noqa: BLE001
                     pass
-                setattr(self, attr, None)
+        self._release_all()
 
     def _emit(self) -> None:
         emit = getattr(self.app, "_emit_midi_event", None)

@@ -75,13 +75,16 @@ class DrumMachine:
         self.enabled = False
         self.patterns = {lane: list(steps) for lane, steps in DEFAULT_PATTERNS.items()}
         self.levels = {"kick": 0.8, "snare": 0.7, "hat": 0.6, "clap": 0.7}
+        self.to_chain = False  # route hits into the FX chain head bus
         self._registered = False
         self._quit = threading.Event()
         self._thread: threading.Thread | None = None
 
     # -- config / persistence ----------------------------------------------------
 
-    def configure(self, enabled=None, patterns=None, levels=None) -> None:
+    def configure(self, enabled=None, patterns=None, levels=None, to_chain=None) -> None:
+        if to_chain is not None:
+            self.to_chain = bool(to_chain)
         if patterns is not None:
             for lane in LANES:
                 if lane in patterns:
@@ -101,11 +104,12 @@ class DrumMachine:
                 self.enabled = False
 
     def snapshot(self) -> dict:
-        return {"enabled": self.enabled, "patterns": self.patterns, "levels": self.levels}
+        return {"enabled": self.enabled, "patterns": self.patterns,
+                "levels": self.levels, "to_chain": self.to_chain}
 
     def restore(self, data: dict) -> None:
         self.configure(enabled=data.get("enabled"), patterns=data.get("patterns"),
-                       levels=data.get("levels"))
+                       levels=data.get("levels"), to_chain=data.get("to_chain"))
 
     def settings(self) -> dict:
         return {**self.snapshot(), "lanes": list(LANES), "steps": STEPS}
@@ -136,8 +140,14 @@ class DrumMachine:
     def _fire(self, lane: str) -> None:
         try:
             self._ensure_registered()
+            out = 0
+            action = AddAction.ADD_TO_TAIL
+            if self.to_chain and self.app.rack and self.app.rack.instances:
+                # write into the chain head bus (like the drone): FX apply
+                out = self.app.rack.instances[0].settings.get("out", 0)
+                action = AddAction.ADD_TO_HEAD
             self.app.engine.root_group.add_synth(
-                _DEFS[lane], add_action=AddAction.ADD_TO_TAIL,
+                _DEFS[lane], add_action=action, out=out,
                 amp=self.levels[lane] * {"kick": 0.55, "snare": 0.42,
                                          "hat": 0.3, "clap": 0.4}[lane],
             )
@@ -159,6 +169,10 @@ class DrumMachine:
         while not self._quit.is_set() and self.enabled:
             if not self._sleep_until(t):
                 return
+            if not getattr(transport, "running", True):
+                time.sleep(0.1)
+                grid_beat, t = transport.next_grid(step_beats)
+                continue
             step = int(round(grid_beat / step_beats)) % STEPS
             for lane in LANES:
                 if self.patterns[lane][step]:

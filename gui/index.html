@@ -117,6 +117,7 @@
     </div>
     <div class="small" id="io-note"></div>
     <div class="row" style="margin-top: 8px; border-top:1px solid var(--hairline); padding-top:8px;">
+      <button id="play-btn" title="transport play/stop">▶</button>
       <div><label class="small">TEMPO <span id="bpm-v"></span></label><br>
         <input type="range" id="bpm" min="40" max="240" step="1" style="width:120px"></div>
       <div><label class="small">METER</label><br>
@@ -137,7 +138,7 @@
     </div>
     <!-- LOOPER -->
     <div class="row" style="margin-top: 8px; border-top:1px solid var(--hairline); padding-top:8px;">
-      <b class="small">LOOPER</b>
+      <b class="small">LOOPER (midi)</b>
       <span class="small">state: <b id="loop-state">empty</b></span>
       <div><label class="small">BARS</label>
         <select id="loop-bars"><option>1</option><option selected>2</option>
@@ -224,6 +225,7 @@
   <div class="card">
     <div class="row">
       <label class="small"><input type="checkbox" id="drums-on"> <b>DRUMS</b></label>
+      <label class="small"><input type="checkbox" id="drums-fx"> → FX chain</label>
       <span class="small">16 steps · 1/16 grid · rides the transport</span>
     </div>
     <div id="drumgrids"></div>
@@ -490,6 +492,7 @@ function renderTransport() {
   document.getElementById("meter").value = String(t.beats_per_bar);
   document.getElementById("click-on").checked = !!t.click;
   document.getElementById("accent-on").checked = t.accent !== false;
+  document.getElementById("play-btn").textContent = t.running === false ? "▶" : "⏹";
 }
 function renderLooper() {
   const l = state.looper;
@@ -534,6 +537,7 @@ function renderDrums() {
   const d = state.drums;
   if (!d) return;
   document.getElementById("drums-on").checked = d.enabled;
+  document.getElementById("drums-fx").checked = !!d.to_chain;
   const holder = document.getElementById("drumgrids");
   holder.innerHTML = "";
   for (const lane of d.lanes) {
@@ -757,6 +761,11 @@ for (const id of ["drone-on", "drone-every"])
   el.addEventListener("pointerdown", () => dragging = "drone-oct");
   el.addEventListener("pointerup", (e) => { dragging = null; e.target.blur(); });
 }
+document.getElementById("play-btn").addEventListener("click", (e) => {
+  const running = state?.transport?.running !== false;
+  send({type: "set_transport", playing: !running});
+  e.target.blur();
+});
 function sendTransport() {
   throttled("transport", () => send({
     type: "set_transport",
@@ -801,6 +810,10 @@ document.getElementById("add-btn").addEventListener("click", (e) => {
 });
 document.getElementById("drums-on").addEventListener("change", (e) => {
   send({type: "set_drums", enabled: e.target.checked});
+  e.target.blur();
+});
+document.getElementById("drums-fx").addEventListener("change", (e) => {
+  send({type: "set_drums", to_chain: e.target.checked});
   e.target.blur();
 });
 

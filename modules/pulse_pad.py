@@ -11,7 +11,7 @@ from synthbase import module, param
 
 
 @module(
-    name="Pulse Pad",
+    name="Signal Gen",
     kind="source",
     params={
         "freq": param(20, 2000, 220, curve="exp"),

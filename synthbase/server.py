@@ -107,7 +107,7 @@ class GuiServer:
             await self._broadcast_state(exclude=sender)
         elif t == "set_drums":
             self.synth.set_drums(enabled=m.get("enabled"), patterns=m.get("patterns"),
-                                 levels=m.get("levels"))
+                                 levels=m.get("levels"), to_chain=m.get("to_chain"))
             await self._broadcast_state()
         elif t == "set_looper":
             self.synth.set_looper(action=m.get("action"), bars=m.get("bars"),
@@ -142,6 +142,7 @@ class GuiServer:
             self.synth.set_transport(
                 bpm=m.get("bpm"), beats_per_bar=m.get("beats_per_bar"),
                 click=m.get("click"), accent=m.get("accent"),
+                playing=m.get("playing"),
             )
             await self._broadcast_state(exclude=sender)
         elif t == "set_arp":

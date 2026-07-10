@@ -68,7 +68,7 @@ class Arpeggiator:
             self._sustained.discard(note)
             if note not in self._pool:
                 self._pool.append(note)
-        if self.enabled:
+        if self.enabled and getattr(self.transport, "running", True):
             self._ensure_thread()
         else:
             self.voice.note_on(note, velocity)
@@ -209,6 +209,10 @@ class Arpeggiator:
         division = self.division
         grid_beat, t = self.transport.next_grid(DIVISIONS[division])
         while not self._quit.is_set() and self.enabled:
+            if not getattr(self.transport, "running", True):
+                self._safe_all_off()
+                self._last_pitch = None
+                return  # park; live notes pass through while stopped
             if not self._sleep_until(t):
                 break
             notes = self._snapshot_pool()

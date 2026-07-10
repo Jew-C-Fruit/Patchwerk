@@ -158,6 +158,10 @@ class SynthApp:
         self.lfos.on_node_replaced(key)
 
     def _emit_voiced(self, note: int, on: bool) -> None:
+        try:
+            self.looper.observe(note, on)
+        except Exception:  # noqa: BLE001
+            pass
         self._emit_midi_event({"kind": "voiced", "note": int(note), "on": bool(on)})
 
     def _restart_midi(self) -> None:
@@ -311,9 +315,26 @@ class SynthApp:
         with self._lock:
             self.drone.configure(**settings)
 
-    def set_transport(self, bpm=None, beats_per_bar=None, click=None, accent=None) -> None:
+    def set_transport(self, bpm=None, beats_per_bar=None, click=None, accent=None,
+                      playing=None) -> None:
         if accent is not None:
             self.transport.click_accent = bool(accent)
+        if playing is not None:
+            self.transport.set_running(bool(playing))
+            if not playing:
+                if self.arp:
+                    self.arp._safe_all_off() if hasattr(self.arp, "_safe_all_off") else None
+                try:
+                    inst = self.rack.find("drone")
+                    inst.node.pause()
+                except Exception:  # noqa: BLE001
+                    pass
+            else:
+                try:
+                    inst = self.rack.find("drone")
+                    inst.node.unpause()
+                except Exception:  # noqa: BLE001
+                    pass
         if bpm is not None:
             self.transport.set_bpm(bpm)
         if beats_per_bar is not None:
