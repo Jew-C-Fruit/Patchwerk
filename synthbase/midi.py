@@ -66,38 +66,48 @@ class MonoVoice:
     def _freq(self, note: int) -> float:
         return midi_to_freq(note + self.transpose) * 2 ** (self.bend / 12)
 
+    def _emit_voiced(self, note: int, on: bool) -> None:
+        if self.on_voiced:
+            try:
+                self.on_voiced(note, on)
+            except Exception:  # noqa: BLE001
+                pass
+
     def note_on(self, note: int, velocity: int) -> None:
         if note in self._held:
             self._held.remove(note)
         self._held.append(note)
+        prev = self._sounding
         self._sounding = note
         self.rack.set_params(self.target_key, freq=self._freq(note), gate=1)
-        if self.on_voiced:
-            try:
-                self.on_voiced(note, True)
-            except Exception:  # noqa: BLE001
-                pass
+        # the mono voice sounds ONE note: close the old segment, open the new
+        if prev is not None and prev != note:
+            self._emit_voiced(prev, False)
+        if prev != note:
+            self._emit_voiced(note, True)
 
     def note_off(self, note: int) -> None:
         if note in self._held:
             self._held.remove(note)
+        if note != self._sounding:
+            return  # released a background-held key; sound unchanged
         if self._held:
+            prev = self._sounding
             self._sounding = self._held[-1]
             self.rack.set_params(self.target_key, freq=self._freq(self._sounding))
+            self._emit_voiced(prev, False)
+            self._emit_voiced(self._sounding, True)
         elif self.sustain:
             pass  # pedal holds the last note; released on set_sustain(False)
         else:
             self._sounding = None
             self.rack.set_params(self.target_key, gate=0)
-            if self.on_voiced:
-                try:
-                    self.on_voiced(note, False)
-                except Exception:  # noqa: BLE001
-                    pass
+            self._emit_voiced(note, False)
 
     def set_sustain(self, on: bool) -> None:
         self.sustain = on
         if not on and not self._held and self._sounding is not None:
+            self._emit_voiced(self._sounding, False)
             self._sounding = None
             self.rack.set_params(self.target_key, gate=0)
 
@@ -107,6 +117,8 @@ class MonoVoice:
             self.rack.set_params(self.target_key, freq=self._freq(self._sounding))
 
     def all_off(self) -> None:
+        if self._sounding is not None:
+            self._emit_voiced(self._sounding, False)
         self._held.clear()
         self._sounding = None
         self.rack.set_params(self.target_key, gate=0)

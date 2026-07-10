@@ -60,10 +60,16 @@ function cable(x1, y1, x2, y2, color, dashed) {
   });
   svg.appendChild(p);
 }
-function box(x, y, w, h, title, sub, dim) {
+const FAMILY_COLORS = {
+  voice: "#2a78d6", input: "#1baf7a", filter: "#eda100", time: "#199e70",
+  dirt: "#eb6834", dyn: "#e87ba4", vox: "#e34948", service: "#4a3aa7",
+};
+function box(x, y, w, h, title, sub, dim, family) {
   const g = el("g", {});
   g.appendChild(el("rect", {x, y, width: w, height: h, rx: 8,
     fill: css("--plane"), stroke: css("--border"), opacity: dim ? 0.5 : 1}));
+  if (family) g.appendChild(el("rect", {x, y: y, width: 4, height: h, rx: 2,
+    fill: FAMILY_COLORS[family] || css("--hairline")}));
   g.appendChild(el("text", {x: x + 10, y: y + 20, fill: css("--ink-1"),
     "font-size": 13, "font-weight": 600, opacity: dim ? 0.6 : 1}, title));
   if (sub) g.appendChild(el("text", {x: x + 10, y: y + 36, fill: css("--ink-2"),
@@ -93,7 +99,7 @@ function draw(state) {
   const nodes = {};
   chain.forEach((c, i) => {
     const b = box(x0 + i * dx, 200, Math.min(150, dx - 14), 48, c.name,
-                  c.kind + (c.enabled ? "" : " · bypassed"), !c.enabled);
+                  c.family + (c.enabled ? "" : " · bypassed"), !c.enabled, c.family);
     nodes[c.key] = b;
     if (prev) cable(...prev.right, ...b.left, audio);
     prev = b;

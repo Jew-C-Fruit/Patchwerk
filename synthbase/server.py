@@ -97,6 +97,11 @@ class GuiServer:
         elif t == "set_enabled":
             self.synth.set_enabled(m["key"], m["enabled"])
             await self._broadcast_state()
+        elif t == "edit_chain":
+            await loop.run_in_executor(
+                None, lambda: self.synth.edit_chain(
+                    m["action"], m["key"], m.get("index")))
+            await self._broadcast_state()
         elif t == "set_transpose":
             self.synth.set_transpose(m.get("semitones", 0))
             await self._broadcast_state(exclude=sender)

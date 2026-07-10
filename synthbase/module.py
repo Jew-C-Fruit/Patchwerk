@@ -52,6 +52,23 @@ def param(minimum: float, maximum: float, default: float, curve: str = "lin",
     return Param(minimum, maximum, default, curve, tuple(options))
 
 
+FAMILIES = {
+    # voices
+    "wobble_saw": "voice", "pulse_pad": "voice", "fm_bell": "voice",
+    "pluck": "voice", "wind": "voice", "audio_in": "input", "drone": "service",
+    # filters / eq-ish
+    "lowpass": "filter", "telephone": "filter",
+    # time & space
+    "echo": "time", "reverb": "time", "chorus": "time", "flanger": "time",
+    "phaser": "time", "autopan": "time",
+    # dirt & dynamics
+    "drive": "dirt", "bitcrush": "dirt", "wavefolder": "dirt",
+    "compressor": "dyn",
+    # pitch / vox
+    "pitchshift": "vox", "ringmod": "vox",
+}
+
+
 @dataclass
 class Module:
     """A DSP recipe plus metadata. Produced by the @module decorator."""
@@ -61,6 +78,10 @@ class Module:
     synthdef: SynthDef
     params: dict[str, Param] = field(default_factory=dict)
     source_file: str = ""
+
+    @property
+    def family(self) -> str:
+        return FAMILIES.get(self.key, self.kind)
 
     @property
     def key(self) -> str:

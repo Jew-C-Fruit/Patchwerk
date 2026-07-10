@@ -13,7 +13,7 @@ These are infrastructure, not modules — they never appear in a patch.
 from __future__ import annotations
 
 from supriya import AddAction, synthdef
-from supriya.ugens import Amplitude, In, Lag, Out, ReplaceOut
+from supriya.ugens import Amplitude, In, Lag, Limiter, Out, ReplaceOut
 
 from .engine import Engine
 
@@ -22,6 +22,8 @@ from .engine import Engine
 def _master(vol=0.8, meter_bus=0):
     sig = In.ar(bus=0, channel_count=2)
     sig = sig * Lag.kr(source=vol, lag_time=0.05)
+    # Seatbelt: nothing (feedback, looper stacking, LFO extremes) may scream.
+    sig = Limiter.ar(source=sig, level=0.95, duration=0.005)
     ReplaceOut.ar(bus=0, source=sig)
     Out.kr(bus=meter_bus, source=Amplitude.kr(source=sig, release_time=0.2))
 

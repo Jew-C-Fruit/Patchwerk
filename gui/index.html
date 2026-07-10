@@ -38,7 +38,8 @@
   .meterbar > div { height: 100%; width: 0%; background: var(--meter); border-radius: 5px;
     transition: width 50ms linear; }
   .meterbar.clip > div { background: var(--danger); }
-  .module { margin-top: 8px; border-top: 1px dashed var(--hairline); padding-top: 6px; }
+  .module { margin-top: 8px; border-top: 1px dashed var(--hairline); padding-top: 6px;
+    border-left: 4px solid var(--hairline); padding-left: 8px; border-radius: 3px; }
   .module h3 { margin: 0; font-size: 14px; cursor: pointer; user-select: none; }
   .module h3 .caret { color: var(--ink-3); font-size: 11px; margin-right: 4px; }
   .module .kind { color: var(--ink-3); font-weight: 400; font-size: 11px; margin-left: 6px; }
@@ -203,6 +204,12 @@
         <input type="range" id="drone-oct" min="0" max="4" step="1" style="width:64px"></div>
       <span class="small">root: <b id="drone-root">—</b></span>
     </div>
+    <div class="row" style="margin-top:6px;">
+      <label class="small">ADD MODULE</label>
+      <select id="add-sel" style="min-width:180px"></select>
+      <button id="add-btn">+ add to chain</button>
+      <span class="small">new modules snap to the end; ↑↓ re-snap, ✕ removes</span>
+    </div>
     <div id="modules"></div>
     <div class="err" id="mod-errors"></div>
   </div>
@@ -238,6 +245,11 @@
 "use strict";
 let ws = null, state = null, dragging = null;
 const collapsed = new Set();
+const FAMILY_COLORS = {
+  voice: "#2a78d6", input: "#1baf7a", filter: "#eda100", time: "#199e70",
+  dirt: "#eb6834", dyn: "#e87ba4", vox: "#e34948", service: "#4a3aa7",
+  source: "#2a78d6", effect: "#199e70",
+};
 
 function connect() {
   ws = new WebSocket(`ws://${location.host}/ws`);
@@ -313,6 +325,10 @@ function renderState() {
   document.getElementById("chain-desc").textContent =
     state.chain.filter(c => !c.service).map(c => c.name).join(" → ") + " → out";
 
+  const inChain = new Set(state.chain.map(c => c.key));
+  document.getElementById("add-sel").innerHTML = (state.available || [])
+    .filter(a => !inChain.has(a.key))
+    .map(a => `<option value="${a.key}">${a.name} (${a.family})</option>`).join("");
   renderModules();
   renderArp(); renderDrone(); renderTransport(); renderLooper(); renderDrums(); renderLfos();
   document.getElementById("voice-target").textContent = state.voice_target || "—";
@@ -329,11 +345,16 @@ function renderModules() {
     const div = document.createElement("div");
     div.className = "module" + (collapsed.has(mod.key) ? " collapsed" : "");
     div.style.opacity = mod.enabled ? "1" : "0.45";
+    div.style.borderLeftColor = FAMILY_COLORS[mod.family] || "var(--hairline)";
     const h = document.createElement("h3");
     h.innerHTML = `<span class="caret">${collapsed.has(mod.key) ? "▸" : "▾"}</span>
       <label style="cursor:pointer" onclick="event.stopPropagation()">
         <input type="checkbox" class="mod-on" ${mod.enabled ? "checked" : ""}></label>
-      ${mod.name}<span class="kind">${mod.kind} · ${mod.key}${mod.enabled ? "" : " · bypassed"}</span>`;
+      ${mod.name}<span class="kind">${mod.family} · ${mod.key}${mod.enabled ? "" : " · bypassed"}</span>
+      ${mod.service ? "" : `<span class="kind" style="float:right" onclick="event.stopPropagation()">
+        <button class="reset" data-act="up" title="earlier in chain">↑</button>
+        <button class="reset" data-act="down" title="later in chain">↓</button>
+        <button class="reset" data-act="rm" title="remove from chain">✕</button></span>`}`;
     h.addEventListener("click", () => {
       if (collapsed.has(mod.key)) collapsed.delete(mod.key); else collapsed.add(mod.key);
       div.classList.toggle("collapsed");
@@ -343,6 +364,15 @@ function renderModules() {
       send({type: "set_enabled", key: mod.key, enabled: e.target.checked});
       e.target.blur();
     });
+    for (const b of h.querySelectorAll("[data-act]")) {
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const act = b.dataset.act;
+        if (act === "rm") send({type: "edit_chain", action: "remove", key: mod.key});
+        else send({type: "edit_chain", action: "move", key: mod.key,
+                   index: act === "up" ? -1 : 1});
+      });
+    }
     div.appendChild(h);
     const pwrap = document.createElement("div");
     pwrap.className = "params";
@@ -639,6 +669,7 @@ function drawViz() {
   // notes
   ctx.fillStyle = getComputedStyle(document.body).getPropertyValue("--accent");
   const lo = 36, hi = 96;
+  while (rollNotes.length > 300) rollNotes.shift();
   while (rollNotes.length && rollNotes[0].t1 !== null &&
          (now - rollNotes[0].t1) * pxPerMs > nc.width) rollNotes.shift();
   for (const ev of rollNotes) {
@@ -763,6 +794,11 @@ document.getElementById("loop-level").addEventListener("pointerup", () => draggi
 document.getElementById("loop-bars").addEventListener("change", (e) => { sendLooper(null); e.target.blur(); });
 
 // drums enable
+document.getElementById("add-btn").addEventListener("click", (e) => {
+  const key = document.getElementById("add-sel").value;
+  if (key) send({type: "edit_chain", action: "add", key});
+  e.target.blur();
+});
 document.getElementById("drums-on").addEventListener("change", (e) => {
   send({type: "set_drums", enabled: e.target.checked});
   e.target.blur();

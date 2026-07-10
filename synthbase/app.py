@@ -114,7 +114,9 @@ class SynthApp:
     def _build_patch(self, patch_name: str) -> None:
         """(Re)build rack + master + MIDI for a patch. Engine must be booted."""
         path = PATCHES_DIR / f"{patch_name}.py"
-        patch = _read_patch(path)
+        self._build_from(_read_patch(path), patch_name)
+
+    def _build_from(self, patch: dict, patch_name: str) -> None:
 
         if self.router:
             self.router.stop()
@@ -184,6 +186,51 @@ class SynthApp:
                 callback(event)
             except Exception:  # noqa: BLE001
                 pass
+
+    def edit_chain(self, action: str, key: str, index: int | None = None) -> None:
+        """Live chain surgery: add/remove/move a stage. Auto-snaps wiring by
+        rebuilding the chain in the new order with all settings, enabled
+        states, and LFO assignments preserved."""
+        with self._lock:
+            stages = [
+                (i.key, dict(i.settings), i.enabled)
+                for i in self.rack.instances if not i.service
+            ]
+            keys = [k for k, _, _ in stages]
+            if action == "add":
+                if key not in self.registry:
+                    raise ValueError(f"unknown module {key!r}")
+                if key in keys:
+                    raise ValueError(f"{key} is already in the chain")
+                stages.append((key, {}, True))
+            elif action == "remove":
+                stages = [s for s in stages if s[0] != key]
+            elif action == "move":
+                i = keys.index(key)
+                j = max(0, min(len(stages) - 1, i + (index or 0)))
+                stages.insert(j, stages.pop(i))
+            # keep a source at the head (effects can't start a chain)
+            stages.sort(key=lambda s: 0 if (self.registry[s[0]].kind == "source") else 1)
+            if not stages:
+                raise ValueError("chain cannot be empty")
+            if self.registry[stages[0][0]].kind != "source":
+                raise ValueError("chain needs at least one source")
+            lfo_snap = self.lfos.snapshot()
+            new_patch = dict(self.patch or {})
+            new_patch["chain"] = [(k, {}) for k, _, _ in stages]
+            self._build_from(new_patch, self.patch_name)
+            for k, settings, enabled in stages:
+                try:
+                    clean = {n: v for n, v in settings.items()
+                             if n in self.registry[k].params}
+                    if clean:
+                        self.rack.set_params(k, **clean)
+                    if not enabled:
+                        self.rack.set_enabled(k, False)
+                except KeyError:
+                    pass
+            self.lfos.restore({aid: cfg for aid, cfg in lfo_snap.items()
+                               if aid.split(".")[0] in [k for k, _, _ in stages]})
 
     def _guess_voice_target(self) -> str | None:
         """First source in the chain that looks note-playable (freq + gate)."""
@@ -388,6 +435,7 @@ class SynthApp:
                         "key": inst.key,
                         "name": inst.module.name,
                         "kind": inst.module.kind,
+                        "family": inst.module.family,
                         "enabled": inst.enabled,
                         "service": inst.service,
                         "params": {
@@ -427,5 +475,11 @@ class SynthApp:
                 "looper": self.looper.settings(),
                 "lfos": self.lfos.state(),
                 "presets": presets_mod.list_presets(),
+                "available": sorted(
+                    ({"key": m.key, "name": m.name, "kind": m.kind,
+                      "family": m.family}
+                     for m in self.registry.values() if m.key != "drone"),
+                    key=lambda d: (d["kind"] != "source", d["family"], d["key"]),
+                ),
                 "module_errors": {k: repr(v) for k, v in self.module_errors.items()},
             }
