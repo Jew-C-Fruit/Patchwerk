@@ -11,7 +11,7 @@ PATCH = {
         ("pitchshift", {"semitones": 0, "mix": 1.0}),
         ("ringmod", {"mix": 0.8}),
         ("telephone", {}),
-        ("echo", {"time": 0.3, "feedback": 0.3, "mix": 0.2}),
+        ("echo", {"time": 0.22, "feedback": 0.25, "mix": 0.12}),
         ("reverb", {"room": 0.5, "mix": 0.25}),
     ],
     "bindings": {

@@ -161,6 +161,10 @@ class GuiServer:
             self.synth.note_on(m["note"], m.get("velocity", 100))
         elif t == "note_off":
             self.synth.note_off(m["note"])
+        elif t == "sustain":
+            sink = self.synth.arp or self.synth.voice
+            if sink:
+                sink.set_sustain(bool(m.get("on")))
         elif t == "all_notes_off":
             self.synth.all_notes_off()
         elif t == "select_patch":

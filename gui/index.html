@@ -236,7 +236,8 @@
     <div class="row small" style="justify-content: space-between;">
       <span>Keys <kbd>A</kbd>–<kbd>;</kbd> play (piano layout) · octave <kbd>Z</kbd>/<kbd>X</kbd>:
         <b id="oct">C4</b> · target: <b id="voice-target">—</b>
-        · transpose <select id="transpose"></select> st</span>
+        · transpose <select id="transpose"></select> st
+        · <kbd>caps</kbd>=sustain <b id="caps-note" style="color:var(--warn)"></b></span>
       <span>MIDI monitor: <b id="midi-mon">—</b></span>
     </div>
     <div class="piano" id="piano"></div>
@@ -847,7 +848,17 @@ const KEYMAP = {a:0, w:1, s:2, e:3, d:4, f:5, t:6, g:7, y:8, h:9, u:10, j:11,
                 k:12, o:13, l:14, p:15, ";":16};
 let octave = 4;
 const held = new Set();
+let capsSustain = false;
+function syncCaps(e) {
+  const on = !!(e.getModifierState && e.getModifierState("CapsLock"));
+  if (on !== capsSustain && keysEnabled()) {
+    capsSustain = on;
+    send({type: "sustain", on});
+    document.getElementById("caps-note").textContent = on ? "SUSTAIN (caps)" : "";
+  }
+}
 window.addEventListener("keydown", (e) => {
+  syncCaps(e);
   if (e.repeat || !keysEnabled() || keyTarget(e) || e.metaKey || e.ctrlKey || e.altKey) return;
   const k = e.key.toLowerCase();
   if (k === "z") { octave = Math.max(1, octave - 1); noteOffAll(); }
@@ -860,6 +871,7 @@ window.addEventListener("keydown", (e) => {
   document.getElementById("oct").textContent = `C${octave}`;
 });
 window.addEventListener("keyup", (e) => {
+  syncCaps(e);
   const k = e.key.toLowerCase();
   if (k in KEYMAP) {
     const note = 12 * (octave + 1) + KEYMAP[k];
