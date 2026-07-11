@@ -850,10 +850,17 @@ let octave = 4;
 const held = new Set();
 let capsSustain = false;
 function syncCaps(e) {
-  const on = !!(e.getModifierState && e.getModifierState("CapsLock"));
-  if (on !== capsSustain && keysEnabled()) {
+  // macOS quirk: CapsLock sends keydown when engaging and keyup when
+  // disengaging, and getModifierState is stale during that keyup — so for
+  // the CapsLock key itself, trust the event TYPE; otherwise the modifier.
+  let on;
+  if (e.key === "CapsLock") on = e.type === "keydown";
+  else if (e.getModifierState) on = e.getModifierState("CapsLock");
+  else return;
+  if (on !== capsSustain) {
     capsSustain = on;
     send({type: "sustain", on});
+    if (!on) send({type: "all_notes_off"});  // belt and braces: nothing rings on
     document.getElementById("caps-note").textContent = on ? "SUSTAIN (caps)" : "";
   }
 }
