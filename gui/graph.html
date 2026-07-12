@@ -151,15 +151,33 @@ function draw(state) {
       `${Math.round(state.transport?.bpm || 0)} bpm · ${state.transport?.beats_per_bar}/4`);
 }
 
-let ws;
+let ws, lastMsg = 0, reconnectTimer = null;
+function scheduleReconnect(ms) {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(connect, ms);
+}
 function connect() {
+  if (ws && ws.readyState <= 1) return;
   ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => { lastMsg = performance.now(); };
   ws.onmessage = (ev) => {
+    lastMsg = performance.now();
     const m = JSON.parse(ev.data);
     if (m.type === "state") draw(m);
   };
-  ws.onclose = () => setTimeout(connect, 1000);
+  ws.onclose = () => scheduleReconnect(800);
+  ws.onerror = () => { try { ws.close(); } catch (_) {} };
 }
+function ensureLive() {
+  if (!ws || ws.readyState >= 2) { connect(); return; }
+  if (ws.readyState === 1 && performance.now() - lastMsg > 3000) {
+    try { ws.close(); } catch (_) {}
+    scheduleReconnect(150);
+  }
+}
+setInterval(() => { if (!document.hidden) ensureLive(); }, 2000);
+window.addEventListener("focus", ensureLive);
+document.addEventListener("pointerdown", ensureLive, true);
 connect();
 </script>
 </body>

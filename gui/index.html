@@ -91,7 +91,9 @@
 <body>
 <div class="wrap">
   <div class="row" style="justify-content: space-between; margin-top: 2px;">
-    <h1><span id="status"></span>SuperSynth <a href="/graph" class="small" style="margin-left:8px">graph →</a></h1>
+    <h1><span id="status"></span>SuperSynth
+      <button id="reconnect-btn" class="small" title="force reconnect to the engine" style="padding:1px 7px">⟳</button>
+      <a href="/graph" class="small" style="margin-left:8px">graph →</a></h1>
     <span class="small">
       NOTES:
       <label><input type="checkbox" id="keys-on" checked> computer keys</label>
@@ -264,14 +266,25 @@ const FAMILY_COLORS = {
   source: "#2a78d6", effect: "#199e70",
 };
 
+let lastMsg = 0, reconnectTimer = null;
+function scheduleReconnect(ms) {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(connect, ms);
+}
 function connect() {
+  if (ws && ws.readyState <= 1) return;  // already open or connecting
   ws = new WebSocket(`ws://${location.host}/ws`);
-  ws.onopen = () => document.getElementById("status").classList.add("ok");
+  ws.onopen = () => {
+    lastMsg = performance.now();
+    document.getElementById("status").classList.add("ok");
+  };
   ws.onclose = () => {
     document.getElementById("status").classList.remove("ok");
-    setTimeout(connect, 1000);
+    scheduleReconnect(800);
   };
+  ws.onerror = () => { try { ws.close(); } catch (_) {} };
   ws.onmessage = (ev) => {
+    lastMsg = performance.now();
     const m = JSON.parse(ev.data);
     if (m.type === "state") { state = m; renderState(); }
     else if (m.type === "meters") { renderMeters(m); pushWave(m); }
@@ -1029,6 +1042,29 @@ function drawScope() {
   }
   ctx.stroke();
 }
+
+// ---------- connection watchdog ----------
+// The server streams meters ~20x/s, so silence >3s on an "open" socket means
+// a zombie connection (laptop lid closed, server suspended, TCP half-dead).
+// Force-close and reconnect — checked on clicks, keys, focus, and a timer.
+function ensureLive() {
+  if (!ws || ws.readyState >= 2) { connect(); return; }
+  if (ws.readyState === 1 && performance.now() - lastMsg > 3000) {
+    document.getElementById("status").classList.remove("ok");
+    try { ws.close(); } catch (_) {}
+    scheduleReconnect(150);
+  }
+}
+setInterval(() => { if (!document.hidden) ensureLive(); }, 2000);
+window.addEventListener("focus", ensureLive);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) ensureLive(); });
+document.addEventListener("pointerdown", ensureLive, true);
+window.addEventListener("keydown", ensureLive, true);
+document.getElementById("reconnect-btn").addEventListener("click", (e) => {
+  try { ws && ws.close(); } catch (_) {}
+  scheduleReconnect(100);
+  e.target.blur();
+});
 
 connect();
 setFocusNote(document.hasFocus());
