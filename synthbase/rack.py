@@ -54,6 +54,7 @@ class Rack:
         self.instances: list[Instance] = []
         self.mapped: set[tuple[str, str]] = set()   # (key, param) driven by LFOs
         self.on_node_replaced = None                 # callback(key) after respawn/re-enable
+        self._tail_router = None                     # bus->hardware bypass when the chain ends on a summed source
 
     # -- building ------------------------------------------------------------
 
@@ -84,6 +85,7 @@ class Rack:
         self.engine.register(*(self._lookup(key) for key, _ in stages))
 
         prev_bus_group = None
+        need_tail_router = False
         for index, (key, overrides) in enumerate(stages):
             mod = self._lookup(key)
             is_last = index == len(stages) - 1
@@ -95,13 +97,26 @@ class Rack:
 
             settings = {name: p.default for name, p in mod.params.items()}
             settings.update(overrides)
+            if (mod.kind == "source" and "gate" not in settings
+                    and "gate" in mod.synthdef.parameters):
+                # playable sources start SILENT — the synthdef default gate=1
+                # otherwise drones at default freq after every (re)build
+                settings["gate"] = 0
 
-            bus_group = None
-            if not is_last:
+            bus_group = None  # bus this stage OWNS (feeds the next stage)
+            if mod.kind == "source" and prev_bus_group is not None:
+                # Extra source mid-chain (e.g. audio_in alongside a signal
+                # gen): SUM into the running bus — a fresh bus here would
+                # orphan everything upstream (the "generators go dead" bug).
+                settings["out"] = int(prev_bus_group)
+                need_tail_router = is_last  # summed bus still needs a reader
+            elif is_last:
+                settings["out"] = 0
+            else:
                 bus_group = server.add_bus_group(
                     calculation_rate=CalculationRate.AUDIO, count=2
                 )
-            settings["out"] = 0 if is_last else int(bus_group)
+                settings["out"] = int(bus_group)
             if mod.kind == "effect":
                 settings["in_bus"] = int(prev_bus_group)
 
@@ -114,9 +129,27 @@ class Rack:
             self.instances.append(
                 Instance(key=key, module=mod, settings=settings, node=node, bus_group=bus_group)
             )
-            prev_bus_group = bus_group
+            if bus_group is not None:
+                prev_bus_group = bus_group
+
+        if need_tail_router:
+            # all-source chain (or chain ending on a summed source): route the
+            # shared bus to hardware
+            self._tail_router = server.add_synth(
+                _bypass,
+                add_action=AddAction.ADD_TO_TAIL,
+                target_node=self.engine.root_group,
+                in_bus=int(prev_bus_group),
+                out=0,
+            )
 
     def teardown(self) -> None:
+        if self._tail_router is not None:
+            try:
+                self._tail_router.free()
+            except Exception:  # noqa: BLE001
+                pass
+            self._tail_router = None
         for inst in self.instances:
             if inst.node is not None:
                 inst.node.free()

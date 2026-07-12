@@ -661,6 +661,9 @@ function handleEvent(e) {
   } else if (e.kind === "drum_step") {
     for (const btn of document.querySelectorAll(".step.play")) btn.classList.remove("play");
     for (const btn of document.querySelectorAll(`.step[data-step="${e.step}"]`)) btn.classList.add("play");
+  } else if (e.kind === "loop_note") {
+    // live feed while recording — deck viz shows notes as they land
+    if (state?.looper) (state.looper.notes = state.looper.notes || []).push([e.beat, e.note, e.on]);
   } else if (e.kind === "looper") {
     // full looper settings ride along on every state change (incl. notes)
     if (state) { const {kind, ...rest} = e; state.looper = {...state.looper, ...rest}; renderLooper(); }
@@ -744,6 +747,9 @@ function drawDeck(now, style) {
   const bpm = state?.transport?.bpm || 100;
   const bpb = state?.transport?.beats_per_bar || 4;
   const loopBeats = (l?.loop_beats) || (l?.bars || 2) * bpb;
+  let livePhase = null;  // interpolated playhead position, in beats
+  if (deckAnchor && l && !["empty", "stopped", "armed"].includes(l.state))
+    livePhase = (deckAnchor.phase + (now - deckAnchor.time) / 1000 * bpm / 60) % loopBeats;
   // grid: light line per beat, heavier divider per measure
   const hairline = style.getPropertyValue("--hairline");
   for (let b = 0; b <= loopBeats; b++) {
@@ -759,12 +765,15 @@ function drawDeck(now, style) {
     ctx.fillStyle = style.getPropertyValue("--danger");
     const lo = 36, hi = 96, open = {};
     const segs = [];
-    for (const [beat, note, on] of l.notes) {
+    const evs = [...l.notes].sort((a, b) => a[0] - b[0]);  // live feed appends out of beat order
+    for (const [beat, note, on] of evs) {
       if (on) { (open[note] = open[note] || []).push(beat); }
       else if (open[note] && open[note].length) segs.push([note, open[note].shift(), beat]);
       else segs.push([note, 0, beat]);  // off before its on = wrapped across the loop top
     }
-    for (const n in open) for (const b0 of open[n]) segs.push([+n, b0, loopBeats]);  // rings past the top
+    const rec = ["recording", "overdubbing"].includes(l.state);
+    for (const n in open) for (const b0 of open[n])  // still-held: grow with the playhead while recording
+      segs.push([+n, b0, rec && livePhase !== null && livePhase >= b0 ? livePhase : loopBeats]);
     for (const [note, b0, b1] of segs) {
       const y = dc.height - ((Math.min(hi, Math.max(lo, note)) - lo) / (hi - lo)) * (dc.height - 8) - 4;
       const x0 = (b0 / loopBeats) * dc.width;
@@ -773,9 +782,8 @@ function drawDeck(now, style) {
     }
   }
   // tracking line, interpolated between beat messages
-  if (deckAnchor && l && !["empty", "stopped", "armed"].includes(l.state)) {
-    const phase = (deckAnchor.phase + (now - deckAnchor.time) / 1000 * bpm / 60) % loopBeats;
-    const x = (phase / loopBeats) * dc.width;
+  if (livePhase !== null) {
+    const x = (livePhase / loopBeats) * dc.width;
     ctx.strokeStyle = ["recording", "overdubbing"].includes(l.state)
       ? style.getPropertyValue("--danger") : style.getPropertyValue("--accent");
     ctx.lineWidth = 2;

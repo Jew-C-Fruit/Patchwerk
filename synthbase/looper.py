@@ -53,11 +53,20 @@ class Looper:
         self._record(note, on)
 
     def _record(self, note: int, on: bool) -> None:
-        if self.state not in ("recording", "overdubbing"):
+        if self.state not in ("armed", "recording", "overdubbing"):
             return
         beat = self.app.transport.beats_now() - self._record_start_beat
+        if self.state == "armed":
+            # a note struck just ahead of the loop top belongs at beat 0
+            if not on or beat < -0.35:
+                return
+            beat = 0.0
+        b = round(beat % self._loop_beats, 4)
         with self._lock:
-            self._events.append((round(beat % self._loop_beats, 4), int(note), bool(on)))
+            self._events.append((b, int(note), bool(on)))
+        emit = getattr(self.app, "_emit_midi_event", None)
+        if emit:  # live feed for the deck visualizer
+            emit({"kind": "loop_note", "beat": b, "note": int(note), "on": bool(on)})
 
     # -- public API -------------------------------------------------------------
 
@@ -190,6 +199,8 @@ class Looper:
         if not self.overdub:
             self._events = []
         start_beat, t_start = transport.next_grid(float(transport.beats_per_bar))
+        # known now — lets the armed-state grace clamp early notes to beat 0
+        self._record_start_beat = start_beat
         self.state = "armed"
         self._emit()
 
@@ -218,6 +229,14 @@ class Looper:
         with self._lock:
             if self.state != "recording":
                 return
+            # close notes still held when the window ends so nothing rings on
+            depth: dict[int, int] = {}
+            for _, note, on in sorted(self._events):
+                depth[note] = depth.get(note, 0) + (1 if on else -1)
+            for note, n in depth.items():
+                for _ in range(max(0, n)):
+                    self._events.append(
+                        (round(self._loop_beats - 0.02, 4), note, False))
             self.state = "overdubbing" if self.overdub else "playing"
             self._emit()
         self._ensure_thread()
@@ -261,26 +280,33 @@ class Looper:
 
     def _run(self) -> None:
         transport = self.app.transport
+        GRACE = 0.15  # beats — a just-passed event (loop-top thread latency,
+        #               beat-0 quantized notes) still fires, immediately
         while not self._quit.is_set() and self.state in ("playing", "overdubbing"):
             with self._lock:
                 events = sorted(self._events)
             if not events:
                 time.sleep(0.1)
                 continue
-            now_beat = transport.beats_now()
-            phase = (now_beat - self._record_start_beat) % self._loop_beats
-            todo = [e for e in events if e[0] > phase + 1e-3]
-            if not todo:  # wait for the loop top
-                next_top = now_beat + (self._loop_beats - phase)
-                if not self._sleep_until(transport.time_of_beat(next_top)):
+            rel = transport.beats_now() - self._record_start_beat
+            cycle = int(rel // self._loop_beats)
+            phase = rel - cycle * self._loop_beats
+            idx = next((i for i, e in enumerate(events) if e[0] >= phase - GRACE),
+                       None)
+            if idx is None:  # nothing left this cycle — hold at the loop top
+                cycle += 1
+                idx = 0
+                if not self._sleep_until(transport.time_of_beat(
+                        self._record_start_beat + cycle * self._loop_beats)):
                     break
-                continue
-            cycle = (now_beat - self._record_start_beat) // self._loop_beats
-            for beat_off, note, on in todo:
+            interrupted = False
+            for beat_off, note, on in events[idx:]:
                 if self._quit.is_set() or self.state not in ("playing", "overdubbing"):
+                    interrupted = True
                     break
                 target = self._record_start_beat + cycle * self._loop_beats + beat_off
                 if not self._sleep_until(transport.time_of_beat(target)):
+                    interrupted = True
                     break
                 if not getattr(transport, "running", True):
                     continue  # transport stopped: skip firing
@@ -297,6 +323,13 @@ class Looper:
                         self._sounding.discard(note)
                 finally:
                     self._self_fire = False
+            if interrupted:
+                continue
+            # cycle tail done — park at the next loop top before rescanning so
+            # the grace window can't refire what just played
+            if not self._sleep_until(transport.time_of_beat(
+                    self._record_start_beat + (cycle + 1) * self._loop_beats)):
+                break
         self._release_all()
 
     def _emit(self) -> None:

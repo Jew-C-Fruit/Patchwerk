@@ -122,6 +122,47 @@ def main():
                                              lp.position)[1] == "pre")
     lp.shutdown()
 
+    # --- loop-top boundary ----------------------------------------------------
+    # a note recorded at exactly beat 0 must voice on every replay cycle
+    app, lp = make("post")
+    lp._events = [(0.0, 60, True), (0.5, 60, False)]
+    lp._loop_beats = 4.0
+    lp._record_start_beat = 0.0
+    lp.state = "playing"
+    lp._ensure_thread()
+    time.sleep(app.transport.beat_duration * 9)
+    lp.configure(action="stop")
+    check("beat-0 note voices every cycle", len(app.arp.ons) >= 2)
+    lp.shutdown()
+
+    # armed grace: a note struck just before the window opens lands at beat 0
+    app, lp = make("post")
+    lp._loop_beats = 4.0
+    lp.state = "armed"
+    lp._record_start_beat = app.transport.beats_now() + 0.2  # top is 0.2 beats away
+    lp.observe(55, True)
+    check("armed grace clamps early note to beat 0",
+          lp._events and lp._events[0] == (0.0, 55, True))
+    lp.observe(55, False)  # offs before the top are dropped
+    check("armed off ignored", len(lp._events) == 1)
+    check("loop_note emitted live", any(
+        e.get("kind") == "loop_note" for e in app.events))
+    lp.state = "empty"
+    lp.shutdown()
+
+    # a note still held when the window closes gets an off at the loop end
+    app, lp = make("post")
+    lp._loop_beats = 4.0
+    lp._record_start_beat = app.transport.beats_now()
+    lp.state = "recording"
+    lp._record(61, True)
+    lp._finish_recording()
+    offs = [e for e in lp._events if e[1] == 61 and not e[2]]
+    check("held note closed at window end",
+          len(offs) == 1 and abs(offs[0][0] - 3.98) < 0.01)
+    lp.configure(action="stop")
+    lp.shutdown()
+
     # --- pre mode: only the input tap records --------------------------------
     app, lp = make("pre")
     record_pass(app, lp)
