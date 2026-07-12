@@ -129,7 +129,7 @@ function draw(state) {
   }
   if (state.looper && state.looper.state !== "empty") {
     const l = box(x0, sideY, 150, 44, `Looper (${state.looper.state})`,
-                  `${state.looper.bars} bars`);
+                  `${state.looper.bars} bars · ${state.looper.position || "post"}-arp`);
     cable(...l.right, ...master.left, audio); sideY += 60;
   }
   if (state.transport?.click) {

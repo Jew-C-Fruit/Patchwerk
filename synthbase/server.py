@@ -111,7 +111,8 @@ class GuiServer:
             await self._broadcast_state()
         elif t == "set_looper":
             self.synth.set_looper(action=m.get("action"), bars=m.get("bars"),
-                                  level=m.get("level"), overdub=m.get("overdub"))
+                                  level=m.get("level"), overdub=m.get("overdub"),
+                                  position=m.get("position"))
             await self._broadcast_state()
         elif t == "lfo_assign":
             await loop.run_in_executor(None, lambda: self.synth.lfo_assign(m["key"], m["name"]))
@@ -203,8 +204,13 @@ class GuiServer:
 
     def _beat_from_thread(self, bar: int, beat: int) -> None:
         if self.loop is not None and self.clients:
+            try:
+                loop_phase = self.synth.looper.phase()
+            except Exception:  # noqa: BLE001
+                loop_phase = None
             asyncio.run_coroutine_threadsafe(
-                self._broadcast({"type": "beat", "bar": bar, "beat": beat}), self.loop
+                self._broadcast({"type": "beat", "bar": bar, "beat": beat,
+                                 "loop": loop_phase}), self.loop
             )
 
     def _midi_event_from_thread(self, event: dict) -> None:

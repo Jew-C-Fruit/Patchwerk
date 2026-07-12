@@ -69,6 +69,7 @@
   .tonic div.root span { background: var(--warn); }
   .tonic div i { position: absolute; top: 1px; left: 0; right: 0; text-align: center;
     font-style: normal; font-size: 9px; color: var(--ink-2); z-index: 2; }
+  #deckviz.rec { border-color: var(--danger); box-shadow: 0 0 0 1.5px var(--danger); }
   canvas.viz { width: 100%; background: var(--plane); border: 1px solid var(--hairline);
     border-radius: 6px; display: block; }
   /* drums */
@@ -145,7 +146,11 @@
       <div><label class="small">BARS</label>
         <select id="loop-bars"><option>1</option><option selected>2</option>
           <option>4</option><option>8</option></select></div>
-      <button id="loop-rec" class="rec">● rec</button>
+      <div><label class="small">DECK</label>
+        <select id="loop-pos" title="pre: deck feeds the arp · post: deck records the arp and plays its own voice">
+          <option value="post" selected>post-arp</option>
+          <option value="pre">pre-arp</option></select></div>
+      <button id="loop-rec" class="rec" title="spacebar">● rec</button>
       <button id="loop-stop">■ stop</button>
       <button id="loop-play">▶ play</button>
       <button id="loop-clear">✕ clear</button>
@@ -155,6 +160,7 @@
         <input type="range" id="loop-level" min="0" max="1" step="0.01" value="0.9">
       </div>
     </div>
+    <canvas class="viz" id="deckviz" height="64" style="margin-top:6px"></canvas>
   </div>
 
   <!-- viz -->
@@ -530,6 +536,11 @@ function renderLooper() {
   document.getElementById("loop-bars").value = String(l.bars);
   document.getElementById("loop-dub").checked = !!l.overdub;
   if (dragging !== "loop-level") document.getElementById("loop-level").value = l.level;
+  const pos = document.getElementById("loop-pos");
+  if (document.activeElement !== pos) pos.value = l.position || "post";
+  pos.disabled = !["empty", "stopped"].includes(l.state);
+  document.getElementById("deckviz").classList.toggle(
+    "rec", ["armed", "recording", "overdubbing"].includes(l.state));
 }
 function renderLfos() {
   const list = state.lfos || [];
@@ -632,9 +643,11 @@ let beatAnchor = null;  // {time(ms), beatIndexApprox}
 function handleEvent(e) {
   const mon = document.getElementById("midi-mon");
   if (e.kind === "voiced") {
-    if (e.on) rollNotes.push({note: e.note, t0: performance.now(), t1: null});
+    const deck = !!e.deck;
+    if (e.on) rollNotes.push({note: e.note, t0: performance.now(), t1: null, deck});
     else for (let i = rollNotes.length - 1; i >= 0; i--)
-      if (rollNotes[i].note === e.note && rollNotes[i].t1 === null) { rollNotes[i].t1 = performance.now(); break; }
+      if (rollNotes[i].note === e.note && rollNotes[i].t1 === null &&
+          rollNotes[i].deck === deck) { rollNotes[i].t1 = performance.now(); break; }
   } else if (e.kind === "cc") {
     mon.textContent = e.bound ? `CC ${e.cc} → ${e.bound[0]}.${e.bound[1]}`
                               : `CC ${e.cc} = ${(e.unit * 127) | 0} (unbound)`;
@@ -649,15 +662,20 @@ function handleEvent(e) {
     for (const btn of document.querySelectorAll(".step.play")) btn.classList.remove("play");
     for (const btn of document.querySelectorAll(`.step[data-step="${e.step}"]`)) btn.classList.add("play");
   } else if (e.kind === "looper") {
-    document.getElementById("loop-state").textContent = e.state;
+    // full looper settings ride along on every state change (incl. notes)
+    if (state) { const {kind, ...rest} = e; state.looper = {...state.looper, ...rest}; renderLooper(); }
+    else document.getElementById("loop-state").textContent = e.state;
   }
 }
+let deckAnchor = null;  // {time(ms), phase(beats)} from beat messages
 function onBeat(m) {
   document.getElementById("beat-pos").textContent = `${m.bar + 1}.${m.beat + 1}`;
   const dot = document.getElementById("beat-dot");
   dot.style.background = m.beat === 0 ? "var(--accent)" : "var(--meter)";
   setTimeout(() => { dot.style.background = "var(--hairline)"; }, 90);
   beatAnchor = {time: performance.now(), downbeat: m.beat === 0};
+  deckAnchor = (m.loop === null || m.loop === undefined)
+    ? null : {time: performance.now(), phase: m.loop};
 }
 // waveform strip (output envelope)
 const wave = new Array(360).fill(0);
@@ -699,8 +717,9 @@ function drawViz() {
       ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, nc.height); ctx.stroke();
     }
   }
-  // notes
-  ctx.fillStyle = getComputedStyle(document.body).getPropertyValue("--accent");
+  // notes (deck-originated notes draw red)
+  const style = getComputedStyle(document.body);
+  const accent = style.getPropertyValue("--accent"), danger = style.getPropertyValue("--danger");
   const lo = 36, hi = 96;
   while (rollNotes.length > 300) rollNotes.shift();
   while (rollNotes.length && rollNotes[0].t1 !== null &&
@@ -709,9 +728,59 @@ function drawViz() {
     const x0 = nc.width - (now - ev.t0) * pxPerMs;
     const x1 = ev.t1 === null ? nc.width : nc.width - (now - ev.t1) * pxPerMs;
     const y = nc.height - ((Math.min(hi, Math.max(lo, ev.note)) - lo) / (hi - lo)) * (nc.height - 6) - 3;
+    ctx.fillStyle = ev.deck ? danger : accent;
     ctx.fillRect(Math.max(0, x0), y - 2, Math.max(2, x1 - x0), 4);
   }
+  drawDeck(now, style);
   requestAnimationFrame(drawViz);
+}
+// loop deck track: static field, measure dividers, red notes, tracking line
+function drawDeck(now, style) {
+  const dc = document.getElementById("deckviz");
+  if (dc.width !== dc.clientWidth) dc.width = dc.clientWidth;
+  const ctx = dc.getContext("2d");
+  ctx.clearRect(0, 0, dc.width, dc.height);
+  const l = state?.looper;
+  const bpm = state?.transport?.bpm || 100;
+  const bpb = state?.transport?.beats_per_bar || 4;
+  const loopBeats = (l?.loop_beats) || (l?.bars || 2) * bpb;
+  // grid: light line per beat, heavier divider per measure
+  const hairline = style.getPropertyValue("--hairline");
+  for (let b = 0; b <= loopBeats; b++) {
+    const x = (b / loopBeats) * dc.width;
+    ctx.strokeStyle = hairline;
+    ctx.lineWidth = b % bpb === 0 ? 2 : 1;
+    ctx.globalAlpha = b % bpb === 0 ? 1 : 0.45;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, dc.height); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  // recorded notes in red: pair on/offs per pitch, wrap-around allowed
+  if (l && Array.isArray(l.notes) && l.notes.length) {
+    ctx.fillStyle = style.getPropertyValue("--danger");
+    const lo = 36, hi = 96, open = {};
+    const segs = [];
+    for (const [beat, note, on] of l.notes) {
+      if (on) { (open[note] = open[note] || []).push(beat); }
+      else if (open[note] && open[note].length) segs.push([note, open[note].shift(), beat]);
+      else segs.push([note, 0, beat]);  // off before its on = wrapped across the loop top
+    }
+    for (const n in open) for (const b0 of open[n]) segs.push([+n, b0, loopBeats]);  // rings past the top
+    for (const [note, b0, b1] of segs) {
+      const y = dc.height - ((Math.min(hi, Math.max(lo, note)) - lo) / (hi - lo)) * (dc.height - 8) - 4;
+      const x0 = (b0 / loopBeats) * dc.width;
+      const x1 = (Math.max(b1, b0 + 0.05) / loopBeats) * dc.width;
+      ctx.fillRect(x0, y - 2, Math.max(2, x1 - x0), 4);
+    }
+  }
+  // tracking line, interpolated between beat messages
+  if (deckAnchor && l && !["empty", "stopped", "armed"].includes(l.state)) {
+    const phase = (deckAnchor.phase + (now - deckAnchor.time) / 1000 * bpm / 60) % loopBeats;
+    const x = (phase / loopBeats) * dc.width;
+    ctx.strokeStyle = ["recording", "overdubbing"].includes(l.state)
+      ? style.getPropertyValue("--danger") : style.getPropertyValue("--accent");
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, dc.height); ctx.stroke();
+  }
 }
 requestAnimationFrame(drawViz);
 
@@ -818,7 +887,8 @@ function sendLooper(action) {
   send({type: "set_looper", action,
         bars: parseInt(document.getElementById("loop-bars").value, 10),
         level: parseFloat(document.getElementById("loop-level").value),
-        overdub: document.getElementById("loop-dub").checked});
+        overdub: document.getElementById("loop-dub").checked,
+        position: document.getElementById("loop-pos").value});
 }
 document.getElementById("loop-rec").addEventListener("click", (e) => { sendLooper("record"); e.target.blur(); });
 document.getElementById("loop-stop").addEventListener("click", (e) => { sendLooper("stop"); e.target.blur(); });
@@ -830,6 +900,7 @@ document.getElementById("loop-level").addEventListener("input", () =>
 document.getElementById("loop-level").addEventListener("pointerdown", () => dragging = "loop-level");
 document.getElementById("loop-level").addEventListener("pointerup", () => dragging = null);
 document.getElementById("loop-bars").addEventListener("change", (e) => { sendLooper(null); e.target.blur(); });
+document.getElementById("loop-pos").addEventListener("change", (e) => { sendLooper(null); e.target.blur(); });
 
 // drums enable
 document.getElementById("add-btn").addEventListener("click", (e) => {
@@ -894,7 +965,13 @@ function syncCaps(e) {
 }
 window.addEventListener("keydown", (e) => {
   syncCaps(e);
-  if (e.repeat || !keysEnabled() || keyTarget(e) || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.repeat || keyTarget(e) || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === " ") {  // spacebar = loop record, in any input mode
+    sendLooper("record");
+    e.preventDefault();
+    return;
+  }
+  if (!keysEnabled()) return;
   const k = e.key.toLowerCase();
   if (k === "z") { octave = Math.max(1, octave - 1); noteOffAll(); }
   else if (k === "x") { octave = Math.min(7, octave + 1); noteOffAll(); }
@@ -907,6 +984,7 @@ window.addEventListener("keydown", (e) => {
 });
 window.addEventListener("keyup", (e) => {
   syncCaps(e);
+  if (e.key === " " && !keyTarget(e)) { e.preventDefault(); return; }
   const k = e.key.toLowerCase();
   if (k in KEYMAP) {
     const note = 12 * (octave + 1) + KEYMAP[k];

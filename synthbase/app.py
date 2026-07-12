@@ -143,6 +143,7 @@ class SynthApp:
         if self.voice:
             self.arp = Arpeggiator(self.voice, self.transport)
             self.arp.on_note = self.drone.observe
+            self.arp.on_note_in = self.looper.observe_input
             self.voice.on_voiced = self._emit_voiced
             self.arp.configure(**{**self._arp_settings, **patch.get("arp", {})})
             self._arp_settings = {
