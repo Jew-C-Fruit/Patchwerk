@@ -37,6 +37,8 @@ class Looper:
         self._self_fire = False     # replayed notes must never be re-recorded
         self._deck_node = None      # private voice node for "post" replay
         self._deck_key = None
+        self._deck_held: list[int] = []   # deck-voice note stack (mono, last-note priority)
+        self._deck_sounding: int | None = None
 
     # -- note taps ---------------------------------------------------------------
 
@@ -104,8 +106,10 @@ class Looper:
         return None
 
     def settings(self) -> dict:
+        # STABLE beat-only sort: tuple sort would put offs before ons at equal
+        # beats and reorder pitches — scrambling pairing and replay order
         with self._lock:
-            notes = sorted(self._events)[:400]
+            notes = sorted(self._events, key=lambda e: e[0])[:2000]
         return {"state": self.state, "bars": self.bars, "level": self.level,
                 "overdub": self.overdub, "midi": True, "position": self.position,
                 "loop_beats": self._loop_beats, "notes": notes,
@@ -154,23 +158,57 @@ class Looper:
             print(f"[looper] deck voice failed ({exc}); sharing the main voice")
             return self.app.arp or self.app.voice
 
-    # MonoVoice-compatible surface driving the private node
+    # MonoVoice-compatible surface driving the private node. Overdub passes
+    # overlap freely, so this needs real mono-voice semantics: a note stack,
+    # sounding-transition emits, and no gate kills from notes that already
+    # handed the voice over (raw emits left phantom opens in the note roll
+    # and one pass's off could silence another pass's note).
+    def _deck_emit(self, note: int, on: bool) -> None:
+        emit = getattr(self.app, "_emit_midi_event", None)
+        if emit:
+            emit({"kind": "voiced", "note": int(note), "on": bool(on), "deck": True})
+
+    @staticmethod
+    def _freq(note: int) -> float:
+        return 440.0 * 2 ** ((note - 69) / 12)
+
     def note_on(self, note: int, velocity: int = 100) -> None:
-        if self._deck_node is not None:
-            freq = 440.0 * 2 ** ((note - 69) / 12)
-            self._deck_node.set(freq=freq, gate=1, amp_scale=1)
-            emit = getattr(self.app, "_emit_midi_event", None)
-            if emit:
-                emit({"kind": "voiced", "note": int(note), "on": True, "deck": True})
+        if self._deck_node is None:
+            return
+        if note in self._deck_held:
+            self._deck_held.remove(note)
+        self._deck_held.append(note)
+        prev = self._deck_sounding
+        self._deck_sounding = note
+        self._deck_node.set(freq=self._freq(note), gate=1)
+        if prev is not None and prev != note:
+            self._deck_emit(prev, False)
+        if prev != note:
+            self._deck_emit(note, True)
 
     def note_off(self, note: int) -> None:
-        if self._deck_node is not None:
+        if self._deck_node is None:
+            return
+        if note in self._deck_held:
+            self._deck_held.remove(note)
+        if note != self._deck_sounding:
+            return  # a background-held note released; sound unchanged
+        prev = self._deck_sounding
+        if self._deck_held:
+            self._deck_sounding = self._deck_held[-1]
+            self._deck_node.set(freq=self._freq(self._deck_sounding))
+            self._deck_emit(prev, False)
+            self._deck_emit(self._deck_sounding, True)
+        else:
+            self._deck_sounding = None
             self._deck_node.set(gate=0)
-            emit = getattr(self.app, "_emit_midi_event", None)
-            if emit:
-                emit({"kind": "voiced", "note": int(note), "on": False, "deck": True})
+            self._deck_emit(note, False)
 
     def _deck_teardown(self) -> None:
+        if self._deck_sounding is not None:
+            self._deck_emit(self._deck_sounding, False)
+        self._deck_held = []
+        self._deck_sounding = None
         if self._deck_node is not None:
             try:
                 self._deck_node.free()
@@ -284,7 +322,7 @@ class Looper:
         #               beat-0 quantized notes) still fires, immediately
         while not self._quit.is_set() and self.state in ("playing", "overdubbing"):
             with self._lock:
-                events = sorted(self._events)
+                events = sorted(self._events, key=lambda e: e[0])  # stable: keep fire order at equal beats
             if not events:
                 time.sleep(0.1)
                 continue
@@ -309,6 +347,8 @@ class Looper:
                     interrupted = True
                     break
                 if not getattr(transport, "running", True):
+                    if self._sounding:  # don't let a note ring through the pause
+                        self._release_all()
                     continue  # transport stopped: skip firing
                 sink = self._sink()
                 if sink is None:

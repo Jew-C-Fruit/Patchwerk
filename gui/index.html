@@ -725,11 +725,16 @@ function drawViz() {
   const accent = style.getPropertyValue("--accent"), danger = style.getPropertyValue("--danger");
   const lo = 36, hi = 96;
   while (rollNotes.length > 300) rollNotes.shift();
-  while (rollNotes.length && rollNotes[0].t1 !== null &&
-         (now - rollNotes[0].t1) * pxPerMs > nc.width) rollNotes.shift();
+  // prune ended notes ANYWHERE in the list — front-only pruning stalled
+  // behind a still-open note and pinned dead notes to the left edge
+  for (let i = rollNotes.length - 1; i >= 0; i--) {
+    const ev = rollNotes[i];
+    if (ev.t1 !== null && (now - ev.t1) * pxPerMs > nc.width) rollNotes.splice(i, 1);
+  }
   for (const ev of rollNotes) {
     const x0 = nc.width - (now - ev.t0) * pxPerMs;
     const x1 = ev.t1 === null ? nc.width : nc.width - (now - ev.t1) * pxPerMs;
+    if (x1 <= 0) continue;  // fully scrolled out — never draw at the edge
     const y = nc.height - ((Math.min(hi, Math.max(lo, ev.note)) - lo) / (hi - lo)) * (nc.height - 6) - 3;
     ctx.fillStyle = ev.deck ? danger : accent;
     ctx.fillRect(Math.max(0, x0), y - 2, Math.max(2, x1 - x0), 4);

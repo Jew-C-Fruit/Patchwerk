@@ -163,6 +163,37 @@ def main():
     lp.configure(action="stop")
     lp.shutdown()
 
+    # --- deck voice note stack --------------------------------------------------
+    class FakeNode:
+        def __init__(self): self.sets = []
+        def set(self, **kw): self.sets.append(kw)
+        def free(self): pass
+
+    app, lp = make("post")
+    lp._deck_node = FakeNode()
+    lp._deck_key = "x"
+    lp.note_on(60)
+    lp.note_on(64)          # takes over the mono deck voice
+    lp.note_off(60)         # background release — must NOT kill 64
+    voiced = [(e["note"], e["on"]) for e in app.events if e.get("deck")]
+    check("deck stack: background off doesn't close the gate",
+          not any(s.get("gate") == 0 for s in lp._deck_node.sets))
+    check("deck stack emits sounding transitions only",
+          voiced == [(60, True), (60, False), (64, True)])
+    lp.note_off(64)
+    check("deck gate closes when stack empties",
+          lp._deck_node.sets[-1].get("gate") == 0)
+    voiced = [(e["note"], e["on"]) for e in app.events if e.get("deck")]
+    check("deck emits balanced on/off", voiced[-1] == (64, False))
+    lp._deck_node = None
+    lp.shutdown()
+
+    # equal-beat events keep fire order (tuple sort used to put offs first)
+    ev = [(1.0, 60, True), (1.0, 60, False), (0.5, 62, True), (0.5, 61, False)]
+    srt = sorted(ev, key=lambda e: e[0])
+    check("stable sort keeps fire order at equal beats",
+          srt == [(0.5, 62, True), (0.5, 61, False), (1.0, 60, True), (1.0, 60, False)])
+
     # --- pre mode: only the input tap records --------------------------------
     app, lp = make("pre")
     record_pass(app, lp)
