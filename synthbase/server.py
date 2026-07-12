@@ -144,7 +144,8 @@ class GuiServer:
                 click=m.get("click"), accent=m.get("accent"),
                 playing=m.get("playing"),
             )
-            await self._broadcast_state(exclude=sender)
+            # broadcast to ALL incl. sender: the play/stop button must flip
+            await self._broadcast_state()
         elif t == "set_arp":
             self.synth.set_arp(
                 enabled=m.get("enabled"), division=m.get("division"),
@@ -161,6 +162,9 @@ class GuiServer:
             self.synth.note_on(m["note"], m.get("velocity", 100))
         elif t == "note_off":
             self.synth.note_off(m["note"])
+        elif t == "scope":
+            data = await loop.run_in_executor(None, self.synth.scope.capture, m["key"])
+            await sender.send_json({"type": "scope_data", **data})
         elif t == "sustain":
             sink = self.synth.arp or self.synth.voice
             if sink:

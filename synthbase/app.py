@@ -19,6 +19,7 @@ from .arp import Arpeggiator
 from .drone import DroneBrain
 from .drums import DrumMachine
 from .lfo import LFOManager
+from .scope import Scope
 from .looper import Looper
 from . import presets as presets_mod
 from .transport import Transport, _click
@@ -80,6 +81,7 @@ class SynthApp:
         self.drums = DrumMachine(self)
         self.lfos = LFOManager(self)
         self.looper = Looper(self)
+        self.scope = Scope(self)
         self.on_beat_event = None  # set by GuiServer; called from the beat thread
 
         self.on_midi_event = None  # set by GuiServer; called from MIDI thread

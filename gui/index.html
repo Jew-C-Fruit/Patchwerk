@@ -171,6 +171,16 @@
       <label class="small">OUTPUT</label>
       <canvas class="viz" id="wavestrip" height="42"></canvas>
     </div>
+    <div class="row" style="margin-top:8px">
+      <label class="small">SCOPE</label>
+      <select id="scope-sel"><option value="">off</option></select>
+      <div class="grow" style="max-width:200px">
+        <label class="small">ZOOM <span id="scope-zoom-v"></span></label>
+        <input type="range" id="scope-zoom" min="7" max="11" step="0.1" value="9">
+      </div>
+      <span class="small">waveform right after the selected module (zero-cross synced)</span>
+    </div>
+    <canvas class="viz" id="scope" height="110" style="margin-top:4px; display:none"></canvas>
   </div>
 
   <!-- patch / presets / arp / drone -->
@@ -269,6 +279,7 @@ function connect() {
     else if (m.type === "midi") handleEvent(m.event);
     else if (m.type === "beat") onBeat(m);
     else if (m.type === "tonic") renderTonic(m);
+    else if (m.type === "scope_data") { scopeSamples = m.samples; drawScope(); }
     else if (m.type === "error") console.warn("server:", m.message);
   };
 }
@@ -328,6 +339,10 @@ function renderState() {
   document.getElementById("chain-desc").textContent =
     state.chain.filter(c => !c.service).map(c => c.name).join(" → ") + " → out";
 
+  const ssel = document.getElementById("scope-sel");
+  const cur = ssel.value;
+  ssel.innerHTML = `<option value="">off</option>` + state.chain.map(c =>
+    `<option value="${c.key}" ${c.key === cur ? "selected" : ""}>${c.name}</option>`).join("");
   const inChain = new Set(state.chain.map(c => c.key));
   document.getElementById("add-sel").innerHTML = (state.available || [])
     .filter(a => !inChain.has(a.key))
@@ -970,6 +985,50 @@ renderState = function() {
   const sel = document.getElementById("transpose");
   if (document.activeElement !== sel) sel.value = String(state.transpose ?? 0);
 };
+
+// ---------- oscilloscope ----------
+let scopeSamples = null, scopeTimer = null;
+function scopeTick() {
+  const key = document.getElementById("scope-sel").value;
+  if (key) send({type: "scope", key});
+}
+document.getElementById("scope-sel").addEventListener("change", (e) => {
+  const on = !!e.target.value;
+  document.getElementById("scope").style.display = on ? "" : "none";
+  if (scopeTimer) clearInterval(scopeTimer);
+  scopeTimer = on ? setInterval(scopeTick, 250) : null;
+  if (on) scopeTick();
+  e.target.blur();
+});
+function drawScope() {
+  const c = document.getElementById("scope");
+  if (c.style.display === "none" || !scopeSamples) return;
+  if (c.width !== c.clientWidth) c.width = c.clientWidth;
+  const ctx = c.getContext("2d");
+  ctx.clearRect(0, 0, c.width, c.height);
+  const s = scopeSamples;
+  // sync: first rising zero-crossing in the first half
+  let start = 0;
+  for (let i = 1; i < s.length / 2; i++) {
+    if (s[i - 1] <= 0 && s[i] > 0) { start = i; break; }
+  }
+  const win = Math.min(Math.round(Math.pow(2, parseFloat(
+    document.getElementById("scope-zoom").value))), s.length - start);
+  document.getElementById("scope-zoom-v").textContent = win + " smp";
+  let peak = 0.05;
+  for (let i = start; i < start + win; i++) peak = Math.max(peak, Math.abs(s[i]));
+  ctx.strokeStyle = getComputedStyle(document.body).getPropertyValue("--hairline");
+  ctx.beginPath(); ctx.moveTo(0, c.height / 2); ctx.lineTo(c.width, c.height / 2); ctx.stroke();
+  ctx.strokeStyle = getComputedStyle(document.body).getPropertyValue("--accent");
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  for (let i = 0; i < win; i++) {
+    const x = (i / win) * c.width;
+    const y = c.height / 2 - (s[start + i] / peak) * (c.height / 2 - 4);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
 
 connect();
 setFocusNote(document.hasFocus());
