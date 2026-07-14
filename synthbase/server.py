@@ -44,12 +44,20 @@ class GuiServer:
         self.loop: asyncio.AbstractEventLoop | None = None
         self.web_app = web.Application()
         self.web_app.router.add_get("/", self._index)
+        self.web_app.router.add_get("/legacy", self._legacy)
         self.web_app.router.add_get("/graph", self._graph)
         self.web_app.router.add_get("/ws", self._ws)
 
     # -- http ----------------------------------------------------------------
 
     async def _index(self, request: web.Request) -> web.FileResponse:
+        # the flex patch-canvas gui is the front door; the classic form gui
+        # stays reachable at /legacy
+        return web.FileResponse(
+            GUI_DIR / "flex.html", headers={"Cache-Control": "no-store"},
+        )
+
+    async def _legacy(self, request: web.Request) -> web.FileResponse:
         return web.FileResponse(
             GUI_DIR / "index.html", headers={"Cache-Control": "no-store"},
         )

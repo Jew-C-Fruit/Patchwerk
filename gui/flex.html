@@ -1,0 +1,2253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SuperSynth — Flex</title>
+<style>
+  :root {
+    --plane: #0d0d0d; --surface: #1a1a19; --card: #202020; --ink-1: #f2f1ea;
+    --ink-2: #a9a89e; --hairline: #2c2c2a; --border: rgba(255,255,255,0.10);
+    --audio: #3987e5; --ctl: #1baf7a; --mod: #9085e9; --danger: #e34948;
+    --meter: #1baf7a; --grid: rgba(255,255,255,0.045);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { background: var(--plane); color: var(--ink-1);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 13px; }
+
+  header { position: fixed; inset: 0 0 auto 0; z-index: 40; display: flex; gap: 10px;
+    align-items: center; flex-wrap: wrap; padding: 7px 14px;
+    background: color-mix(in srgb, var(--plane) 85%, transparent);
+    backdrop-filter: blur(6px); border-bottom: 1px solid var(--hairline); }
+  header h1 { font-size: 14px; margin: 0; font-weight: 650; white-space: nowrap; }
+  header .grp { display: flex; gap: 5px; align-items: center; white-space: nowrap; }
+  header .lb { font-size: 9px; letter-spacing: 0.07em; color: var(--ink-2);
+    text-transform: uppercase; }
+  header button, header select, header input[type=text] { background: var(--card);
+    color: var(--ink-1); font-size: 11px; border: 1px solid var(--border);
+    border-radius: 7px; padding: 2px 8px; cursor: pointer; font-family: inherit; }
+  header input[type=text] { cursor: text; width: 74px; }
+  header select { max-width: 120px; }
+  header button:hover { border-color: var(--ink-2); }
+  header input[type=range] { width: 84px; accent-color: var(--audio); height: 14px; }
+  header a { color: var(--ink-2); font-size: 11px; text-decoration: none; }
+  header a:hover { color: var(--ink-1); }
+  header label { font-size: 11px; color: var(--ink-2); display: flex; gap: 3px;
+    align-items: center; }
+  #status { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--danger); margin-right: 5px; vertical-align: 1px; }
+  #status.ok { background: var(--meter); }
+  .mbars { display: flex; flex-direction: column; gap: 2px; width: 70px; }
+  .mbars > div { height: 5px; background: var(--hairline); border-radius: 3px; overflow: hidden; }
+  .mbars > div > div { height: 100%; width: 0%; background: var(--meter);
+    transition: width 50ms linear; }
+  .mbars > div.clip > div { background: var(--danger); }
+  #beat-pos { font-variant-numeric: tabular-nums; min-width: 28px; display: inline-block;
+    color: var(--ink-1); }
+  #midi-ind { font-size: 10px; color: var(--ink-2); max-width: 130px; overflow: hidden;
+    text-overflow: ellipsis; }
+
+  #palette { position: fixed; top: 54px; left: 0; bottom: 0; width: 172px; z-index: 30;
+    background: color-mix(in srgb, var(--surface) 92%, transparent); border-right: 1px solid var(--hairline);
+    overflow-y: auto; padding: 10px; backdrop-filter: blur(6px); }
+  #palette h3 { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--ink-2); margin: 12px 2px 5px; font-weight: 600; }
+  #palette button { display: flex; align-items: center; gap: 7px; width: 100%; text-align: left;
+    background: var(--card); color: var(--ink-1); border: 1px solid var(--border);
+    border-radius: 7px; padding: 5px 8px; margin: 3px 0; font-size: 12px; cursor: pointer; }
+  #palette button:hover { border-color: var(--ink-2); }
+  #palette button i { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+
+  #board { position: absolute; inset: 54px 0 0 0; overflow: auto; }
+  #world { position: relative; width: 2600px; height: 1800px;
+    background-image: linear-gradient(var(--grid) 1px, transparent 1px),
+                      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 24px 24px; }
+  svg#wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  svg#wires path.hit { pointer-events: stroke; cursor: default; }
+  svg#wires path.hit.cuttable { cursor: pointer; }
+  svg#wires path.splice-hi { stroke-width: 5 !important;
+    filter: brightness(1.4) drop-shadow(0 0 4px rgba(255,255,255,0.45)); }
+  svg#wires path.flow { stroke: #fff; stroke-width: 2.7; fill: none;
+    stroke-linecap: round; stroke-dasharray: 0.1 16;
+    animation: flowdots 0.55s linear infinite; opacity: 0.95; }
+  @keyframes flowdots { to { stroke-dashoffset: -16.1; } }
+  svg#wiretop { position: absolute; inset: 0; width: 100%; height: 100%;
+    pointer-events: none; z-index: 15; }
+
+  .mod { position: absolute; width: 170px; background: var(--card);
+    border: 1px solid var(--border); border-radius: 9px; user-select: none;
+    box-shadow: 0 3px 14px rgba(0,0,0,0.45); z-index: 1; }
+  .mod.dragging { opacity: 0.9; box-shadow: 0 10px 26px rgba(0,0,0,0.6); z-index: 20; }
+  .mod.shifting { transition: left 140ms ease, top 140ms ease; }
+  .mod.bypassed .body, .mod.bypassed .viz-sec { opacity: 0.4; }
+  .mod.rec { outline: 1.5px solid var(--danger); box-shadow: 0 0 10px rgba(227,73,72,0.5); }
+  .mod .head { display: flex; align-items: center; gap: 7px; padding: 7px 9px 4px; cursor: grab; }
+  .mod .head:active { cursor: grabbing; }
+  .mod .stripe { width: 4px; align-self: stretch; border-radius: 3px; flex: none; }
+  .mod .title { font-weight: 640; font-size: 12.5px; line-height: 1.15; }
+  .mod .sub { font-size: 9.5px; color: var(--ink-2); }
+  .mod .kill { margin-left: 2px; color: var(--ink-2); font-size: 11px; cursor: pointer;
+    padding: 0 2px; border-radius: 4px; }
+  .mod .kill:hover { color: var(--danger); }
+  .mod .onoff { margin-left: auto; width: 12px; height: 12px; accent-color: var(--ctl);
+    cursor: pointer; flex: none; }
+  .mod .body { padding: 1px 10px 8px 14px; }
+  .mini { display: flex; align-items: center; gap: 6px; margin: 2.5px 0; height: 11px; }
+  .mini label { font-size: 9px; color: var(--ink-2); width: 48px; flex: none;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mini .track { flex: 1; height: 11px; position: relative; cursor: ew-resize; }
+  .mini .track::before { content: ""; position: absolute; top: 4px; left: 0; right: 0;
+    height: 3px; border-radius: 2px; background: var(--hairline); }
+  .mini .track i { position: absolute; top: 50%; transform: translate(-50%, -50%);
+    width: 7px; height: 7px; border-radius: 50%; background: var(--ink-2); }
+  .mini .track i.zero { background: var(--danger); }
+  .mini.mapped .track i { background: var(--mod); }
+  .mini .v { width: 34px; flex: none; font-size: 8.5px; color: var(--ink-2);
+    text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap;
+    overflow: hidden; }
+  .mini .chip { flex: 1; font-size: 9px; color: var(--ink-1); background: var(--hairline);
+    border-radius: 3px; padding: 0 5px; line-height: 11px; cursor: pointer;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mini .chip:hover { background: #3a3a38; }
+  .mini .chip.static { cursor: default; }
+  .viz-sec { padding: 3px 10px 8px 14px; }
+  canvas.vz { width: 100%; display: block; background: var(--plane);
+    border: 1px solid var(--hairline); border-radius: 6px; }
+  .deckbtns { display: flex; gap: 4px; margin: 3px 0; }
+  .deckbtns button { flex: 1; background: var(--hairline); color: var(--ink-1); border: 0;
+    border-radius: 4px; font-size: 9px; padding: 2px 0; cursor: pointer; font-family: inherit; }
+  .deckbtns button:hover { background: #3a3a38; }
+  .deckbtns button.recbtn { color: var(--danger); font-weight: 700; }
+  .dgrid { display: grid; grid-template-columns: repeat(16, 1fr); gap: 2px; margin: 2px 0; }
+  .dlane { font-size: 8px; color: var(--ink-2); height: 9px; margin-top: 3px; }
+  .dstep { aspect-ratio: 1; border: 0; padding: 0; border-radius: 2px;
+    background: var(--hairline); cursor: pointer; }
+  .dstep.on { background: var(--audio); }
+  .dstep.q { box-shadow: inset 0 0 0 1px rgba(255,255,255,0.14); }
+  .dstep.ph { outline: 1.5px solid rgba(255,255,255,0.75); }
+  .expander { cursor: pointer; color: var(--ink-2); font-size: 10px; padding: 0 3px;
+    margin-left: 2px; }
+  .expander:hover { color: var(--ink-1); }
+
+  .port { position: absolute; width: 12px; height: 12px; border-radius: 50%;
+    border: 2px solid var(--plane); cursor: crosshair; z-index: 5; }
+  .port.subtle { width: 9px; height: 9px; border-width: 1.5px; opacity: 0.78; }
+  .port::after { content: attr(data-label); position: absolute;
+    font-size: 8.5px; color: var(--ink-2); white-space: nowrap; pointer-events: none;
+    opacity: 0; transition: opacity 120ms; }
+  .port.e-top::after { top: 14px; left: 50%; transform: translateX(-50%); }
+  .port.e-bottom::after { bottom: 14px; left: 50%; transform: translateX(-50%); }
+  .port.e-left::after { left: 13px; top: 50%; transform: translateY(-50%); }
+  .port.e-right::after { right: 13px; top: 50%; transform: translateY(-50%); }
+  .mod:hover .port::after, .port.hot::after { opacity: 1; }
+  .port[data-sig=audio] { background: var(--audio); }
+  .port[data-sig=ctl]   { background: var(--ctl); }
+  .port[data-sig=mod]   { background: var(--mod); }
+  .port.quiet { width: 7px; height: 7px; border-width: 1.5px;
+    background: #6f6d64; opacity: 0.5; }
+  .port.quiet:hover, .port.quiet.hot { opacity: 1; background: var(--mod); }
+  .port.hot { box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 30%, transparent); }
+  .legend { display: flex; gap: 12px; font-size: 10px; color: var(--ink-2); }
+  .legend b { display: inline-block; width: 18px; height: 3px; border-radius: 2px;
+    vertical-align: middle; margin-right: 4px; }
+  .hint { position: fixed; bottom: 8px; left: 50%; transform: translateX(-50%);
+    z-index: 40; font-size: 11px; color: var(--ink-2);
+    background: color-mix(in srgb, var(--plane) 85%, transparent);
+    border: 1px solid var(--hairline); border-radius: 8px; padding: 4px 12px;
+    backdrop-filter: blur(6px); white-space: nowrap; }
+</style>
+</head>
+<body>
+<header id="hdr">
+  <h1><span id="status"></span>SuperSynth · flex</h1>
+  <button id="reconnect-btn" title="force reconnect">⟳</button>
+  <div class="grp"><span class="lb">patch</span><select id="patch-sel"></select></div>
+  <div class="grp"><span class="lb">preset</span><select id="preset-sel"></select>
+    <button id="preset-load">load</button>
+    <input type="text" id="preset-name" placeholder="save as">
+    <button id="preset-save">save</button>
+    <button id="preset-del" title="delete selected">✕</button></div>
+  <div class="grp"><button id="play-btn" title="transport play/stop">▶</button>
+    <span class="lb" id="bpm-v">— bpm</span>
+    <input type="range" id="bpm" min="40" max="220" step="1">
+    <select id="meter" title="meter"><option value="2">2/4</option><option value="3">3/4</option>
+      <option value="4" selected>4/4</option><option value="6">6/8</option></select>
+    <label><input type="checkbox" id="click-on">click</label>
+    <span class="lb">pos</span><b id="beat-pos">—</b>
+    <span class="lb">tonic</span><b id="tonic-root" style="font-size:11px">—</b></div>
+  <div class="grp"><span class="lb">master</span>
+    <input type="range" id="vol" min="0" max="1" step="0.001" value="0.8">
+    <div class="mbars"><div id="m-out-l"><div></div></div><div id="m-out-r"><div></div></div></div></div>
+  <div class="grp"><label><input type="checkbox" id="keys-on" checked>keys</label>
+    <b id="oct" style="font-size:11px">C4</b>
+    <b id="caps-note" style="color:var(--danger);font-size:10px"></b></div>
+  <span id="midi-ind">midi: —</span>
+  <button id="tidy" title="compact the layout">⇱ tidy</button>
+  <div class="legend">
+    <span><b style="background:linear-gradient(90deg,#3987e5,#22b8d4)"></b>audio</span>
+    <span><b style="background:linear-gradient(90deg,#1baf7a,#e8c832)"></b>notes</span>
+    <span><b style="background:linear-gradient(90deg,#e34948,#9085e9)"></b>mod</span>
+  </div>
+  <a href="/legacy">legacy gui →</a>
+</header>
+<div id="palette"></div>
+<div id="board"><div id="world">
+  <svg id="wires">
+    <g id="wire-perm"></g>
+    <g id="wire-labels" style="font: 600 8.5px system-ui; text-anchor: middle;"></g>
+    <path id="wire-live" fill="none" stroke-width="2.5" stroke-dasharray="5 5" style="display:none"/>
+  </svg>
+  <svg id="wiretop"></svg>
+</div></div>
+<div class="hint">keys <b>A–;</b> play · <b>Z/X</b> octave · <b>caps</b> sustain · <b>space</b> loop-rec
+  · drag an LFO's ∿ port onto a param handle to assign · click a violet wire to cut</div>
+
+<script>
+"use strict";
+// ============================================================================
+// flex.html — the subway-routed patch canvas from the visual prototype, wired
+// to the REAL synth over the websocket protocol (see synthbase/server.py).
+// Graph nodes/wires are DERIVED from every `state` message; card positions
+// survive rebuilds (and reloads, via localStorage keyed by patch name).
+// ============================================================================
+const GRID = 24, CARD_W = 170, CELL = 12;
+const WORLD_W = 2600, WORLD_H = 1800;
+const COLS = WORLD_W / CELL | 0, ROWS = WORLD_H / CELL | 0;
+
+const FAMILY = {
+  voice: "#3987e5", input: "#1baf7a", filter: "#eda100", time: "#199e70",
+  dirt: "#eb6834", dyn: "#e87ba4", vox: "#e34948", service: "#9085e9",
+  io: "#c3c2b7", ctl: "#1baf7a", source: "#3987e5", effect: "#199e70",
+};
+// subway line palettes — audio owns the cools, notes/control green→yellow,
+// mod the warm+violet half (the population that grows).
+const LINES = {
+  audio: ["#3987e5", "#22b8d4", "#1f9e9e", "#6db1ff", "#4a5fd0", "#7fd4ef"],
+  ctl:   ["#1baf7a", "#8cc63f", "#e8c832", "#4fd08c", "#c9d94d", "#0f8f66"],
+  mod:   ["#e34948", "#f2842c", "#d446b8", "#9085e9", "#e87ba4", "#ff6b5e", "#7a5fd0"],
+};
+const lineCount = {audio: 0, ctl: 0, mod: 0};
+const BASE_R = 9, LANE = 6;
+const LANE_SEQ = [0, -1, 1, -2, 2, -3, 3];
+const SIG_CSS = {audio: "var(--audio)", ctl: "var(--ctl)", mod: "var(--mod)"};
+
+const world = document.getElementById("world");
+const wiresPerm = document.getElementById("wire-perm");
+const wireLive = document.getElementById("wire-live");
+const $ = (id) => document.getElementById(id);
+
+const nodes = new Map();      // gid -> node
+const wires = [];
+let state = null;
+
+// ---------- websocket (legacy's watchdog verbatim) ----------
+let ws = null, lastMsg = 0, reconnectTimer = null;
+function scheduleReconnect(ms) {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(connect, ms);
+}
+function connect() {
+  if (ws && ws.readyState <= 1) return;
+  try {
+    ws = new WebSocket(`ws://${location.host}/ws`);
+  } catch (_) {   // file:// or bad host — keep the page alive, retry later
+    scheduleReconnect(3000);
+    return;
+  }
+  ws.onopen = () => { lastMsg = performance.now(); $("status").classList.add("ok"); };
+  ws.onclose = () => { $("status").classList.remove("ok"); scheduleReconnect(800); };
+  ws.onerror = () => { try { ws.close(); } catch (_) {} };
+  ws.onmessage = (ev) => {
+    lastMsg = performance.now();
+    const m = JSON.parse(ev.data);
+    if (m.type === "state") { state = m; onState(); }
+    else if (m.type === "meters") onMeters(m);
+    else if (m.type === "param") onParam(m);
+    else if (m.type === "midi") onMidi(m.event);
+    else if (m.type === "beat") onBeat(m);
+    else if (m.type === "tonic") $("tonic-root").textContent = m.root || "—";
+    else if (m.type === "scope_data") onScopeData(m);
+    else if (m.type === "error") console.warn("server:", m.message);
+  };
+}
+function send(m) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); }
+function ensureLive() {
+  if (!ws || ws.readyState >= 2) { connect(); return; }
+  if (ws.readyState === 1 && performance.now() - lastMsg > 3000) {
+    $("status").classList.remove("ok");
+    try { ws.close(); } catch (_) {}
+    scheduleReconnect(150);
+  }
+}
+setInterval(() => { if (!document.hidden) ensureLive(); }, 2000);
+window.addEventListener("focus", ensureLive);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) ensureLive(); });
+document.addEventListener("pointerdown", ensureLive, true);
+window.addEventListener("keydown", ensureLive, true);
+$("reconnect-btn").addEventListener("click", (e) => {
+  try { ws && ws.close(); } catch (_) {}
+  scheduleReconnect(100);
+  e.target.blur();
+});
+
+// ---------- unit <-> value curve math (legacy verbatim) ----------
+function fmt(v) {
+  if (v >= 1000) return v.toFixed(0);
+  if (v >= 100) return v.toFixed(1);
+  if (v >= 10) return v.toFixed(2);
+  return v.toFixed(3);
+}
+function toUnit(p, value) {
+  if (p.curve === "exp") {
+    const lo = Math.max(p.min, 1e-6);
+    return Math.log(value / lo) / Math.log(p.max / lo);
+  }
+  return (value - p.min) / (p.max - p.min || 1);
+}
+function fromUnit(p, u) {
+  if (p.curve === "exp") {
+    const lo = Math.max(p.min, 1e-6);
+    return lo * Math.pow(p.max / lo, u);
+  }
+  return p.min + u * (p.max - p.min);
+}
+const timers = {};
+function throttled(key, fn, ms = 30) {
+  if (timers[key]) { timers[key].fn = fn; return; }
+  fn();
+  timers[key] = { fn: null };
+  setTimeout(() => {
+    const pending = timers[key].fn;
+    delete timers[key];
+    if (pending) throttled(key, pending, ms);
+  }, ms);
+}
+
+// ---------- layout persistence ----------
+// positions per patch: {pos: {gid: [x,y]}, monitors: [[gid, type, x, y, expanded]], monN}
+let currentPatch = null, posMem = {}, monN = 1;
+function storeKey(patch) { return "supersynth.flex." + patch; }
+function saveLayout() {
+  if (!currentPatch) return;
+  throttled("savelayout", () => {
+    for (const n of nodes.values()) posMem[n.gid] = [n.x, n.y];
+    const monitors = [...nodes.values()].filter(n => n.persistent && n.montype)
+      .map(n => [n.gid, n.montype, n.x, n.y, !!n.expanded]);
+    try {
+      localStorage.setItem(storeKey(currentPatch),
+        JSON.stringify({pos: posMem, monitors, monN}));
+    } catch (_) {}
+  }, 400);
+}
+function loadLayout(patch) {
+  try {
+    const d = JSON.parse(localStorage.getItem(storeKey(patch)) || "{}");
+    posMem = d.pos || {};
+    monN = d.monN || 1;
+    return d.monitors || [];
+  } catch (_) { posMem = {}; return []; }
+}
+
+// ---------- generic card builder ----------
+function snap(v) { return Math.max(0, Math.round(v / GRID) * GRID); }
+const MIN_X = 8 * GRID, MIN_Y = 3 * GRID;   // header/palette must not swallow cards
+function place(node) {
+  const h = node.el.offsetHeight || 64;
+  node.x = Math.min(WORLD_W - (node.w || CARD_W) - GRID, Math.max(MIN_X, node.x));
+  node.y = Math.min(WORLD_H - h - GRID, Math.max(MIN_Y, node.y));
+  node.el.style.left = node.x + "px"; node.el.style.top = node.y + "px";
+}
+function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+
+// live param widgets, keyed "<gid>.<pname>" — `param` echoes land here
+const uiParam = {};
+let sliderDrag = null;         // id of the track being dragged (blocks echo + rebuild)
+
+function rowSlider(node, pname, opts) {
+  // opts: {unit, text, onUnit, valText(u), mapped}
+  const id = `${node.gid}.${pname}`;
+  const row = document.createElement("div");
+  row.className = "mini" + (opts.mapped ? " mapped" : "");
+  row.innerHTML = `<label title="${esc(pname)}">${esc(pname)}${opts.mapped ? " ∿" : ""}</label>
+    <div class="track"><i></i></div><span class="v"></span>`;
+  const track = row.querySelector(".track"), thumb = track.firstElementChild,
+        vEl = row.querySelector(".v");
+  const setUI = (u, txt) => {
+    thumb.style.left = (Math.min(1, Math.max(0, u)) * 100) + "%";
+    thumb.classList.toggle("zero", u <= 0.02);
+    vEl.textContent = txt;
+  };
+  setUI(opts.unit, opts.text);
+  track.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+    sliderDrag = id;
+    track.setPointerCapture(e.pointerId);
+    const mv = (ev) => {
+      const r = track.getBoundingClientRect();
+      const u = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
+      setUI(u, opts.valText(u));
+      opts.onUnit(u);
+    };
+    mv(e);
+    track.addEventListener("pointermove", mv);
+    const done = () => {
+      track.removeEventListener("pointermove", mv);
+      sliderDrag = null;
+      flushRebuild();
+    };
+    track.addEventListener("pointerup", done, {once: true});
+    track.addEventListener("pointercancel", done, {once: true});
+  });
+  uiParam[id] = setUI;
+  return row;
+}
+function rowChip(node, pname, opts) {
+  // opts: {text, onClick, static}
+  const id = `${node.gid}.${pname}`;
+  const row = document.createElement("div");
+  row.className = "mini";
+  row.innerHTML = `<label title="${esc(pname)}">${esc(pname)}</label>
+    <span class="chip${opts.static ? " static" : ""}"></span>`;
+  const chip = row.querySelector(".chip");
+  chip.textContent = opts.text;
+  chip.addEventListener("pointerdown", (e) => e.stopPropagation());
+  if (opts.onClick) chip.addEventListener("click", () => opts.onClick(chip));
+  uiParam[id] = (u, txt) => { chip.textContent = txt; };
+  return row;
+}
+
+// cfg: {gid, name, short, sub, fam, headCheck:{checked,onChange}|null, kill:fn|null,
+//       rows:[el...], vizHTML, expandable, expanded, persistent, ports:[[dir,sig,label]],
+//       quietRows:[{pname,rowEl}] added after body build}
+function addCard(cfg) {
+  const el = document.createElement("div");
+  el.className = "mod";
+  const stripe = FAMILY[cfg.fam] || "#888";
+  el.innerHTML = `
+    <div class="head"><div class="stripe" style="background:${stripe}"></div>
+      <div><div class="title">${esc(cfg.name)}</div><div class="sub">${esc(cfg.sub || "")}</div></div>
+    </div><div class="body"></div>`;
+  const head = el.querySelector(".head");
+  if (cfg.headCheck) {
+    const cb = document.createElement("input");
+    cb.type = "checkbox"; cb.className = "onoff"; cb.checked = !!cfg.headCheck.checked;
+    cb.title = "enabled";
+    cb.addEventListener("pointerdown", (e) => e.stopPropagation());
+    cb.addEventListener("change", (e) => { cfg.headCheck.onChange(cb.checked); e.target.blur(); });
+    head.appendChild(cb);
+    if (!cfg.headCheck.checked) el.classList.add("bypassed");
+  }
+  if (cfg.expandable) {
+    const ex = document.createElement("span");
+    ex.className = "expander"; ex.textContent = cfg.expanded ? "▾" : "▸";
+    ex.title = "expand";
+    if (!cfg.headCheck) ex.style.marginLeft = "auto";
+    head.appendChild(ex);
+  }
+  if (cfg.kill) {
+    const k = document.createElement("span");
+    k.className = "kill"; k.textContent = "✕"; k.title = "remove";
+    if (!cfg.headCheck && !cfg.expandable) k.style.marginLeft = "auto";
+    head.appendChild(k);
+    k.addEventListener("pointerdown", (e) => e.stopPropagation());
+    k.addEventListener("click", () => cfg.kill(node));
+  }
+  const body = el.querySelector(".body");
+  for (const r of (cfg.rows || [])) body.appendChild(r);
+  if (cfg.vizHTML) {
+    const vs = document.createElement("div");
+    vs.className = "viz-sec";
+    vs.innerHTML = cfg.vizHTML;
+    el.appendChild(vs);
+    if (cfg.expandable && !cfg.expanded) vs.style.display = "none";
+  }
+  world.appendChild(el);
+  const node = {gid: cfg.gid, name: cfg.name, short: cfg.short || cfg.name.split(" ")[0],
+                fam: cfg.fam, x: 0, y: 0, el, ports: [], w: CARD_W,
+                expanded: !!cfg.expanded, persistent: !!cfg.persistent,
+                montype: cfg.montype || null, seed: !!cfg.seed, mod: cfg.mod || null};
+  if (cfg.expandable) {
+    const ex = el.querySelector(".expander"), vs = el.querySelector(".viz-sec");
+    ex.addEventListener("pointerdown", (e) => e.stopPropagation());
+    ex.addEventListener("click", (e) => {
+      e.stopPropagation();
+      node.expanded = !node.expanded;
+      ex.textContent = node.expanded ? "▾" : "▸";
+      if (vs) vs.style.display = node.expanded ? "" : "none";
+      node.w = (node.expanded && cfg.wide) ? 240 : CARD_W;   // drum grid needs finger room
+      el.style.width = node.w + "px";
+      requestAnimationFrame(() => { layoutPorts(node); rebuildObstacles(); rerouteAll(); });
+      saveLayout();
+    });
+    if (node.expanded && cfg.wide) { node.w = 240; el.style.width = "240px"; }
+  }
+  // primary ports
+  for (const [dir, sig, label] of (cfg.ports || [])) {
+    const p = document.createElement("div");
+    p.className = `port ${dir}`;
+    p.dataset.sig = sig; p.dataset.label = label;
+    p.style.color = SIG_CSS[sig];
+    node.ports.push({dir, sig, label, el: p});
+    el.appendChild(p);
+  }
+  // quiet mod-target handles on param rows
+  for (const q of (cfg.quietRows || [])) {
+    const p = document.createElement("div");
+    p.className = "port in quiet";
+    p.dataset.sig = "mod"; p.dataset.label = q.pname;
+    p.style.color = SIG_CSS.mod;
+    node.ports.push({dir: "in", sig: "mod", label: q.pname, param: q.pname,
+                     quiet: true, rowEl: q.rowEl, el: p});
+    el.appendChild(p);
+  }
+  nodes.set(node.gid, node);
+  bindNode(node);
+  return node;
+}
+function removeNode(node) {
+  for (const w of [...wires])
+    if (w.from.node === node || w.to.node === node) removeWire(w);
+  node.el.remove();
+  nodes.delete(node.gid);
+}
+
+// ---------- ports geometry (prototype verbatim) ----------
+const NORMALS = {top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0]};
+function layoutPorts(node) {
+  const h = node.el.offsetHeight || 64;
+  for (const p of node.ports.filter(q => q.quiet)) {
+    p.edge = "left";
+    p.el.classList.add("e-left");
+    p.ox = 0;
+    p.oy = p.rowEl ? p.rowEl.offsetTop + p.rowEl.offsetHeight / 2 : h / 2;
+    p.el.style.left = (p.ox - 3.5) + "px";
+    p.el.style.top = (p.oy - 3.5) + "px";
+  }
+  const groups = {
+    top:    node.ports.filter(p => !p.quiet && p.sig !== "mod" && p.dir === "in"),
+    bottom: node.ports.filter(p => !p.quiet && p.sig !== "mod" && p.dir === "out"),
+    left:   node.ports.filter(p => !p.quiet && p.sig === "mod" && p.dir === "in"),
+    right:  node.ports.filter(p => !p.quiet && p.sig === "mod" && p.dir === "out"),
+  };
+  for (const [edge, list] of Object.entries(groups)) list.forEach((p, i) => {
+    p.edge = edge;
+    p.el.classList.remove("e-top", "e-bottom", "e-left", "e-right");
+    p.el.classList.add("e-" + edge);
+    p.el.classList.toggle("subtle", p.sig === "mod");
+    const half = p.sig === "mod" ? 4.5 : 6;
+    if (edge === "top" || edge === "bottom") {
+      const cw = node.w || CARD_W;
+      let x = cw * (i + 1) / (list.length + 1);
+      x = Math.round((node.x + x) / CELL) * CELL - node.x;   // on a routing lane
+      x = Math.min(cw - 10, Math.max(10, x));
+      p.ox = x; p.oy = edge === "top" ? 0 : h;
+    } else {
+      let y = h * (i + 1) / (list.length + 1);
+      y = Math.round((node.y + y) / CELL) * CELL - node.y;
+      y = Math.min(h - 8, Math.max(8, y));
+      p.ox = edge === "left" ? 0 : (node.w || CARD_W); p.oy = y;
+    }
+    p.el.style.left = (p.ox - half) + "px";
+    p.el.style.top = (p.oy - half) + "px";
+  });
+}
+function portXY(node, port) { return [node.x + port.ox, node.y + port.oy]; }
+function portNormal(port) {
+  return NORMALS[port.edge || (port.dir === "out" ? "bottom" : "top")];
+}
+
+// ---------- obstacle map + A* router (prototype verbatim) ----------
+let obst = new Uint8Array(COLS * ROWS);
+const core = new Uint8Array(COLS * ROWS);
+function rebuildObstacles(skip) {
+  obst.fill(0); core.fill(0);
+  for (const n of nodes.values()) {
+    if (n === skip) continue;
+    const h = n.el.offsetHeight || 64;
+    const mark = (pad, g) => {
+      const x0 = Math.max(0, (n.x - pad) / CELL | 0), y0 = Math.max(0, (n.y - pad) / CELL | 0);
+      const x1 = Math.min(COLS - 1, Math.ceil((n.x + (n.w || CARD_W) + pad) / CELL));
+      const y1 = Math.min(ROWS - 1, Math.ceil((n.y + h + pad) / CELL));
+      for (let cy = y0; cy <= y1; cy++)
+        for (let cx = x0; cx <= x1; cx++) g[cy * COLS + cx] = 1;
+    };
+    mark(6, obst); mark(-2, core);
+  }
+  for (const n of nodes.values()) {
+    if (n === skip) continue;
+    for (const p of n.ports) {
+      const [px, py] = portXY(n, p);
+      const [nx, ny] = portNormal(p);
+      for (let k = 0; k < 3; k++) {
+        const cx = Math.round((px + nx * (6 + k * CELL)) / CELL);
+        const cy = Math.round((py + ny * (6 + k * CELL)) / CELL);
+        if (cx < 0 || cy < 0 || cx >= COLS || cy >= ROWS) continue;
+        const i = cy * COLS + cx;
+        if (!core[i]) obst[i] = 0;
+      }
+    }
+  }
+}
+const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+function freeNear(cx, cy, g) {
+  if (!g[cy * COLS + cx]) return [cx, cy];
+  for (let r = 1; r < 8; r++)
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      const x = cx + dx, y = cy + dy;
+      if (x >= 0 && y >= 0 && x < COLS && y < ROWS && !g[y * COLS + x]) return [x, y];
+    }
+  return [cx, cy];
+}
+function astar(sx, sy, tx, ty, grid = obst) {
+  [sx, sy] = freeNear(sx, sy, grid); [tx, ty] = freeNear(tx, ty, grid);
+  const N = COLS * ROWS;
+  const g = new Float32Array(N * 4).fill(Infinity);
+  const prev = new Int32Array(N * 4).fill(-1);
+  const heap = [];
+  const push = (f, s) => { heap.push([f, s]); let i = heap.length - 1;
+    while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break;
+      [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
+  const pop = () => { const top = heap[0], last = heap.pop();
+    if (heap.length) { heap[0] = last; let i = 0;
+      for (;;) { const l = 2 * i + 1, r = l + 1; let m = i;
+        if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+        if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+        if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } }
+    return top; };
+  const h = (x, y) => Math.abs(x - tx) + Math.abs(y - ty);
+  const TURN = 9;
+  for (let d = 0; d < 4; d++) { const s = (sy * COLS + sx) * 4 + d; g[s] = 0; push(h(sx, sy), s); }
+  let goal = -1;
+  while (heap.length) {
+    const [f, s] = pop();
+    const d = s & 3, cell = s >> 2, cx = cell % COLS, cy = (cell / COLS) | 0;
+    if (f - h(cx, cy) > g[s]) continue;
+    if (cx === tx && cy === ty) { goal = s; break; }
+    for (let nd = 0; nd < 4; nd++) {
+      const nx = cx + DIRS[nd][0], ny = cy + DIRS[nd][1];
+      if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+      if (grid[ny * COLS + nx] && !(nx === tx && ny === ty)) continue;
+      const ns = (ny * COLS + nx) * 4 + nd;
+      const cost = g[s] + 1 + (nd !== d ? TURN : 0);
+      if (cost < g[ns]) { g[ns] = cost; prev[ns] = s; push(cost + h(nx, ny), ns); }
+    }
+  }
+  if (goal < 0) return null;
+  const pts = [];
+  for (let s = goal; s >= 0; s = prev[s]) {
+    const cell = s >> 2;
+    pts.push([(cell % COLS) * CELL, ((cell / COLS) | 0) * CELL]);
+  }
+  pts.reverse();
+  return simplify(pts);
+}
+function simplify(pts) {
+  const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [a, b, c] = [out[out.length - 1], pts[i], pts[i + 1]];
+    if ((a[0] === b[0] && b[0] === c[0]) || (a[1] === b[1] && b[1] === c[1])) continue;
+    out.push(b);
+  }
+  out.push(pts[pts.length - 1]);
+  return out;
+}
+
+// ---------- wire geometry: lanes, fan-out, labels (prototype verbatim) ----------
+function attachOffset(w, port) {
+  const mates = wires.filter(v => v.from.port === port || v.to.port === port);
+  if (mates.length < 2) return 0;
+  const [nx, ny] = portNormal(port);
+  const lateral = (v) => {
+    const other = v.from.port === port ? v.to : v.from;
+    const [ox, oy] = portXY(other.node, other.port);
+    return ny !== 0 ? ox : oy;
+  };
+  mates.sort((a, b) => lateral(a) - lateral(b) || a.seq - b.seq);
+  const k = mates.indexOf(w);
+  return (k - (mates.length - 1) / 2) * (CELL / 2);
+}
+function routeWire(w, grid) {
+  const [nx1, ny1] = portNormal(w.from.port);
+  const [nx2, ny2] = portNormal(w.to.port);
+  let [x1, y1] = portXY(w.from.node, w.from.port);
+  let [x2, y2] = portXY(w.to.node, w.to.port);
+  const o1 = attachOffset(w, w.from.port), o2 = attachOffset(w, w.to.port);
+  x1 += -ny1 * o1; y1 += nx1 * o1;
+  x2 += -ny2 * o2; y2 += nx2 * o2;
+  const S = 16;
+  const s = [x1 + nx1 * S, y1 + ny1 * S], t = [x2 + nx2 * S, y2 + ny2 * S];
+  const sc = [Math.round(s[0] / CELL), Math.round(s[1] / CELL)];
+  const tc = [Math.round(t[0] / CELL), Math.round(t[1] / CELL)];
+  let pts = astar(sc[0], sc[1], tc[0], tc[1], grid);
+  if (!pts && grid && grid !== obst) pts = astar(sc[0], sc[1], tc[0], tc[1], obst);
+  if (!pts)
+    pts = [[sc[0] * CELL, sc[1] * CELL], [tc[0] * CELL, sc[1] * CELL], [tc[0] * CELL, tc[1] * CELL]];
+  const j1 = ny1 !== 0 ? [pts[0][0], s[1]] : [s[0], pts[0][1]];
+  const j2 = ny2 !== 0 ? [pts[pts.length - 1][0], t[1]] : [t[0], pts[pts.length - 1][1]];
+  pts = dedupe([[x1, y1], s, j1, ...pts, j2, t, [x2, y2]]);
+  pts = alignPortRun(dejag(pts));
+  w.pts = pts;
+  w.o1 = o1; w.o2 = o2;
+}
+function alignPortRun(pts) {
+  const fix = (p) => {
+    if (p.length < 5) return p;
+    const [x0, y0] = p[0];
+    const vert = p[1][0] === x0 && p[1][1] !== y0;
+    if (vert) {
+      if (p[2][1] === p[1][1] && Math.abs(p[2][0] - x0) <= CELL * 0.75 &&
+          p[3][0] === p[2][0] && p.length > 4) {
+        p[2] = [x0, p[2][1]]; p[3] = [x0, p[3][1]];
+      }
+    } else {
+      if (p[2][0] === p[1][0] && Math.abs(p[2][1] - y0) <= CELL * 0.75 &&
+          p[3][1] === p[2][1] && p.length > 4) {
+        p[2] = [p[2][0], y0]; p[3] = [p[3][0], y0];
+      }
+    }
+    return p;
+  };
+  let out = fix(pts.map(q => [...q]));
+  out = fix(out.reverse()).reverse();
+  return dedupe(out);
+}
+function dejag(pts) {
+  for (let pass = 0; pass < 4; pass++) {
+    let changed = false;
+    for (let i = 2; i + 2 <= pts.length - 3; i++) {
+      const a = pts[i - 1], b = pts[i], c = pts[i + 1], d = pts[i + 2];
+      const midLen = Math.abs(c[0] - b[0]) + Math.abs(c[1] - b[1]);
+      if (midLen === 0 || midLen > CELL + 0.5) continue;
+      const prevH = a[1] === b[1], nextH = c[1] === d[1];
+      if (prevH !== nextH) continue;
+      const lp = Math.abs(b[0] - a[0]) + Math.abs(b[1] - a[1]);
+      const ln = Math.abs(d[0] - c[0]) + Math.abs(d[1] - c[1]);
+      if (prevH) {
+        const y = lp >= ln ? a[1] : d[1];
+        if (y === a[1]) pts[i + 2] = [d[0], y]; else pts[i - 1] = [a[0], y];
+      } else {
+        const x = lp >= ln ? a[0] : d[0];
+        if (x === a[0]) pts[i + 2] = [x, d[1]]; else pts[i - 1] = [x, a[1]];
+      }
+      pts.splice(i, 2);
+      changed = true; i--;
+    }
+    if (!changed) break;
+  }
+  return dedupe(pts);
+}
+function offsetPath(pts, o) {
+  if (!o || pts.length < 3) return pts.slice();
+  const n = pts.length - 1;
+  const segs = [];
+  for (let i = 0; i < n; i++) {
+    const dx = Math.sign(pts[i + 1][0] - pts[i][0]);
+    const dy = Math.sign(pts[i + 1][1] - pts[i][1]);
+    const horiz = dy === 0;
+    let c = horiz ? pts[i][1] : pts[i][0];
+    if (i > 0 && i < n - 1) c += horiz ? -dx * o : dy * o;
+    segs.push({horiz, c});
+  }
+  const out = [pts[0]];
+  for (let i = 0; i < n - 1; i++) {
+    const a = segs[i], b = segs[i + 1];
+    if (a.horiz === b.horiz) continue;
+    out.push(a.horiz ? [b.c, a.c] : [a.c, b.c]);
+  }
+  out.push(pts[n]);
+  return dedupe(out);
+}
+function roundedPathNested(pts, o) {
+  if (pts.length < 2) return "";
+  let d = `M${pts[0][0]},${pts[0][1]}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [px, py] = pts[i - 1], [cx, cy] = pts[i], [nx, ny] = pts[i + 1];
+    const u = [Math.sign(cx - px), Math.sign(cy - py)];
+    const v = [Math.sign(nx - cx), Math.sign(ny - cy)];
+    const turn = u[0] * v[1] - u[1] * v[0];
+    let r = BASE_R + turn * o;
+    r = Math.max(1.5, Math.min(r, Math.hypot(cx - px, cy - py) / 2,
+                                  Math.hypot(nx - cx, ny - cy) / 2));
+    const inx = cx - u[0] * r, iny = cy - u[1] * r;
+    const outx = cx + v[0] * r, outy = cy + v[1] * r;
+    d += ` L${inx},${iny} Q${cx},${cy} ${outx},${outy}`;
+  }
+  d += ` L${pts[pts.length - 1][0]},${pts[pts.length - 1][1]}`;
+  return d;
+}
+function roundedPath(pts) {
+  if (pts.length < 2) return "";
+  let d = `M${pts[0][0]},${pts[0][1]}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [px, py] = pts[i - 1], [cx, cy] = pts[i], [nx, ny] = pts[i + 1];
+    const r = Math.min(6, Math.hypot(cx - px, cy - py) / 2, Math.hypot(nx - cx, ny - cy) / 2);
+    const inx = cx - Math.sign(cx - px) * r, iny = cy - Math.sign(cy - py) * r;
+    const outx = cx + Math.sign(nx - cx) * r, outy = cy + Math.sign(ny - cy) * r;
+    d += ` L${inx},${iny} Q${cx},${cy} ${outx},${outy}`;
+  }
+  d += ` L${pts[pts.length - 1][0]},${pts[pts.length - 1][1]}`;
+  return d;
+}
+function drawWire(w) {
+  const o = w.lane * LANE;
+  const pts = offsetPath(w.pts, o);
+  w.dpts = pts;
+  const d = roundedPathNested(pts, o);
+  w.el.setAttribute("d", d);
+  w.hitEl.setAttribute("d", d);
+  w.flow.setAttribute("d", d);
+  const ends = [[w.dotA, pts[0], w.o1], [w.dotB, pts[pts.length - 1], w.o2]];
+  for (const [dot, p, off] of ends) {
+    dot.style.display = off ? "" : "none";
+    dot.setAttribute("cx", p[0]); dot.setAttribute("cy", p[1]);
+  }
+}
+function labelGeom(w) {
+  const dst = w.to.port.quiet
+    ? `${w.to.node.short}.${w.to.port.param}` : w.to.node.short;
+  const txt = `${w.from.node.short} → ${dst}`;
+  return {txt, wpx: txt.length * 4.9 + 12};
+}
+function applyLabel(w, mx, my, horiz, txt, wpx) {
+  w.labelG.style.display = "";
+  w.labelG.setAttribute("transform", horiz ? "" : `rotate(-90 ${mx} ${my})`);
+  w.labelT.textContent = txt;
+  w.labelR.setAttribute("x", mx - wpx / 2); w.labelR.setAttribute("width", wpx);
+  w.labelR.setAttribute("y", my - 7);
+  w.labelR.setAttribute("fill", w.color);
+  w.labelT.setAttribute("x", mx); w.labelT.setAttribute("y", my + 2.8);
+}
+function boxHitsWires(box, self) {
+  for (const v of wires) {
+    if (v === self || !v.dpts) continue;
+    for (let i = 0; i < v.dpts.length - 1; i++) {
+      const [a, b] = [v.dpts[i], v.dpts[i + 1]];
+      const x0 = Math.min(a[0], b[0]) - 3, x1 = Math.max(a[0], b[0]) + 3;
+      const y0 = Math.min(a[1], b[1]) - 3, y1 = Math.max(a[1], b[1]) + 3;
+      if (x0 < box[2] && box[0] < x1 && y0 < box[3] && box[1] < y1) return true;
+    }
+  }
+  return false;
+}
+function labelPass() {
+  const placed = [];
+  const PAD = 8;
+  const hit = (a, b) => a[0] < b[2] + PAD && b[0] < a[2] + PAD &&
+                        a[1] < b[3] + PAD && b[1] < a[3] + PAD;
+  for (const w of wires) {
+    const pts = w.dpts || w.pts;
+    const {txt, wpx} = labelGeom(w);
+    const segs = [];
+    for (let i = 0; i < pts.length - 1; i++)
+      segs.push({i, len: Math.abs(pts[i + 1][0] - pts[i][0]) + Math.abs(pts[i + 1][1] - pts[i][1])});
+    segs.sort((a, b) => b.len - a.len);
+    w.labelBox = null;
+    outer: for (const strict of [true, false]) {
+      for (const sg of segs.slice(0, 4)) {
+        if (sg.len < wpx + 14) break;
+        const a = pts[sg.i], b = pts[sg.i + 1], horiz = a[1] === b[1];
+        for (const f of [0.5, 0.35, 0.65, 0.22, 0.78]) {
+          const mx = a[0] + (b[0] - a[0]) * f, my = a[1] + (b[1] - a[1]) * f;
+          const box = horiz ? [mx - wpx / 2, my - 8, mx + wpx / 2, my + 8]
+                            : [mx - 8, my - wpx / 2, mx + 8, my + wpx / 2];
+          if (placed.some(r => hit(r, box))) continue;
+          if (strict && boxHitsWires(box, w)) continue;
+          applyLabel(w, mx, my, horiz, txt, wpx);
+          w.labelBox = box; placed.push(box);
+          break outer;
+        }
+      }
+    }
+    if (!w.labelBox) w.labelG.style.display = "none";
+  }
+}
+function stampRect(g, box, pad) {
+  const x0 = Math.max(0, (box[0] - pad) / CELL | 0), y0 = Math.max(0, (box[1] - pad) / CELL | 0);
+  const x1 = Math.min(COLS - 1, Math.ceil((box[2] + pad) / CELL));
+  const y1 = Math.min(ROWS - 1, Math.ceil((box[3] + pad) / CELL));
+  for (let cy = y0; cy <= y1; cy++)
+    for (let cx = x0; cx <= x1; cx++) g[cy * COLS + cx] = 1;
+}
+
+// ---------- corridor-aware coloring (prototype verbatim) ----------
+function hueOf(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = (n >> 16) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  if (!d) return 0;
+  let h = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return h * 60;
+}
+const HUES = Object.fromEntries(Object.entries(LINES).map(([k, v]) => [k, v.map(hueOf)]));
+function hueDist(a, b) { const d = Math.abs(a - b) % 360; return Math.min(d, 360 - d); }
+function segsOf(w) {
+  const out = [];
+  for (let i = 0; i < (w.pts?.length || 1) - 1; i++) {
+    const [ax, ay] = w.pts[i], [bx, by] = w.pts[i + 1];
+    if (ay === by) out.push({h: 1, c: ay, a: Math.min(ax, bx), b: Math.max(ax, bx)});
+    else out.push({h: 0, c: ax, a: Math.min(ay, by), b: Math.max(ay, by)});
+  }
+  return out;
+}
+function sharesCorridor(sa, sb) {
+  for (const x of sa) for (const y of sb) {
+    if (x.h !== y.h || Math.abs(x.c - y.c) > 9) continue;
+    if (Math.min(x.b, y.b) - Math.max(x.a, y.a) >= 24) return true;
+  }
+  return false;
+}
+function assignLayout() {
+  const seg = new Map(wires.map(w => [w, segsOf(w)]));
+  const conflict = new Map(wires.map(w => [w, []]));
+  for (let i = 0; i < wires.length; i++)
+    for (let j = i + 1; j < wires.length; j++)
+      if (sharesCorridor(seg.get(wires[i]), seg.get(wires[j]))) {
+        conflict.get(wires[i]).push(wires[j]);
+        conflict.get(wires[j]).push(wires[i]);
+      }
+  const order = [...wires].sort((a, b) =>
+    conflict.get(b).length - conflict.get(a).length || a.seq - b.seq);
+  const done = new Set();
+  for (const w of order) {
+    const nbs = conflict.get(w).filter(n => done.has(n));
+    const usedLanes = new Set(nbs.map(n => n.lane));
+    w.lane = LANE_SEQ.find(l => !usedLanes.has(l)) ?? ((w.seq % 7) - 3);
+    const sig = w.from.port.sig, pal = LINES[sig], hues = HUES[sig];
+    let bestI = w.famIndex % pal.length, bestScore = -1;
+    for (let i = 0; i < pal.length; i++) {
+      let minD = 999;
+      for (const nb of nbs) minD = Math.min(minD, hueDist(hues[i], nb.hue));
+      const score = minD + (i === w.famIndex % pal.length ? 0.5 : 0);
+      if (score > bestScore) { bestScore = score; bestI = i; }
+    }
+    w.color = pal[bestI]; w.hue = hues[bestI];
+    w.el.setAttribute("stroke", w.color);
+    done.add(w);
+  }
+}
+function dedupe(pts) {
+  const out = [pts[0]];
+  for (const p of pts.slice(1)) {
+    const q = out[out.length - 1];
+    if (p[0] !== q[0] || p[1] !== q[1]) out.push(p);
+  }
+  return simplify(out);
+}
+
+// ---------- wires ----------
+// opts.cut: a callback makes the wire clickable (v1: only LFO wires — chain and
+// control wiring is server truth, cutting them here would just lie)
+function addWire(from, to, opts = {}) {
+  if (!from.port || !to.port) return null;
+  if (wires.some(w => w.from.port === from.port && w.to.port === to.port)) return null;
+  const sig = from.port.sig;
+  const n = lineCount[sig]++;
+  const color = LINES[sig][n % LINES[sig].length];
+  const seq = wires.length;
+  const NS = "http://www.w3.org/2000/svg";
+  const el = document.createElementNS(NS, "path");
+  el.setAttribute("fill", "none");
+  el.setAttribute("stroke", color);
+  el.setAttribute("stroke-width", "2.6");
+  el.setAttribute("stroke-linecap", "round");
+  const hit = document.createElementNS(NS, "path");
+  hit.setAttribute("fill", "none"); hit.setAttribute("stroke", "transparent");
+  hit.setAttribute("stroke-width", "13"); hit.classList.add("hit");
+  const flow = document.createElementNS(NS, "path");
+  flow.classList.add("flow");
+  flow.style.display = "none";
+  const dotA = document.createElementNS(NS, "circle");
+  const dotB = document.createElementNS(NS, "circle");
+  for (const d of [dotA, dotB]) {
+    d.setAttribute("r", 2.8); d.setAttribute("fill", color);
+    d.setAttribute("stroke", "#0d0d0d"); d.setAttribute("stroke-width", 1);
+    d.style.display = "none";
+  }
+  const labelG = document.createElementNS(NS, "g");
+  const labelR = document.createElementNS(NS, "rect");
+  labelR.setAttribute("height", 14); labelR.setAttribute("rx", 7);
+  labelR.setAttribute("fill-opacity", "0.82");
+  const labelT = document.createElementNS(NS, "text");
+  labelT.setAttribute("fill", "#0d0d0d");
+  labelG.appendChild(labelR); labelG.appendChild(labelT);
+  $("wire-labels").appendChild(labelG);
+  const w = {from, to, sig, color, hue: hueOf(color), famIndex: n, seq,
+             lane: 0, el, hitEl: hit, flow, dotA, dotB, labelG, labelR, labelT,
+             lfoId: opts.lfoId || null};
+  if (opts.cut) {
+    hit.classList.add("cuttable");
+    hit.addEventListener("click", () => opts.cut(w));
+  }
+  wiresPerm.appendChild(el); wiresPerm.appendChild(hit);
+  wiresPerm.appendChild(flow);
+  const top = $("wiretop");
+  top.appendChild(dotA); top.appendChild(dotB);
+  wires.push(w);
+  // ports get their offsets in layoutPorts — a wire added mid-rebuild (before
+  // the rAF layout pass) must wait for rerouteAll or it paints NaN paths
+  if (from.port.ox !== undefined && to.port.ox !== undefined) {
+    routeWire(w); drawWire(w);
+  }
+  return w;
+}
+function removeWire(w) {
+  w.el.remove(); w.hitEl.remove(); w.labelG.remove();
+  w.flow.remove(); w.dotA.remove(); w.dotB.remove();
+  const i = wires.indexOf(w);
+  if (i >= 0) wires.splice(i, 1);
+}
+function rerouteAll() {
+  rebuildObstacles();
+  for (const w of wires) routeWire(w);
+  assignLayout();
+  for (const w of wires) drawWire(w);
+  labelPass();
+  // pass 2: contour around other lines' labels (walls only in open space)
+  const stampable = new Map();
+  for (const v of wires) {
+    if (!v.labelBox) continue;
+    const b = v.labelBox, vert = (b[3] - b[1]) > (b[2] - b[0]);
+    let clear = 0;
+    for (const side of [-1, 1]) {
+      let ok = true;
+      if (vert) {
+        const cx = ((side < 0 ? b[0] : b[2]) / CELL | 0) + side * 2;
+        for (let cy = (b[1] / CELL | 0); cy <= Math.ceil(b[3] / CELL); cy++)
+          if (cx < 0 || cx >= COLS || obst[cy * COLS + cx]) { ok = false; break; }
+      } else {
+        const cy = ((side < 0 ? b[1] : b[3]) / CELL | 0) + side * 2;
+        for (let cx = (b[0] / CELL | 0); cx <= Math.ceil(b[2] / CELL); cx++)
+          if (cy < 0 || cy >= ROWS || obst[cy * COLS + cx]) { ok = false; break; }
+      }
+      if (ok) clear++;
+    }
+    stampable.set(v, clear === 2);
+  }
+  for (const w of wires) {
+    const g = obst.slice();
+    for (const v of wires) {
+      if (v === w || !v.labelBox || !stampable.get(v)) continue;
+      if (v.from.node === w.from.node || v.to.node === w.from.node ||
+          v.from.node === w.to.node || v.to.node === w.to.node) continue;
+      stampRect(g, v.labelBox, 2);
+    }
+    routeWire(w, g);
+  }
+  for (const w of wires) drawWire(w);
+  labelPass();
+}
+function rerouteFor(node) {
+  for (const w of wires)
+    if (w.from.node === node || w.to.node === node) { routeWire(w); drawWire(w); }
+  labelPass();
+}
+
+// ---------- min separation / make-space / tidy (prototype verbatim) ----------
+function cardRect(n) { const h = n.el.offsetHeight || 64; return [n.x, n.y, n.x + (n.w || CARD_W), n.y + h]; }
+function overlapsAny(node) {
+  const [ax0, ay0, ax1, ay1] = cardRect(node);
+  for (const o of nodes.values()) {
+    if (o === node) continue;
+    const [bx0, by0, bx1, by1] = cardRect(o);
+    if (ax0 < bx1 + GRID && bx0 < ax1 + GRID && ay0 < by1 + GRID && by0 < ay1 + GRID)
+      return true;
+  }
+  return false;
+}
+const rectsClose = (a, b, m) => a[0] < b[2] + m && b[0] < a[2] + m &&
+                                a[1] < b[3] + m && b[1] < a[3] + m;
+const rcenter = (r) => [(r[0] + r[2]) / 2, (r[1] + r[3]) / 2];
+function makeSpacePreview(node) {
+  if (!drag) return;
+  drag.shifted = drag.shifted || new Map();
+  for (const [n, [ox, oy]] of drag.shifted) { n.x = ox; n.y = oy; }
+  const orig = new Map([...nodes.values()].map(n => [n, [n.x, n.y]]));
+  const pos = new Map(orig);
+  const rectOf = (n) => {
+    const [px, py] = pos.get(n), h = n.el.offsetHeight || 64;
+    return [px, py, px + (n.w || CARD_W), py + h];
+  };
+  const victims = [...nodes.values()].filter(n =>
+    n !== node && rectsClose(rectOf(n), rectOf(node), GRID - 1));
+  if (victims.length) {
+    const c = rcenter(rectOf(node));
+    const vc = rcenter(rectOf(victims.sort((a, b) =>
+      Math.hypot(...rcenter(rectOf(a)).map((v, i) => v - c[i])) -
+      Math.hypot(...rcenter(rectOf(b)).map((v, i) => v - c[i])))[0]));
+    const axis = Math.abs(vc[0] - c[0]) > Math.abs(vc[1] - c[1]) ? 0 : 1;
+    const pushers = new Set([node]);
+    for (let iter = 0; iter < 12; iter++) {
+      let any = false;
+      for (const p of [...pushers]) {
+        const rp = rectOf(p);
+        for (const n of nodes.values()) {
+          if (n === p || n === node) continue;
+          const rn = rectOf(n);
+          if (!rectsClose(rp, rn, GRID - 1)) continue;
+          const s = rcenter(rn)[axis] >= rcenter(rp)[axis] ? 1 : -1;
+          let d = axis === 1
+            ? (s > 0 ? rp[3] + GRID - rn[1] : -(rn[3] + GRID - rp[1]))
+            : (s > 0 ? rp[2] + GRID - rn[0] : -(rn[2] + GRID - rp[0]));
+          d = Math.sign(d) * Math.ceil(Math.abs(d) / GRID) * GRID;
+          if (!d) continue;
+          const [px, py] = pos.get(n);
+          pos.set(n, axis === 1 ? [px, py + d] : [px + d, py]);
+          pushers.add(n);
+          any = true;
+        }
+      }
+      if (!any) break;
+    }
+  }
+  const newShift = new Map();
+  for (const n of nodes.values()) {
+    if (n === node) continue;
+    const [ox, oy] = orig.get(n), [nx2, ny2] = pos.get(n);
+    if (nx2 !== ox || ny2 !== oy) {
+      newShift.set(n, [ox, oy]);
+      n.x = nx2; n.y = ny2;
+      n.el.classList.add("shifting"); place(n);
+    } else if (drag.shifted.has(n)) {
+      place(n);
+    }
+  }
+  drag.shifted = newShift;
+}
+// splice highlight is kept from the prototype but the ACTION is off in v1:
+// dropping a card on a chain wire can't reorder the server chain meaningfully
+// (edit_chain add only appends; move is index-relative) — so it only telegraphs.
+function updateSpliceTarget(node) {
+  if (!drag) return;
+  const R = cardRect(node);
+  let best = null, bestD = 1e9;
+  for (const w of wires) {
+    if (w.from.node === node || w.to.node === node) continue;
+    if (w.sig !== "audio") continue;
+    const pts = w.dpts || w.pts;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const x0 = Math.min(pts[i][0], pts[i + 1][0]), x1 = Math.max(pts[i][0], pts[i + 1][0]);
+      const y0 = Math.min(pts[i][1], pts[i + 1][1]), y1 = Math.max(pts[i][1], pts[i + 1][1]);
+      if (x0 < R[2] && R[0] < x1 && y0 < R[3] && R[1] < y1) {
+        const c = rcenter(R);
+        const d = Math.abs((x0 + x1) / 2 - c[0]) + Math.abs((y0 + y1) / 2 - c[1]);
+        if (d < bestD) { bestD = d; best = w; }
+      }
+    }
+  }
+  if (drag.spliceTarget && drag.spliceTarget !== best)
+    drag.spliceTarget.el.classList.remove("splice-hi");
+  drag.spliceTarget = best;
+  if (best) best.el.classList.add("splice-hi");
+}
+function compactLayout() {
+  const list = [...nodes.values()];
+  const gap = 2 * GRID;
+  const fits = (node, x, y, placed) => {
+    const h = node.el.offsetHeight || 64, w = node.w || CARD_W;
+    return !placed.some(p => {
+      const ph = p.el.offsetHeight || 64, pw = p.w || CARD_W;
+      return rectsClose([x, y, x + w, y + h], [p.x, p.y, p.x + pw, p.y + ph], gap - 1);
+    });
+  };
+  let placed = [];
+  for (const n of [...list].sort((a, b) => a.y - b.y || a.x - b.x)) {
+    while (n.y - GRID >= MIN_Y && fits(n, n.x, n.y - GRID, placed)) n.y -= GRID;
+    placed.push(n);
+  }
+  placed = [];
+  for (const n of [...list].sort((a, b) => a.x - b.x || a.y - b.y)) {
+    while (n.x - GRID >= MIN_X && fits(n, n.x - GRID, n.y, placed)) n.x -= GRID;
+    placed.push(n);
+  }
+  for (const n of list) {
+    n.el.classList.add("shifting");
+    place(n);
+    setTimeout(() => n.el.classList.remove("shifting"), 220);
+  }
+  requestAnimationFrame(() => {
+    for (const n of nodes.values()) layoutPorts(n);
+    rerouteAll();
+    saveLayout();
+  });
+}
+$("tidy").addEventListener("click", (e) => { compactLayout(); e.target.blur(); });
+function enforceSeparation(node) {
+  if (!overlapsAny(node)) return;
+  const ox = node.x, oy = node.y;
+  for (let r = 1; r < 40; r++)
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+      // clamp BEFORE the overlap test — place() clamps too, and a candidate
+      // that only looked free outside the workspace would snap back onto
+      // whatever card it was fleeing
+      node.x = Math.max(MIN_X, ox + dx * GRID); node.y = Math.max(MIN_Y, oy + dy * GRID);
+      if (!overlapsAny(node)) { place(node); return; }
+    }
+  node.x = ox; node.y = oy; place(node);
+}
+
+// ---------- card drag + LFO patching gesture ----------
+let drag = null, patchDrag = null, dragRaf = 0;
+function bindNode(node) {
+  const head = node.el.querySelector(".head");
+  head.addEventListener("pointerdown", (e) => {
+    if (e.target.classList.contains("kill") || e.target.classList.contains("onoff") ||
+        e.target.classList.contains("expander")) return;
+    drag = {node, dx: e.pageX - node.x, dy: e.pageY - node.y};
+    node.el.classList.add("dragging");
+    head.setPointerCapture(e.pointerId);
+  });
+  head.addEventListener("pointermove", (e) => {
+    if (!drag || drag.node !== node) return;
+    node.x = snap(e.pageX - drag.dx); node.y = snap(e.pageY - drag.dy);
+    place(node);
+    makeSpacePreview(node);
+    updateSpliceTarget(node);
+    cancelAnimationFrame(dragRaf);
+    dragRaf = requestAnimationFrame(() => {
+      rebuildObstacles(node);   // wires flow UNDER the hovering card
+      rerouteFor(node);
+      if (drag) for (const n of drag.shifted?.keys() || []) rerouteFor(n);
+    });
+  });
+  head.addEventListener("pointerup", () => {
+    if (!drag || drag.node !== node) return;
+    node.el.classList.remove("dragging");
+    if (drag.spliceTarget) drag.spliceTarget.el.classList.remove("splice-hi");
+    for (const n of drag.shifted?.keys() || []) n.el.classList.remove("shifting"); // BAKE
+    drag = null;
+    enforceSeparation(node);
+    layoutPorts(node);
+    rerouteAll();
+    saveLayout();
+    flushRebuild();
+  });
+  // patch gesture: only mod OUT ports start a drag (LFO → param assignment);
+  // audio/ctl wiring is derived from server state and not hand-editable in v1
+  for (const port of node.ports) {
+    if (!(port.sig === "mod" && port.dir === "out")) continue;
+    port.el.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      patchDrag = {node, port};
+      wireLive.style.display = "";
+      wireLive.setAttribute("stroke", SIG_CSS.mod);
+      port.el.classList.add("hot");
+    });
+  }
+}
+document.addEventListener("pointermove", (e) => {
+  if (!patchDrag) return;
+  const r = world.getBoundingClientRect();
+  const [x1, y1] = portXY(patchDrag.node, patchDrag.port);
+  const x2 = e.clientX - r.left, y2 = e.clientY - r.top;
+  const [nx, ny] = portNormal(patchDrag.port);
+  const mid = ny !== 0
+    ? [[x1, y1], [x1, (y1 + y2) / 2], [x2, (y1 + y2) / 2], [x2, y2]]
+    : [[x1, y1], [(x1 + x2) / 2, y1], [(x1 + x2) / 2, y2], [x2, y2]];
+  wireLive.setAttribute("d", roundedPath(dedupe(mid)));
+  for (const n of nodes.values()) for (const p of n.ports) {
+    const ok = p.quiet && n.chainKey;   // valid targets: any real param handle
+    p.el.classList.toggle("hot", ok || p === patchDrag.port);
+  }
+});
+document.addEventListener("pointerup", (e) => {
+  if (!patchDrag) return;
+  const src = patchDrag;
+  patchDrag = null;
+  wireLive.style.display = "none";
+  for (const n of nodes.values()) for (const p of n.ports) p.el.classList.remove("hot");
+  const t = document.elementFromPoint(e.clientX, e.clientY);
+  if (t && t.classList.contains("port")) {
+    outer: for (const n of nodes.values()) for (const p of n.ports) {
+      if (p.el === t && p.quiet && n.chainKey) {
+        // the real LFO id will be "<key>.<param>" — park the source card's
+        // position there so the server-born card appears where it was drawn
+        posMem["lfo:" + n.chainKey + "." + p.param] = [src.node.x, src.node.y];
+        if (src.node.armed) removeNode(src.node);
+        send({type: "lfo_assign", key: n.chainKey, name: p.param});
+        break outer;
+      }
+    }
+  }
+  flushRebuild();
+});
+
+// ============================================================================
+// GRAPH FROM STATE
+// ============================================================================
+let pendingRebuild = false;
+function flushRebuild() {
+  if (pendingRebuild && !drag && !patchDrag && !sliderDrag) {
+    pendingRebuild = false;
+    rebuildGraph();
+  }
+}
+function busy() { return !!(drag || patchDrag || sliderDrag); }
+
+const KILL_PARAMS = new Set(["amp", "level", "volume", "cutoff", "gain"]);
+
+function sendParam(key, pname, unit) {
+  throttled(`p.${key}.${pname}`, () =>
+    send({type: "set_param", key, name: pname, unit}));
+}
+
+// -- per-node builders --------------------------------------------------------
+function buildChainCard(mod) {
+  const gid = "m:" + mod.key;
+  const rows = [], quietRows = [];
+  for (const [pname, p] of Object.entries(mod.params)) {
+    let row;
+    if (p.curve === "toggle") {
+      row = rowChip({gid}, pname, {
+        text: p.value >= (p.min + p.max) / 2 ? "on" : "off",
+        onClick: (chip) => {
+          const on = chip.textContent !== "on";
+          chip.textContent = on ? "on" : "off";
+          p.value = on ? p.max : p.min;
+          send({type: "set_param", key: mod.key, name: pname, unit: on ? 1 : 0});
+        },
+      });
+      uiParam[`${gid}.${pname}`] = (u, txt) => {
+        row.querySelector(".chip").textContent = u >= 0.5 ? "on" : "off";
+      };
+    } else if (p.curve === "select") {
+      const n = p.options.length;
+      row = rowChip({gid}, pname, {
+        text: p.options[Math.round(p.value)] ?? "",
+        onClick: (chip) => {
+          const i = (p.options.indexOf(chip.textContent) + 1) % n;
+          chip.textContent = p.options[i];
+          p.value = i;
+          send({type: "set_param", key: mod.key, name: pname,
+                unit: n > 1 ? i / (n - 1) : 0});
+        },
+      });
+      uiParam[`${gid}.${pname}`] = (u, txt) => {
+        const i = Math.min(n - 1, Math.max(0, Math.round(u * (n - 1))));
+        row.querySelector(".chip").textContent = p.options[i] ?? "";
+      };
+    } else {
+      row = rowSlider({gid}, pname, {
+        unit: toUnit(p, p.value), text: fmt(p.value), mapped: !!p.lfo,
+        valText: (u) => fmt(fromUnit(p, u)),
+        onUnit: (u) => {
+          p.value = fromUnit(p, u);
+          sendParam(mod.key, pname, u);
+          throttled("act", refreshActivity, 80);
+        },
+      });
+    }
+    rows.push(row);
+    quietRows.push({pname, rowEl: row});
+  }
+  // the drone service card carries its scheduler settings as extra chips
+  if (mod.key === "drone" && state.drone) {
+    const d = state.drone;
+    rows.push(rowChip({gid}, "every", {
+      text: d.every,
+      onClick: (chip) => {
+        const es = d.everies || [];
+        const i = (es.indexOf(chip.textContent) + 1) % es.length;
+        chip.textContent = es[i];
+        send({type: "set_drone", enabled: true, every: es[i], octave: d.octave});
+      },
+    }));
+    rows.push(rowChip({gid}, "d.octave", {
+      text: String(d.octave),
+      onClick: (chip) => {
+        const o = (parseInt(chip.textContent, 10) + 1) % 5;
+        chip.textContent = String(o);
+        send({type: "set_drone", enabled: true, every: d.every, octave: o});
+      },
+    }));
+    rows.push(rowChip({gid}, "root", {text: d.root || "listening…", static: true}));
+  }
+  const ports = [];
+  if (mod.service) ports.push(["in", "ctl", "listen"]);
+  else if (mod.kind === "source") ports.push(["in", "ctl", "play"]);
+  else ports.push(["in", "audio", "in"]);
+  if (!mod.service) ports.push(["out", "audio", "out"]);
+  const n = addCard({
+    gid, name: mod.name, sub: `${mod.key} · ${mod.family}`, fam: mod.family,
+    seed: mod.kind === "source" && !mod.service,
+    headCheck: {
+      checked: mod.enabled,
+      onChange: (on) => mod.key === "drone"
+        ? send({type: "set_drone", enabled: on})
+        : send({type: "set_enabled", key: mod.key, enabled: on}),
+    },
+    kill: mod.service ? null
+      : (nd) => send({type: "edit_chain", action: "remove", key: mod.key}),
+    rows, quietRows, ports, mod,
+  });
+  n.chainKey = mod.key;
+  if (!mod.enabled) n.el.classList.add("bypassed");
+  return n;
+}
+
+function buildKeysCard() {
+  const gid = "keys";
+  const rows = [
+    rowChip({gid}, "octave", {text: `C${octave}`, static: true}),
+    rowChip({gid}, "transpose", {
+      text: String(state.transpose ?? 0),
+      onClick: (chip) => {
+        let t = parseInt(chip.textContent, 10) + 1;
+        if (t > 12) t = -12;
+        chip.textContent = String(t);
+        send({type: "set_transpose", semitones: t});
+      },
+    }),
+  ];
+  return addCard({gid, name: "Keys / MIDI", short: "Keys", sub: "controller",
+                  fam: "ctl", rows, ports: [["out", "ctl", "notes"]]});
+}
+
+function buildArpCard() {
+  const a = state.arp, gid = "arp";
+  const cfgArp = (patchset) => send({type: "set_arp", ...{
+    enabled: a.enabled, pattern: a.pattern, division: a.division,
+    gate: a.gate, octaves: a.octaves}, ...patchset});
+  const rows = [
+    rowChip({gid}, "pattern", {
+      text: a.pattern,
+      onClick: (chip) => {
+        const i = (a.patterns.indexOf(chip.textContent) + 1) % a.patterns.length;
+        a.pattern = a.patterns[i]; chip.textContent = a.pattern;
+        cfgArp({});
+      },
+    }),
+    rowChip({gid}, "division", {
+      text: a.division,
+      onClick: (chip) => {
+        const i = (a.divisions.indexOf(chip.textContent) + 1) % a.divisions.length;
+        a.division = a.divisions[i]; chip.textContent = a.division;
+        cfgArp({});
+      },
+    }),
+    rowSlider({gid}, "gate", {
+      unit: (a.gate - 0.05) / 0.95, text: Math.round(a.gate * 100) + "%",
+      valText: (u) => Math.round((0.05 + u * 0.95) * 100) + "%",
+      onUnit: (u) => { a.gate = 0.05 + u * 0.95; throttled("arp", () => cfgArp({})); },
+    }),
+    rowSlider({gid}, "octaves", {
+      unit: (a.octaves - 1) / 2, text: String(a.octaves),
+      valText: (u) => String(1 + Math.round(u * 2)),
+      onUnit: (u) => { a.octaves = 1 + Math.round(u * 2); throttled("arp", () => cfgArp({})); },
+    }),
+  ];
+  return addCard({gid, name: "Arp", sub: "quantized", fam: "ctl", rows,
+    headCheck: {checked: a.enabled, onChange: (on) => { a.enabled = on; cfgArp({}); }},
+    ports: [["in", "ctl", "notes"], ["out", "ctl", "notes"]]});
+}
+
+function buildVoiceCard() {
+  const gid = "voice";
+  const rows = [
+    rowChip({gid}, "bend", {text: "±2 st", static: true}),
+    rowChip({gid}, "target", {text: state.voice_target || "—", static: true}),
+  ];
+  return addCard({gid, name: "Mono Voice", short: "Voice", sub: "last-note priority",
+                  fam: "ctl", rows,
+                  ports: [["in", "ctl", "notes"], ["out", "ctl", "drive"]]});
+}
+
+function buildDeckCard() {
+  const l = state.looper, gid = "deck";
+  const rows = [
+    rowChip({gid}, "position", {
+      text: l.position || "post",
+      onClick: (chip) => {
+        const v = chip.textContent === "post" ? "pre" : "post";
+        chip.textContent = v;
+        send({type: "set_looper", position: v});
+      },
+    }),
+    rowChip({gid}, "bars", {
+      text: String(l.bars),
+      onClick: (chip) => {
+        const seq = [1, 2, 4, 8];
+        const v = seq[(seq.indexOf(parseInt(chip.textContent, 10)) + 1) % seq.length];
+        chip.textContent = String(v);
+        send({type: "set_looper", bars: v});
+      },
+    }),
+    rowSlider({gid}, "level", {
+      unit: l.level, text: Math.round(l.level * 100) + "%",
+      valText: (u) => Math.round(u * 100) + "%",
+      onUnit: (u) => throttled("looplvl", () => send({type: "set_looper", level: u})),
+    }),
+    rowChip({gid}, "overdub", {
+      text: l.overdub ? "on" : "off",
+      onClick: (chip) => {
+        const on = chip.textContent !== "on";
+        chip.textContent = on ? "on" : "off";
+        send({type: "set_looper", overdub: on});
+      },
+    }),
+  ];
+  const btns = document.createElement("div");
+  btns.className = "deckbtns";
+  btns.innerHTML = `<button class="recbtn" data-a="record" title="spacebar">● rec</button>
+    <button data-a="stop">■</button><button data-a="play">▶</button>
+    <button data-a="clear">✕</button>`;
+  for (const b of btns.querySelectorAll("button")) {
+    b.addEventListener("pointerdown", (e) => e.stopPropagation());
+    b.addEventListener("click", (e) => {
+      send({type: "set_looper", action: b.dataset.a});
+      e.target.blur();
+    });
+  }
+  rows.push(btns);
+  const n = addCard({gid, name: "Loop Deck", short: "Deck", sub: "midi looper · " + l.state,
+    fam: "ctl", rows, expandable: true, expanded: expandMem.deck,
+    vizHTML: `<canvas class="vz" data-viz="deck" height="54"></canvas>`,
+    ports: [["in", "ctl", "notes"], ["out", "ctl", "replay"]]});
+  n.subEl = n.el.querySelector(".sub");
+  updateDeckCard(n);
+  return n;
+}
+function updateDeckCard(n) {
+  const l = state && state.looper;
+  if (!n || !l) return;
+  n.subEl.textContent = "midi looper · " + l.state;
+  n.el.classList.toggle("rec", ["armed", "recording", "overdubbing"].includes(l.state));
+}
+
+function buildDrumsCard() {
+  const d = state.drums, gid = "drums";
+  const rows = [];
+  for (const lane of d.lanes) {
+    rows.push(rowSlider({gid}, lane, {
+      unit: d.levels[lane], text: Math.round(d.levels[lane] * 100) + "%",
+      valText: (u) => Math.round(u * 100) + "%",
+      onUnit: (u) => {
+        d.levels[lane] = u;
+        throttled("drumlvl", () => send({type: "set_drums", levels: d.levels}));
+      },
+    }));
+  }
+  rows.push(rowChip({gid}, "to_chain", {
+    text: d.to_chain ? "→ fx chain" : "→ master",
+    onClick: (chip) => {
+      const on = chip.textContent !== "→ fx chain";
+      chip.textContent = on ? "→ fx chain" : "→ master";
+      send({type: "set_drums", to_chain: on});
+    },
+  }));
+  let viz = "";
+  for (const lane of d.lanes) {
+    viz += `<div class="dlane">${esc(lane)}</div><div class="dgrid" data-lane="${esc(lane)}">`;
+    for (let s = 0; s < d.steps; s++)
+      viz += `<button class="dstep ${d.patterns[lane][s] ? "on" : ""} ${s % 4 === 0 ? "q" : ""}"
+        data-s="${s}"></button>`;
+    viz += `</div>`;
+  }
+  const n = addCard({gid, name: "Drums", sub: "16-step · 1/16 grid", fam: "time",
+    rows, expandable: true, expanded: expandMem.drums, wide: true, vizHTML: viz,
+    headCheck: {checked: d.enabled, onChange: (on) => send({type: "set_drums", enabled: on})},
+    ports: [["out", "audio", "hits"]]});
+  for (const btn of n.el.querySelectorAll(".dstep")) {
+    btn.addEventListener("pointerdown", (e) => e.stopPropagation());
+    btn.addEventListener("click", () => {
+      const lane = btn.closest(".dgrid").dataset.lane, s = parseInt(btn.dataset.s, 10);
+      d.patterns[lane][s] = d.patterns[lane][s] ? 0 : 1;
+      btn.classList.toggle("on");
+      throttled("drums", () => send({type: "set_drums", patterns: d.patterns}));
+    });
+  }
+  return n;
+}
+
+function buildMasterCard() {
+  const gid = "master";
+  const rows = [rowSlider({gid}, "volume", {
+    unit: state.volume, text: Math.round(state.volume * 100) + "%",
+    valText: (u) => Math.round(u * 100) + "%",
+    onUnit: (u) => throttled("vol", () => send({type: "set_volume", volume: u})),
+  })];
+  return addCard({gid, name: "Master Out", short: "Master", sub: "volume · meters",
+                  fam: "io", rows, ports: [["in", "audio", "in"]]});
+}
+
+function buildLfoCard(l) {
+  const gid = "lfo:" + l.id;
+  const RATE = {min: 0.02, max: 20, curve: "exp"};
+  const rows = [
+    rowSlider({gid}, "rate", {
+      unit: toUnit(RATE, l.rate), text: l.rate.toFixed(2) + "Hz",
+      valText: (u) => fromUnit(RATE, u).toFixed(2) + "Hz",
+      onUnit: (u) => {
+        l.rate = fromUnit(RATE, u);
+        throttled("lfo" + l.id + "r", () => send({type: "lfo_set", id: l.id, rate: l.rate}));
+      },
+    }),
+    rowSlider({gid}, "depth", {
+      unit: l.depth, text: ((l.depth * 100) | 0) + "%",
+      valText: (u) => ((u * 100) | 0) + "%",
+      onUnit: (u) => {
+        l.depth = u;
+        throttled("lfo" + l.id + "d", () => send({type: "lfo_set", id: l.id, depth: u}));
+      },
+    }),
+    rowSlider({gid}, "center", {
+      unit: l.center, text: ((l.center * 100) | 0) + "%",
+      valText: (u) => ((u * 100) | 0) + "%",
+      onUnit: (u) => {
+        l.center = u;
+        throttled("lfo" + l.id + "c", () => send({type: "lfo_set", id: l.id, center: u}));
+      },
+    }),
+    rowChip({gid}, "shape", {
+      text: l.shapes[l.shape] ?? "sine",
+      onClick: (chip) => {
+        l.shape = (l.shape + 1) % l.shapes.length;
+        chip.textContent = l.shapes[l.shape];
+        send({type: "lfo_set", id: l.id, shape: l.shape});
+      },
+    }),
+  ];
+  return addCard({gid, name: "LFO ∿", short: "LFO", sub: `→ ${l.key}.${l.param}`,
+    fam: "service", rows, ports: [["out", "mod", "mod"]],
+    kill: () => send({type: "lfo_unassign", id: l.id})});
+}
+
+let armN = 1;
+function buildArmedLfo() {
+  const gid = "lfoarm:" + armN++;
+  const n = addCard({gid, name: "LFO ∿", short: "LFO", sub: "drag ∿ port onto a param",
+    fam: "service", rows: [], ports: [["out", "mod", "mod"]], persistent: true,
+    kill: (nd) => { removeNode(nd); rerouteAll(); }});
+  n.armed = true;
+  const board = $("board");
+  n.x = snap(board.scrollLeft + 300 + Math.random() * 120);
+  n.y = snap(board.scrollTop + 160 + Math.random() * 160);
+  place(n);
+  requestAnimationFrame(() => {
+    enforceSeparation(n); layoutPorts(n); rebuildObstacles(); rerouteAll();
+  });
+  return n;
+}
+
+// -- monitors (client-side, not in server state) --------------------------------
+function buildMonitor(type, gid, x, y, expanded) {
+  gid = gid || `mon:${type}:${monN++}`;
+  let n;
+  if (type === "scope") {
+    const rows = [];
+    const chipRow = rowChip({gid}, "target", {
+      text: "off",
+      onClick: (chip) => {
+        const keys = ["off", ...(state ? state.chain.filter(c => !c.service).map(c => c.key) : [])];
+        const i = (keys.indexOf(chip.textContent) + 1) % keys.length;
+        chip.textContent = keys[i];
+        n.scopeKey = keys[i] === "off" ? null : keys[i];
+      },
+    });
+    rows.push(chipRow);
+    n = addCard({gid, name: "Oscilloscope", short: "Scope", sub: "taps after a module",
+      fam: "io", rows, persistent: true, montype: type,
+      vizHTML: `<canvas class="vz" data-viz="scope" height="44"></canvas>`,
+      kill: (nd) => { removeNode(nd); rerouteAll(); saveLayout(); }});
+    rows.push(rowSlider({gid}, "zoom", {
+      unit: 0.5, text: "512 smp",
+      valText: (u) => Math.round(Math.pow(2, 7 + 4 * u)) + " smp",
+      onUnit: (u) => { n.zoom = u; },
+    }));
+    n.el.querySelector(".body").appendChild(rows[rows.length - 1]);
+    n.zoom = 0.5;
+  } else if (type === "wave") {
+    n = addCard({gid, name: "Waveform", short: "Wave", sub: "output envelope",
+      fam: "io", rows: [], persistent: true, montype: type,
+      vizHTML: `<canvas class="vz" data-viz="wave" height="34"></canvas>`,
+      kill: (nd) => { removeNode(nd); rerouteAll(); saveLayout(); }});
+  } else {  // notes
+    n = addCard({gid, name: "Note Monitor", short: "Notes", sub: "green live · red deck",
+      fam: "io", rows: [], persistent: true, montype: type,
+      vizHTML: `<canvas class="vz" data-viz="notes" height="54"></canvas>`,
+      kill: (nd) => { removeNode(nd); rerouteAll(); saveLayout(); }});
+  }
+  const p = posMem[gid];
+  if (p) { n.x = p[0]; n.y = p[1]; place(n); }
+  else {
+    const board = $("board");
+    n.x = snap(board.scrollLeft + 340 + Math.random() * 140);
+    n.y = snap(board.scrollTop + 160 + Math.random() * 180);
+    place(n);
+    enforceSeparation(n);   // fresh monitors must not stack on existing cards
+  }
+  return n;
+}
+
+// -- expanded-state memory across rebuilds --------------------------------------
+const expandMem = {deck: false, drums: false};
+
+// -- the rebuild ----------------------------------------------------------------
+function rebuildGraph() {
+  if (!state) return;
+  if (busy()) { pendingRebuild = true; return; }
+  // patch switch → load that patch's remembered layout, respawn its monitors
+  if (state.patch !== currentPatch) {
+    for (const n of [...nodes.values()]) if (n.montype) removeNode(n);
+    currentPatch = state.patch;
+    const mons = loadLayout(currentPatch);
+    for (const [gid, type, x, y, exp] of mons) {
+      posMem[gid] = [x, y];
+      buildMonitor(type, gid, x, y, exp);
+    }
+  }
+  // remember card positions + expansion, then drop all derived nodes & wires
+  for (const n of nodes.values()) {
+    posMem[n.gid] = [n.x, n.y];
+    if (n.gid === "deck") expandMem.deck = n.expanded;
+    if (n.gid === "drums") expandMem.drums = n.expanded;
+  }
+  for (const w of [...wires]) removeWire(w);
+  lineCount.audio = 0; lineCount.ctl = 0; lineCount.mod = 0;
+  for (const n of [...nodes.values()]) if (!n.persistent) removeNode(n);
+  for (const k of Object.keys(uiParam))
+    if (!k.startsWith("mon:")) delete uiParam[k];
+
+  // ---- nodes ----
+  const keys = buildKeysCard();
+  const arp = state.arp ? buildArpCard() : null;
+  const deck = buildDeckCard();
+  const voice = buildVoiceCard();
+  const services = [], chainNodes = [];
+  for (const mod of state.chain) {
+    const n = buildChainCard(mod);
+    (mod.service ? services : chainNodes).push(n);
+  }
+  const master = buildMasterCard();
+  const drums = buildDrumsCard();
+  const lfoNodes = (state.lfos || []).map(buildLfoCard);
+
+  // ---- placement: stored position wins; new nodes flow into columns ----
+  const CTL_X = MIN_X + GRID;               // controllers cascade on the left
+  const CHAIN_X = CTL_X + 11 * GRID;        // audio chain drops top-down beside it
+  const RIGHT_X = CHAIN_X + 11 * GRID;      // drums (and spill) to the right
+  const placeCol = (list, x, y0) => {
+    let y = y0;
+    for (const n of list) {
+      if (!n) continue;
+      const p = posMem[n.gid];
+      if (p) { n.x = p[0]; n.y = p[1]; place(n); continue; }
+      n.x = x; n.y = y;
+      place(n);
+      enforceSeparation(n);
+      y = n.y + Math.ceil((n.el.offsetHeight || 64) / GRID) * GRID + GRID;
+    }
+  };
+  placeCol([keys, arp, deck, voice], CTL_X, MIN_Y);
+  placeCol([...chainNodes, master], CHAIN_X, MIN_Y);
+  // services sit left of the chain, below the controller cascade
+  const svcY = Math.max(...[keys, arp, deck, voice].filter(Boolean)
+    .map(n => n.y + (n.el.offsetHeight || 64))) + 2 * GRID;
+  placeCol(services, CTL_X, snap(svcY));
+  placeCol([drums], RIGHT_X, MIN_Y);
+  // each LFO lands left of its target module
+  for (let i = 0; i < lfoNodes.length; i++) {
+    const n = lfoNodes[i], l = state.lfos[i];
+    if (posMem[n.gid]) { n.x = posMem[n.gid][0]; n.y = posMem[n.gid][1]; place(n); continue; }
+    const tgt = nodes.get("m:" + l.key);
+    n.x = tgt ? tgt.x - CARD_W - 3 * GRID : CTL_X;
+    n.y = tgt ? tgt.y : MIN_Y;
+    place(n);
+    enforceSeparation(n);
+  }
+
+  // ---- wires (derived, exactly mirroring server truth) ----
+  const port = (n, dir, sig, param) => n && n.ports.find(p =>
+    p.dir === dir && p.sig === sig && (!param || p.param === param) && (!!param === !!p.quiet));
+  const W = (a, asig, b, bsig, opts) => a && b && addWire(
+    {node: a, port: port(a, "out", asig)},
+    {node: b, port: port(b, "in", bsig, opts && opts.param)}, opts || {});
+  // control: keys → arp → (deck, voice) → target source; arp → drone.listen
+  const hub = arp || keys;
+  if (arp) W(keys, "ctl", arp, "ctl");
+  W(hub, "ctl", deck, "ctl");
+  W(hub, "ctl", voice, "ctl");
+  const target = nodes.get("m:" + state.voice_target) ||
+                 chainNodes.find(n => n.mod && n.mod.kind === "source") || null;
+  W(voice, "ctl", target, "ctl");
+  for (const s of services) W(hub, "ctl", s, "ctl");
+  // audio: consecutive ENABLED chain stages, last → master
+  const live = chainNodes.filter(n => n.mod.enabled);
+  for (let i = 0; i + 1 < live.length; i++) W(live[i], "audio", live[i + 1], "audio");
+  if (live.length) W(live[live.length - 1], "audio", master, "audio");
+  // drums ride to master when enabled (server mixes them behind the scenes)
+  if (state.drums && state.drums.enabled) W(drums, "audio", master, "audio");
+  // mod: one wire per LFO assignment → the target param's quiet handle
+  for (let i = 0; i < lfoNodes.length; i++) {
+    const l = state.lfos[i];
+    const tgt = nodes.get("m:" + l.key);
+    if (!tgt) continue;
+    addWire({node: lfoNodes[i], port: port(lfoNodes[i], "out", "mod")},
+            {node: tgt, port: tgt.ports.find(p => p.quiet && p.param === l.param)},
+            {lfoId: l.id, cut: () => send({type: "lfo_unassign", id: l.id})});
+  }
+
+  requestAnimationFrame(() => {
+    for (const n of nodes.values()) layoutPorts(n);
+    rebuildObstacles();
+    rerouteAll();
+    refreshActivity();
+  });
+  saveLayout();
+}
+
+// ---------- palette ----------
+function renderPalette() {
+  const pal = $("palette");
+  pal.innerHTML = "";
+  const btn = (label, color, fn) => {
+    const b = document.createElement("button");
+    b.innerHTML = `<i style="background:${color}"></i>${esc(label)}`;
+    b.addEventListener("click", (e) => { fn(); e.target.blur(); });
+    pal.appendChild(b);
+  };
+  const h3 = (t) => {
+    const h = document.createElement("h3"); h.textContent = t; pal.appendChild(h);
+  };
+  h3("control");
+  btn("LFO ∿", FAMILY.service, () => buildArmedLfo());
+  if (state && state.drone && !state.drone.enabled)
+    btn("Drone", FAMILY.service, () => send({type: "set_drone", enabled: true}));
+  const inChain = new Set(state ? state.chain.map(c => c.key) : []);
+  const avail = (state && state.available || []).filter(a => !inChain.has(a.key));
+  for (const [label, kind] of [["sources", "source"], ["effects", "effect"]]) {
+    h3(label);
+    for (const a of avail.filter(x => x.kind === kind))
+      btn(a.name, FAMILY[a.family] || "#888",
+          () => send({type: "edit_chain", action: "add", key: a.key}));
+  }
+  h3("monitors");
+  btn("Oscilloscope", FAMILY.io, () => { buildMonitor("scope"); afterMonitor(); });
+  btn("Waveform", FAMILY.io, () => { buildMonitor("wave"); afterMonitor(); });
+  btn("Note Monitor", FAMILY.io, () => { buildMonitor("notes"); afterMonitor(); });
+}
+function afterMonitor() {
+  requestAnimationFrame(() => {
+    for (const n of nodes.values()) layoutPorts(n);
+    rebuildObstacles(); rerouteAll(); saveLayout();
+  });
+}
+
+// ---------- state → toolbar ----------
+function onState() {
+  renderPalette();
+  $("patch-sel").innerHTML = (state.patches || []).map(p =>
+    `<option ${p === state.patch ? "selected" : ""}>${esc(p)}</option>`).join("");
+  $("preset-sel").innerHTML = (state.presets || []).map(p =>
+    `<option>${esc(p)}</option>`).join("");
+  const t = state.transport || {};
+  if (sliderDrag !== "bpm") $("bpm").value = t.bpm ?? 100;
+  $("bpm-v").textContent = Math.round(t.bpm ?? 100) + " bpm";
+  $("meter").value = String(t.beats_per_bar ?? 4);
+  $("click-on").checked = !!t.click;
+  $("play-btn").textContent = t.running === false ? "▶" : "⏹";
+  if (sliderDrag !== "vol") $("vol").value = state.volume;
+  $("midi-ind").textContent = "midi: " +
+    (state.midi_enabled ? (state.midi_port || "auto") : "off");
+  if (busy()) { pendingRebuild = true; return; }
+  rebuildGraph();
+}
+
+// ---------- live message handlers ----------
+function onParam(m) {
+  // move the one thumb (unless it's the one being dragged) + keep local model
+  const id = `m:${m.key}.${m.name}`;
+  if (state) {
+    const mod = state.chain.find(c => c.key === m.key);
+    if (mod && mod.params[m.name]) mod.params[m.name].value = m.value;
+  }
+  if (sliderDrag !== id && uiParam[id]) uiParam[id](m.unit, fmt(m.value));
+  throttled("act", refreshActivity, 80);
+}
+
+let outLevel = 0;
+const wave = new Array(200).fill(0);
+function onMeters(m) {
+  outLevel = Math.max(m.out[0] || 0, m.out[1] || 0);
+  wave.push(outLevel);
+  if (wave.length > 200) wave.shift();
+  const scale = (a) => {
+    if (!a || a <= 0) return 0;
+    const db = 20 * Math.log10(a);
+    return Math.max(0, Math.min(100, (db + 60) / 60 * 100));
+  };
+  const set = (id, amp) => {
+    const el = $(id);
+    el.firstElementChild.style.width = scale(amp) + "%";
+    el.classList.toggle("clip", amp > 0.99);
+  };
+  set("m-out-l", m.out[0]); set("m-out-r", m.out[1]);
+  throttled("act", refreshActivity, 120);
+}
+
+let beatAnchor = null, deckAnchor = null;
+function onBeat(m) {
+  $("beat-pos").textContent = `${m.bar + 1}.${m.beat + 1}`;
+  beatAnchor = {time: performance.now(), downbeat: m.beat === 0};
+  deckAnchor = (m.loop === null || m.loop === undefined)
+    ? null : {time: performance.now(), phase: m.loop};
+}
+
+const rollNotes = [];   // {note, t0, t1, deck} for the note monitor
+function onMidi(e) {
+  if (e.kind === "voiced") {
+    const deck = !!e.deck;
+    if (e.on) rollNotes.push({note: e.note, t0: performance.now(), t1: null, deck});
+    else for (let i = rollNotes.length - 1; i >= 0; i--)
+      if (rollNotes[i].note === e.note && rollNotes[i].t1 === null &&
+          rollNotes[i].deck === deck) { rollNotes[i].t1 = performance.now(); break; }
+    while (rollNotes.length > 300) rollNotes.shift();
+    if (e.on) pulseCtl(deck);
+  } else if (e.kind === "drum_step") {
+    const dn = nodes.get("drums");
+    if (dn && dn.expanded) {
+      for (const b of dn.el.querySelectorAll(".dstep.ph")) b.classList.remove("ph");
+      for (const b of dn.el.querySelectorAll(`.dstep[data-s="${e.step}"]`)) b.classList.add("ph");
+    }
+  } else if (e.kind === "loop_note") {
+    if (state?.looper) (state.looper.notes = state.looper.notes || []).push([e.beat, e.note, e.on]);
+  } else if (e.kind === "looper") {
+    // looper settings ride along without a full state broadcast
+    if (state) {
+      const {kind, ...rest} = e;
+      state.looper = {...state.looper, ...rest};
+      updateDeckCard(nodes.get("deck"));
+    }
+  } else if (e.kind === "drone") {
+    const id = "m:drone.root";
+    if (uiParam[id]) uiParam[id](0, e.root);
+  }
+}
+
+// ---------- activity: real signal → white flow dots + kill-param darkening ----
+function passes(node) {
+  if (!node.mod) return true;
+  for (const [pname, p] of Object.entries(node.mod.params)) {
+    if (!KILL_PARAMS.has(pname)) continue;
+    if (p.curve === "toggle" || p.curve === "select") continue;
+    if (toUnit(p, p.value) <= 0.02) return false;   // value ≤ min + 2% of range
+  }
+  return true;
+}
+const ctlPulse = new Map();   // wire -> lit-until timestamp
+function pulseCtl(deck) {
+  const until = performance.now() + 350;
+  for (const w of wires) {
+    if (w.sig !== "ctl") continue;
+    const fromDeck = w.from.node.gid === "deck";
+    if (deck ? fromDeck : !fromDeck) ctlPulse.set(w, until);
+  }
+  refreshActivity();
+  setTimeout(() => refreshActivity(), 380);
+}
+function refreshActivity() {
+  const now = performance.now();
+  const gateOn = outLevel > 0.001;
+  // energize sources, propagate along audio wires; a killed module (amp/cutoff/
+  // gain at the floor) darkens everything downstream of it
+  const energized = new Set();
+  if (gateOn)
+    for (const n of nodes.values())
+      if (n.seed || (n.gid === "drums" && state?.drums?.enabled)) energized.add(n);
+  const active = new Set();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const w of wires) {
+      if (w.sig !== "audio" || active.has(w)) continue;
+      const src = w.from.node;
+      if (!energized.has(src)) continue;
+      if (!passes(src)) continue;
+      active.add(w);
+      if (!energized.has(w.to.node)) { energized.add(w.to.node); changed = true; }
+    }
+  }
+  for (const w of wires) {
+    if (w.sig === "audio") w.flow.style.display = active.has(w) ? "" : "none";
+    else if (w.sig === "ctl") w.flow.style.display = (ctlPulse.get(w) || 0) > now ? "" : "none";
+    else w.flow.style.display = "none";
+  }
+}
+
+// ---------- monitors: scope polling + canvas painting ----------
+let scopeData = {};   // key -> samples
+function onScopeData(m) { scopeData[m.key] = m.samples; }
+setInterval(() => {
+  if (document.hidden) return;
+  const asked = new Set();
+  for (const n of nodes.values())
+    if (n.montype === "scope" && n.scopeKey && !asked.has(n.scopeKey)) {
+      asked.add(n.scopeKey);
+      send({type: "scope", key: n.scopeKey});
+    }
+}, 250);
+
+function drawVizLoop(now) {
+  const style = getComputedStyle(document.body);
+  for (const n of nodes.values()) {
+    const cv = n.el.querySelector("canvas.vz");
+    if (!cv) continue;
+    const viz = cv.dataset.viz;
+    if ((viz === "deck" || n.montype) && n.expanded === false && n.el.querySelector(".expander"))
+      continue;   // collapsed expandable → hidden canvas
+    if (!cv.clientWidth) continue;
+    if (cv.width !== cv.clientWidth) cv.width = cv.clientWidth;
+    const ctx = cv.getContext("2d"), W = cv.width, H = cv.height;
+    ctx.clearRect(0, 0, W, H);
+    if (viz === "deck") drawDeckViz(ctx, W, H, now, style);
+    else if (viz === "scope") drawScopeViz(n, ctx, W, H, style);
+    else if (viz === "wave") drawWaveViz(ctx, W, H, style);
+    else if (viz === "notes") drawNotesViz(ctx, W, H, now, style);
+  }
+  requestAnimationFrame(drawVizLoop);
+}
+requestAnimationFrame(drawVizLoop);
+
+// loop deck track: grid, red recorded notes, tracking playhead (legacy port)
+function drawDeckViz(ctx, W, H, now, style) {
+  const l = state?.looper;
+  const bpm = state?.transport?.bpm || 100;
+  const bpb = state?.transport?.beats_per_bar || 4;
+  const loopBeats = (l?.loop_beats) || (l?.bars || 2) * bpb;
+  let livePhase = null;
+  if (deckAnchor && l && !["empty", "stopped", "armed"].includes(l.state))
+    livePhase = (deckAnchor.phase + (now - deckAnchor.time) / 1000 * bpm / 60) % loopBeats;
+  const hairline = style.getPropertyValue("--hairline");
+  for (let b = 0; b <= loopBeats; b++) {
+    const x = (b / loopBeats) * W;
+    ctx.strokeStyle = hairline;
+    ctx.lineWidth = b % bpb === 0 ? 2 : 1;
+    ctx.globalAlpha = b % bpb === 0 ? 1 : 0.45;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  if (l && Array.isArray(l.notes) && l.notes.length) {
+    ctx.fillStyle = style.getPropertyValue("--danger");
+    const lo = 36, hi = 96, open = {};
+    const segs = [];
+    const evs = [...l.notes].sort((a, b) => a[0] - b[0]);
+    for (const [beat, note, on] of evs) {
+      if (on) { (open[note] = open[note] || []).push(beat); }
+      else if (open[note] && open[note].length) segs.push([note, open[note].shift(), beat]);
+      else segs.push([note, 0, beat]);   // off before on = wrapped across the loop top
+    }
+    const rec = ["recording", "overdubbing"].includes(l.state);
+    for (const nn in open) for (const b0 of open[nn])
+      segs.push([+nn, b0, rec && livePhase !== null && livePhase >= b0 ? livePhase : loopBeats]);
+    for (const [note, b0, b1] of segs) {
+      const y = H - ((Math.min(hi, Math.max(lo, note)) - lo) / (hi - lo)) * (H - 8) - 4;
+      const x0 = (b0 / loopBeats) * W;
+      const x1 = (Math.max(b1, b0 + 0.05) / loopBeats) * W;
+      ctx.fillRect(x0, y - 2, Math.max(2, x1 - x0), 4);
+    }
+  }
+  if (livePhase !== null) {
+    const x = (livePhase / loopBeats) * W;
+    ctx.strokeStyle = ["recording", "overdubbing"].includes(l.state)
+      ? style.getPropertyValue("--danger") : style.getPropertyValue("--audio");
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+}
+// real scope trace, zero-cross synced (legacy port, per-card zoom)
+function drawScopeViz(n, ctx, W, H, style) {
+  const s = n.scopeKey && scopeData[n.scopeKey];
+  ctx.strokeStyle = style.getPropertyValue("--hairline");
+  ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
+  if (!s || !s.length) return;
+  let start = 0;
+  for (let i = 1; i < s.length / 2; i++)
+    if (s[i - 1] <= 0 && s[i] > 0) { start = i; break; }
+  const win = Math.min(Math.round(Math.pow(2, 7 + 4 * (n.zoom ?? 0.5))), s.length - start);
+  let peak = 0.05;
+  for (let i = start; i < start + win; i++) peak = Math.max(peak, Math.abs(s[i]));
+  ctx.strokeStyle = style.getPropertyValue("--audio");
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  for (let i = 0; i < win; i++) {
+    const x = (i / win) * W;
+    const y = H / 2 - (s[start + i] / peak) * (H / 2 - 4);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+// rolling output envelope from real meters
+function drawWaveViz(ctx, W, H, style) {
+  ctx.fillStyle = style.getPropertyValue("--meter");
+  const nsmp = wave.length;
+  for (let i = 0; i < nsmp; i++) {
+    const a = Math.min(1, Math.pow(wave[i], 0.5));
+    const h = Math.max(1, a * (H - 4));
+    ctx.fillRect((i / nsmp) * W, (H - h) / 2, Math.max(1, W / nsmp - 0.5), h);
+  }
+}
+// rolling REAL voiced notes on a beat grid — green live, red deck
+function drawNotesViz(ctx, W, H, now, style) {
+  const bpm = state?.transport?.bpm || 100;
+  const pxPerMs = W / (16 * 60000 / bpm);   // 16-beat window
+  ctx.strokeStyle = style.getPropertyValue("--hairline");
+  ctx.lineWidth = 1;
+  if (beatAnchor) {
+    const beatMs = 60000 / bpm;
+    for (let k = 0; k < 20; k++) {
+      const x = W - (now - (beatAnchor.time - k * beatMs)) * pxPerMs;
+      if (x < 0) break;
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    }
+  }
+  const lo = 36, hi = 96;
+  for (let i = rollNotes.length - 1; i >= 0; i--) {
+    const ev = rollNotes[i];
+    if (ev.t1 !== null && (now - ev.t1) * pxPerMs > W) rollNotes.splice(i, 1);
+  }
+  const green = style.getPropertyValue("--ctl"), red = style.getPropertyValue("--danger");
+  for (const ev of rollNotes) {
+    const x0 = W - (now - ev.t0) * pxPerMs;
+    const x1 = ev.t1 === null ? W : W - (now - ev.t1) * pxPerMs;
+    if (x1 <= 0) continue;
+    const y = H - ((Math.min(hi, Math.max(lo, ev.note)) - lo) / (hi - lo)) * (H - 6) - 3;
+    ctx.fillStyle = ev.deck ? red : green;
+    ctx.fillRect(Math.max(0, x0), y - 2, Math.max(2, x1 - x0), 4);
+  }
+}
+
+// ---------- toolbar controls ----------
+$("patch-sel").addEventListener("change", (e) => {
+  send({type: "select_patch", patch: e.target.value});
+  e.target.blur();
+});
+$("preset-load").addEventListener("click", (e) => {
+  const name = $("preset-sel").value;
+  if (name) send({type: "load_preset", name});
+  e.target.blur();
+});
+$("preset-save").addEventListener("click", (e) => {
+  const name = $("preset-name").value.trim() || $("preset-sel").value || "untitled";
+  send({type: "save_preset", name});
+  e.target.blur();
+});
+$("preset-del").addEventListener("click", (e) => {
+  const name = $("preset-sel").value;
+  if (name) send({type: "delete_preset", name});
+  e.target.blur();
+});
+$("play-btn").addEventListener("click", (e) => {
+  const running = state?.transport?.running !== false;
+  send({type: "set_transport", playing: !running});
+  e.target.blur();
+});
+function sendTransport() {
+  throttled("transport", () => send({
+    type: "set_transport",
+    bpm: parseFloat($("bpm").value),
+    beats_per_bar: parseInt($("meter").value, 10),
+    click: $("click-on").checked,
+  }));
+}
+$("bpm").addEventListener("input", () => {
+  $("bpm-v").textContent = $("bpm").value + " bpm";
+  sendTransport();
+});
+$("bpm").addEventListener("pointerdown", () => sliderDrag = "bpm");
+$("bpm").addEventListener("pointerup", (e) => { sliderDrag = null; e.target.blur(); flushRebuild(); });
+$("meter").addEventListener("change", (e) => { sendTransport(); e.target.blur(); });
+$("click-on").addEventListener("change", (e) => { sendTransport(); e.target.blur(); });
+$("vol").addEventListener("input", (e) => {
+  throttled("vol", () => send({type: "set_volume", volume: parseFloat(e.target.value)}));
+});
+$("vol").addEventListener("pointerdown", () => sliderDrag = "vol");
+$("vol").addEventListener("pointerup", (e) => { sliderDrag = null; flushRebuild(); });
+
+// ---------- computer keyboard (legacy verbatim: keymap, caps sustain, space) ----
+function keysEnabled() { return $("keys-on").checked; }
+function keyTarget(e) {
+  const t = e.target;
+  if (!t || !t.tagName) return false;
+  if (t.tagName === "SELECT" || t.tagName === "TEXTAREA") return true;
+  return t.tagName === "INPUT" && !["range", "checkbox"].includes(t.type);
+}
+const KEYMAP = {a:0, w:1, s:2, e:3, d:4, f:5, t:6, g:7, y:8, h:9, u:10, j:11,
+                k:12, o:13, l:14, p:15, ";":16};
+let octave = 4;
+const held = new Set();
+let capsSustain = false;
+function syncCaps(e) {
+  // macOS quirk: CapsLock keydown on engage / keyup on disengage, and
+  // getModifierState is stale during that keyup — trust the event TYPE there
+  let on;
+  if (e.key === "CapsLock") on = e.type === "keydown";
+  else if (e.getModifierState) on = e.getModifierState("CapsLock");
+  else return;
+  if (on !== capsSustain) {
+    capsSustain = on;
+    send({type: "sustain", on});
+    if (!on) send({type: "all_notes_off"});
+    $("caps-note").textContent = on ? "SUSTAIN" : "";
+  }
+}
+window.addEventListener("keydown", (e) => {
+  syncCaps(e);
+  if (e.repeat || keyTarget(e) || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === " ") {   // spacebar = loop record, in any input mode
+    send({type: "set_looper", action: "record"});
+    e.preventDefault();
+    return;
+  }
+  if (!keysEnabled()) return;
+  const k = e.key.toLowerCase();
+  if (k === "z") { octave = Math.max(1, octave - 1); noteOffAll(); }
+  else if (k === "x") { octave = Math.min(7, octave + 1); noteOffAll(); }
+  else if (k in KEYMAP) {
+    const note = 12 * (octave + 1) + KEYMAP[k];
+    if (!held.has(note)) { held.add(note); send({type: "note_on", note}); }
+    e.preventDefault();
+  }
+  $("oct").textContent = `C${octave}`;
+  const oc = uiParam["keys.octave"];
+  if (oc) oc(0, `C${octave}`);
+});
+window.addEventListener("keyup", (e) => {
+  syncCaps(e);
+  if (e.key === " " && !keyTarget(e)) { e.preventDefault(); return; }
+  const k = e.key.toLowerCase();
+  if (k in KEYMAP) {
+    const note = 12 * (octave + 1) + KEYMAP[k];
+    held.delete(note); send({type: "note_off", note});
+  }
+});
+function noteOffAll() { held.clear(); send({type: "all_notes_off"}); }
+window.addEventListener("blur", noteOffAll);
+document.addEventListener("visibilitychange", () => { if (document.hidden) noteOffAll(); });
+$("keys-on").addEventListener("change", (e) => {
+  if (!e.target.checked) noteOffAll();
+  e.target.blur();
+});
+document.addEventListener("pointerup", (e) => {
+  if (e.target.tagName === "BUTTON") e.target.blur();
+});
+document.addEventListener("change", (e) => {
+  if (e.target.tagName === "SELECT") e.target.blur();
+});
+
+// ---------- header height → board/palette offset ----------
+function fitHeader() {
+  const h = $("hdr").offsetHeight;
+  $("palette").style.top = h + "px";
+  $("board").style.top = h + "px";
+}
+window.addEventListener("resize", fitHeader);
+fitHeader();
+setTimeout(fitHeader, 50);
+
+renderPalette();
+connect();
+</script>
+</body>
+</html>
