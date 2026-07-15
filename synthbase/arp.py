@@ -1,8 +1,14 @@
-"""Arpeggiator: a note-pool layer between note sources and the mono voice.
+"""Arpeggiator: a note-pool layer wired between control nodes.
 
 Implements the same note-sink interface as MonoVoice (note_on/note_off/
-set_sustain/set_bend/all_off), so the MIDI router and the GUI drive it
-without knowing it exists. Disabled, it passes notes straight through.
+set_sustain/set_bend/all_off), so anything wired into it drives it without
+knowing it exists. Disabled, it passes notes straight through.
+
+v3: the arp no longer owns "the voice". It fires into a SINK — an object
+the app hands it whose targets are resolved live from the control wires
+(app.ctl_wires, arp→X). No outgoing wire = the arp plays into silence,
+which is honest patching. The old on_note/on_note_in taps are gone: the
+drone and the loop deck now hear the arp only when wired to it.
 
 Timing: steps are QUANTIZED to the shared Transport's grid at a rhythmic
 division (1/8, 1/16T, ...). The grid is absolute — chord changes never
@@ -26,15 +32,16 @@ import random
 import threading
 import time
 
-from .midi import MonoVoice
 from .transport import DIVISIONS, Transport
 
 PATTERNS = ("up", "down", "updown", "random", "played")
 
 
 class Arpeggiator:
-    def __init__(self, voice: MonoVoice, transport: Transport) -> None:
-        self.voice = voice
+    def __init__(self, sink, transport: Transport) -> None:
+        # sink: MonoVoice-shaped. In the app it's a fan-out over the ctl
+        # wires arp→X (voice, deck record tap, drone observe), resolved live.
+        self.sink = sink
         self.transport = transport
         self.enabled = False
         self.division = "1/8"
@@ -43,8 +50,6 @@ class Arpeggiator:
         self.pattern = "up"
         self.sustain = False
 
-        self.on_note = None             # optional tap: DroneBrain listens here
-        self.on_note_in = None          # deck "pre" tap: (note, on)
         self._pool: list[int] = []      # notes in play, insertion order
         self._held: set[int] = set()    # physically held right now
         self._sustained: set[int] = set()
@@ -58,18 +63,6 @@ class Arpeggiator:
     # -- note-sink interface (mirrors MonoVoice) ------------------------------
 
     def note_on(self, note: int, velocity: int = 100) -> None:
-        tap2 = self.on_note_in
-        if tap2 is not None:
-            try:
-                tap2(note, True)
-            except Exception:  # noqa: BLE001
-                pass
-        tap = self.on_note
-        if tap is not None:
-            try:
-                tap(note)
-            except Exception:  # noqa: BLE001
-                pass
         with self._lock:
             self._held.add(note)
             self._sustained.discard(note)
@@ -78,15 +71,9 @@ class Arpeggiator:
         if self.enabled and getattr(self.transport, "running", True):
             self._ensure_thread()
         else:
-            self.voice.note_on(note, velocity)
+            self.sink.note_on(note, velocity)
 
     def note_off(self, note: int) -> None:
-        tap2 = self.on_note_in
-        if tap2 is not None:
-            try:
-                tap2(note, False)
-            except Exception:  # noqa: BLE001
-                pass
         with self._lock:
             self._held.discard(note)
             if self.sustain:
@@ -94,12 +81,12 @@ class Arpeggiator:
             elif note in self._pool:
                 self._pool.remove(note)
         if not self.enabled:
-            self.voice.note_off(note)
+            self.sink.note_off(note)
 
     def set_sustain(self, on: bool) -> None:
         self.sustain = on
         if not self.enabled:
-            self.voice.set_sustain(on)
+            self.sink.set_sustain(on)
             return
         if not on:
             with self._lock:
@@ -109,7 +96,7 @@ class Arpeggiator:
                         self._pool.remove(n)
 
     def set_bend(self, semitones: float) -> None:
-        self.voice.set_bend(semitones)
+        self.sink.set_bend(semitones)
 
     def all_off(self) -> None:
         with self._lock:
@@ -117,7 +104,7 @@ class Arpeggiator:
             self._held.clear()
             self._sustained.clear()
         self._last_pitch = None
-        self.voice.all_off()
+        self.sink.all_off()
 
     # -- configuration -----------------------------------------------------------
 
@@ -234,13 +221,13 @@ class Arpeggiator:
                 self._last_pitch = None
                 return  # thread parks; next note_on restarts it
             note = self._next_pitch(notes)
-            self.voice.note_on(note, 100)
+            self.sink.note_on(note, 100)
             self._last_pitch = note
             div_beats = DIVISIONS[division]
             step_dur = div_beats * self.transport.beat_duration
             if not self._sleep_until(t + step_dur * self.gate):
                 break
-            self.voice.note_off(note)
+            self.sink.note_off(note)
             # advance one grid slot; re-derive the grid if division changed
             if self.division != division:
                 division = self.division
@@ -254,6 +241,6 @@ class Arpeggiator:
 
     def _safe_all_off(self) -> None:
         try:
-            self.voice.all_off()
+            self.sink.all_off()
         except Exception:  # noqa: BLE001 — rack may already be torn down
             pass

@@ -15,6 +15,9 @@ Protocol (JSON messages):
     {"type": "set_transport", "bpm": 110, "beats_per_bar": 4, "click": true}
     {"type": "set_drone", "enabled": true, "every": "1 bar", "octave": 2}
     {"type": "graph_wire", "action": "add"|"remove", "from": "pluck", "to": "echo"|"master"}
+    {"type": "ctl_wire", "action": "add"|"remove", "from": "keys", "to": "arp"}
+        (control-plane wiring among keys/arp/deck/voice/drone — the graph IS
+         the note router; set_looper's old "position" is accepted and ignored)
     {"type": "spawn_module", "key": "reverb"}      (add to rack, audio out unconnected)
     {"type": "set_voice_target", "key": "pluck"}   (re-aim the mono voice)
     {"type": "set_drums", "target": "echo"|"master"|null}  (drums audio out routing)
@@ -55,7 +58,7 @@ class GuiServer:
     # -- http ----------------------------------------------------------------
 
     async def _index(self, request: web.Request) -> web.FileResponse:
-        # flex patch-canvas is the front door; classic gui stays at /legacy
+        # flex is the front door
         return web.FileResponse(
             GUI_DIR / "flex.html", headers={"Cache-Control": "no-store"},
         )
@@ -136,9 +139,12 @@ class GuiServer:
             self.synth.set_voice_target(m["key"])
             await self._broadcast_state()
         elif t == "set_looper":
+            # "position" from old clients is dropped here — pre/post is wiring
             self.synth.set_looper(action=m.get("action"), bars=m.get("bars"),
-                                  level=m.get("level"), overdub=m.get("overdub"),
-                                  position=m.get("position"))
+                                  level=m.get("level"), overdub=m.get("overdub"))
+            await self._broadcast_state()
+        elif t == "ctl_wire":
+            self.synth.set_ctl_wire(m.get("action", "add"), m.get("from"), m.get("to"))
             await self._broadcast_state()
         elif t == "lfo_assign":
             await loop.run_in_executor(None, lambda: self.synth.lfo_assign(m["key"], m["name"]))

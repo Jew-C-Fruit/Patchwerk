@@ -36,6 +36,125 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 MODULES_DIR = REPO_ROOT / "modules"
 PATCHES_DIR = REPO_ROOT / "patches"
 
+# -- the control plane: wires among control nodes --------------------------------
+# Node ids: "keys" (all controllers: GUI keys, hardware MIDI, CP88), "arp",
+# "deck" (the loop deck), "voice" (the mono voice), "drone" (the drone brain).
+# Control FLOW is defined by wires — keys→(arp?)→(deck?)→voice, any topology.
+# keys is never a destination (that would re-enter the controllers); self-wires
+# are forbidden. deck→arp→deck is legal: the deck's _self_fire guard prevents
+# replayed notes from re-recording.
+CTL_SOURCES = ("keys", "arp", "deck")
+CTL_TARGETS = ("arp", "deck", "voice", "drone")
+
+
+def default_ctl_wires() -> list[dict]:
+    """Today's fixed flow, expressed as wires (preserves v2 behavior):
+    keys feed the arp, the arp drives voice + deck-record + drone, and the
+    deck replays through its private voice node."""
+    return [
+        {"from": "keys", "to": "arp"},
+        {"from": "arp", "to": "voice"},
+        {"from": "arp", "to": "deck"},
+        {"from": "arp", "to": "drone"},
+        {"from": "deck", "to": "voice"},
+    ]
+
+
+class _NullSink:
+    """MonoVoice-shaped no-op base for control-wire adapters."""
+
+    def note_on(self, note: int, velocity: int = 100) -> None: ...
+    def note_off(self, note: int) -> None: ...
+    def all_off(self) -> None: ...
+    def set_sustain(self, on: bool) -> None: ...
+    def set_bend(self, semitones: float) -> None: ...
+
+
+class _DeckRecordTap(_NullSink):
+    """Adapts the looper's record methods to the note-sink interface."""
+
+    def __init__(self, looper, voiced: bool) -> None:
+        self.looper = looper
+        self.voiced = voiced
+
+    def note_on(self, note: int, velocity: int = 100) -> None:
+        (self.looper.record_voiced if self.voiced
+         else self.looper.record_raw)(note, True)
+
+    def note_off(self, note: int) -> None:
+        (self.looper.record_voiced if self.voiced
+         else self.looper.record_raw)(note, False)
+
+
+class _DroneTap(_NullSink):
+    """The drone brain listens to on-events only."""
+
+    def __init__(self, drone) -> None:
+        self.drone = drone
+
+    def note_on(self, note: int, velocity: int = 100) -> None:
+        self.drone.observe(note)
+
+
+class _FanOut(_NullSink):
+    """Fan a note event to every sink a node is wired to (resolved LIVE, so
+    wire edits take effect on the very next event)."""
+
+    def __init__(self, app, src: str) -> None:
+        self.app = app
+        self.src = src
+
+    def _each(self, fn) -> None:
+        for s in self.app._ctl_sinks(self.src):
+            try:
+                fn(s)
+            except Exception:  # noqa: BLE001 — one dead target must not stop the rest
+                pass
+
+    def note_on(self, note: int, velocity: int = 100) -> None:
+        self._each(lambda s: s.note_on(note, velocity))
+
+    def note_off(self, note: int) -> None:
+        self._each(lambda s: s.note_off(note))
+
+    def all_off(self) -> None:
+        self._each(lambda s: s.all_off())
+
+    def set_sustain(self, on: bool) -> None:
+        self._each(lambda s: s.set_sustain(on))
+
+    def set_bend(self, semitones: float) -> None:
+        self._each(lambda s: s.set_bend(semitones))
+
+
+class _KeysNode(_FanOut):
+    """The controllers' node: GUI keys, hardware MIDI, sensors — all enter
+    the graph here. Sustain/bend stay GLOBAL (pedal and wheel are physical
+    gestures on the instrument, not events in a note path)."""
+
+    def __init__(self, app) -> None:
+        super().__init__(app, "keys")
+
+    def set_sustain(self, on: bool) -> None:
+        sink = self.app.arp or self.app.voice
+        if sink:
+            sink.set_sustain(on)
+
+    def set_bend(self, semitones: float) -> None:
+        if self.app.voice:
+            self.app.voice.set_bend(semitones)
+
+    def all_off(self) -> None:
+        # panic is global too: silence the arp pool AND the voice directly,
+        # whatever the wiring says
+        for s in (self.app.arp, self.app.voice):
+            if s is None:
+                continue
+            try:
+                s.all_off()
+            except Exception:  # noqa: BLE001
+                pass
+
 
 def _read_patch(path: Path) -> dict:
     spec = importlib.util.spec_from_file_location(f"synthpatch_{path.stem}", path)
@@ -82,6 +201,14 @@ class SynthApp:
         self.lfos = LFOManager(self)
         self.looper = Looper(self)
         self.scope = Scope(self)
+        # control plane: wires among {keys, arp, deck, voice, drone}. Survive
+        # rebuilds (like graph_wires); reset to default on select_patch.
+        self.ctl_wires: list[dict] = default_ctl_wires()
+        self._keys = _KeysNode(self)                    # every controller enters here
+        self._arp_out = _FanOut(self, "arp")            # the arp fires into this
+        self._drone_tap = _DroneTap(self.drone)
+        self._deck_raw_tap = _DeckRecordTap(self.looper, voiced=False)
+        self._deck_voiced_tap = _DeckRecordTap(self.looper, voiced=True)
         self.on_beat_event = None  # set by GuiServer; called from the beat thread
 
         self.on_midi_event = None  # set by GuiServer; called from MIDI thread
@@ -153,9 +280,9 @@ class SynthApp:
                 pass  # override's module left the chain — fall back
         self.voice = MonoVoice(self.rack, target) if target else None
         if self.voice:
-            self.arp = Arpeggiator(self.voice, self.transport)
-            self.arp.on_note = self.drone.observe
-            self.arp.on_note_in = self.looper.observe_input
+            # the arp fires into a live fan-out over the arp→X wires — no
+            # hardwired voice/deck/drone taps anymore
+            self.arp = Arpeggiator(self._arp_out, self.transport)
             self.voice.on_voiced = self._emit_voiced
             self.arp.configure(**{**self._arp_settings, **patch.get("arp", {})})
             self._arp_settings = {
@@ -195,11 +322,70 @@ class SynthApp:
         self.lfos.on_node_replaced(key)
 
     def _emit_voiced(self, note: int, on: bool) -> None:
-        try:
-            self.looper.observe(note, on)
-        except Exception:  # noqa: BLE001
-            pass
+        # viz only — the deck records via its wires, not this tap
         self._emit_midi_event({"kind": "voiced", "note": int(note), "on": bool(on)})
+
+    # -- control-plane wiring --------------------------------------------------
+
+    def _ctl_sinks(self, src: str) -> list:
+        """Resolve a node's outgoing wires to note-sink objects, live.
+        (Deck REPLAY resolution lives in looper._sink(), which reads the same
+        ctl_wires — this handles keys/arp dispatch.)"""
+        sinks = []
+        for w in self.ctl_wires:
+            if w["from"] != src:
+                continue
+            t = w["to"]
+            if t == "arp" and self.arp is not None:
+                sinks.append(self.arp)
+            elif t == "voice" and self.voice is not None:
+                sinks.append(self.voice)
+            elif t == "deck":
+                # keys→deck records the raw input; arp→deck records arp output
+                sinks.append(self._deck_voiced_tap if src == "arp"
+                             else self._deck_raw_tap)
+            elif t == "drone":
+                sinks.append(self._drone_tap)
+        return sinks
+
+    def set_ctl_wire(self, action: str, src: str, dst: str | None = None) -> None:
+        """Add/remove a control wire. The graph IS the router: an unwired
+        node's events dead-end silently."""
+        with self._lock:
+            if src not in CTL_SOURCES:
+                raise ValueError(f"{src!r} has no control output")
+            if action == "add":
+                if dst not in CTL_TARGETS:
+                    raise ValueError(f"cannot wire control into {dst!r}")
+                if src == dst:
+                    raise ValueError(f"{src} → {dst} would loop on itself")
+                w = {"from": src, "to": dst}
+                if w not in self.ctl_wires:
+                    self.ctl_wires.append(w)
+            elif action == "remove":
+                n0 = len(self.ctl_wires)
+                self.ctl_wires = [w for w in self.ctl_wires
+                                  if not (w["from"] == src and w["to"] == dst)]
+                if len(self.ctl_wires) != n0:
+                    # unhooking a node's LAST input silences it — a stuck
+                    # note is worse live than a dropped one
+                    if dst == "arp" and self.arp and \
+                            not any(w["to"] == "arp" for w in self.ctl_wires):
+                        self.arp.all_off()
+                    if dst == "voice" and self.voice and \
+                            not any(w["to"] == "voice" for w in self.ctl_wires):
+                        self.voice.all_off()
+                    # unhooking the deck's replay must not leave notes ringing
+                    if src == "deck" and dst == "voice":
+                        self.looper._deck_teardown()
+                    elif src == "deck" and dst == "arp" and self.arp:
+                        for n in list(self.looper._sounding):
+                            try:
+                                self.arp.note_off(n)
+                            except Exception:  # noqa: BLE001
+                                pass
+            else:
+                raise ValueError(f"unknown ctl_wire action {action!r}")
 
     def _restart_midi(self) -> None:
         """(Re)open the MIDI router against the current rack/voice/port."""
@@ -213,7 +399,7 @@ class SynthApp:
             self.rack,
             cc_bindings=bindings.get("cc"),
             port_name=self.midi_port or bindings.get("midi_in"),
-            voice=self.arp or self.voice,
+            voice=self._keys,   # hardware notes enter the ctl graph at "keys"
             verbose=False,
             on_event=self._emit_midi_event,
         )
@@ -476,6 +662,7 @@ class SynthApp:
 
     def select_patch(self, patch_name: str) -> None:
         with self._lock:
+            self.ctl_wires = default_ctl_wires()  # fresh patch, fresh control plane
             self._build_patch(patch_name)
 
     def set_devices(self, input_device: str | None, output_device: str | None) -> None:
@@ -525,19 +712,15 @@ class SynthApp:
                 self.master.set_volume(volume)
 
     def note_on(self, note: int, velocity: int = 100) -> None:
-        sink = self.arp or self.voice
-        if sink:
-            sink.note_on(int(note), int(velocity))
+        # graph walk from "keys": wire keys→voice directly and no arp is in
+        # the path; no outgoing wire and the note dead-ends silently
+        self._keys.note_on(int(note), int(velocity))
 
     def note_off(self, note: int) -> None:
-        sink = self.arp or self.voice
-        if sink:
-            sink.note_off(int(note))
+        self._keys.note_off(int(note))
 
     def all_notes_off(self) -> None:
-        sink = self.arp or self.voice
-        if sink:
-            sink.all_off()
+        self._keys.all_off()
 
     def set_arp(self, **settings) -> None:
         with self._lock:
@@ -595,6 +778,7 @@ class SynthApp:
                 "midi_port": self.router.active_port if self.router else None,
                 "midi_enabled": self.midi_enabled,
                 "wires": self.rack.audio_wires() if self.rack else [],
+                "ctl_wires": [dict(w) for w in self.ctl_wires],
                 "drums_target": self.drums.target,
                 "arp": self.arp.settings() if self.arp else None,
                 "transport": self.transport.settings(),

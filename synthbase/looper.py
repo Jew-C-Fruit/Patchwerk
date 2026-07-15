@@ -1,9 +1,18 @@
 """MIDI looper: bar-synced record / replay of note events.
 
-Records what you PLAY (voiced note on/offs with their beat positions) for N
-bars from the next downbeat, then replays the phrase in a loop through the
-current patch — change modules under a running loop and the loop wears the
-new sound. Overdub adds passes on top. All timing rides the transport.
+Records note on/offs with their beat positions for N bars from the next
+downbeat, then replays the phrase in a loop through the current patch —
+change modules under a running loop and the loop wears the new sound.
+Overdub adds passes on top. All timing rides the transport.
+
+v3: what the deck RECORDS and where it REPLAYS is defined by the control
+wires (app.ctl_wires), not a position parameter. keys→deck feeds
+record_raw(); arp→deck feeds record_voiced(); the dispatcher in app.py only
+calls these for sources actually wired in. Replay _sink() is resolved from
+deck→X wires: deck→arp replays into the arp, deck→voice plays a private
+second node of the voice's target module (so the deck never steals your
+live voice), deck→drone lets the drone brain hear the replay. No outgoing
+wire = the loop spins silently (honest patching).
 
 (v1 was an audio looper; scsynth buffer reads returned allocation garbage
 through supriya on this setup — see docs/HISTORY.md. Notes are deterministic.)
@@ -15,6 +24,27 @@ import threading
 import time
 
 STATES = ("empty", "armed", "recording", "playing", "overdubbing", "stopped")
+
+
+class _FanSink:
+    """Replay into several wired targets at once (buses of the control plane)."""
+
+    def __init__(self, sinks: list) -> None:
+        self.sinks = sinks
+
+    def note_on(self, note: int, velocity: int = 100) -> None:
+        for s in self.sinks:
+            try:
+                s.note_on(note, velocity)
+            except Exception:  # noqa: BLE001 — one dead target must not stop the rest
+                pass
+
+    def note_off(self, note: int) -> None:
+        for s in self.sinks:
+            try:
+                s.note_off(note)
+            except Exception:  # noqa: BLE001
+                pass
 
 
 class Looper:
@@ -32,25 +62,26 @@ class Looper:
         self._thread: threading.Thread | None = None
         self._timer: threading.Timer | None = None
         self._sounding: set[int] = set()
-        self.position = "post"      # "pre" = raw input, arp hears replay;
-                                    # "post" = records arp output, own voice replays
         self._self_fire = False     # replayed notes must never be re-recorded
-        self._deck_node = None      # private voice node for "post" replay
+        self._deck_node = None      # private voice node for deck→voice replay
         self._deck_key = None
         self._deck_held: list[int] = []   # deck-voice note stack (mono, last-note priority)
         self._deck_sounding: int | None = None
 
     # -- note taps ---------------------------------------------------------------
+    # Only WIRED sources reach these: the app's ctl dispatch calls record_raw
+    # for keys→deck wires and record_voiced for arp→deck wires. Both are gated
+    # by _self_fire (replayed notes must never re-record) and by state.
 
-    def observe(self, note: int, on: bool) -> None:
-        """Voiced (post-arp) tap."""
-        if self.position != "post" or self._self_fire:
+    def record_raw(self, note: int, on: bool) -> None:
+        """Raw controller tap (a keys→deck wire)."""
+        if self._self_fire:
             return
         self._record(note, on)
 
-    def observe_input(self, note: int, on: bool) -> None:
-        """Raw controller (pre-arp) tap."""
-        if self.position != "pre" or self._self_fire:
+    def record_voiced(self, note: int, on: bool) -> None:
+        """Arp-output tap (an arp→deck wire)."""
+        if self._self_fire:
             return
         self._record(note, on)
 
@@ -74,9 +105,9 @@ class Looper:
 
     def configure(self, action=None, bars=None, level=None, overdub=None,
                   position=None) -> None:
+        # `position` is accepted and IGNORED (old clients still send it) —
+        # pre/post is wiring now: keys→deck / arp→deck / deck→arp / deck→voice.
         with self._lock:
-            if position in ("pre", "post") and self.state in ("empty", "stopped"):
-                self.position = position
             if bars is not None and self.state in ("empty", "stopped"):
                 self.bars = min(8, max(1, int(bars)))
             if level is not None:
@@ -111,9 +142,19 @@ class Looper:
         with self._lock:
             notes = sorted(self._events, key=lambda e: e[0])[:2000]
         return {"state": self.state, "bars": self.bars, "level": self.level,
-                "overdub": self.overdub, "midi": True, "position": self.position,
+                "overdub": self.overdub, "midi": True,
+                "position": self._derived_position(),  # legacy clients only
                 "loop_beats": self._loop_beats, "notes": notes,
                 "events": len(self._events)}
+
+    def _derived_position(self) -> str:
+        """Old clients expect a position string; derive it from the wires."""
+        wires = getattr(self.app, "ctl_wires", None) or []
+        if any(w.get("from") == "arp" and w.get("to") == "deck" for w in wires):
+            return "post"
+        if any(w.get("from") == "keys" and w.get("to") == "deck" for w in wires):
+            return "pre"
+        return "off"
 
     def shutdown(self) -> None:
         self._deck_teardown()
@@ -130,9 +171,30 @@ class Looper:
     # -- internals -----------------------------------------------------------------
 
     def _sink(self):
-        if self.position == "pre":
-            return self.app.arp or self.app.voice  # replay INTO the arp
-        return self._deck_voice()                   # post: private voice
+        """Where replay goes: resolved LIVE from the control wires deck→X.
+        deck→arp = replay into the arp pool; deck→voice = the private deck
+        voice; deck→drone = the drone brain hears the replay. No outgoing
+        wire = None, and the loop spins silently."""
+        wires = getattr(self.app, "ctl_wires", None)
+        if wires is None:  # wire-unaware host (bare unit tests) — old default
+            return self._deck_voice()
+        sinks = []
+        for w in wires:
+            if w.get("from") != "deck":
+                continue
+            if w.get("to") == "arp" and self.app.arp:
+                sinks.append(self.app.arp)
+            elif w.get("to") == "voice":
+                s = self._deck_voice()
+                if s is not None:
+                    sinks.append(s)
+            elif w.get("to") == "drone":
+                tap = getattr(self.app, "_drone_tap", None)
+                if tap is not None:
+                    sinks.append(tap)
+        if not sinks:
+            return None
+        return sinks[0] if len(sinks) == 1 else _FanSink(sinks)
 
     def _deck_voice(self):
         """A private second node of the target module — deck plays alongside

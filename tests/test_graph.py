@@ -4,7 +4,9 @@
 
 Covers: audio-wire derivation from rack settings, graph_wires bookkeeping
 (one-out-per-source, cycle rejection, disconnect memory, reapply-after-
-rebuild), and the drums target / to_chain compatibility mapping.
+rebuild), the drums target / to_chain compatibility mapping, and the v3
+control plane: ctl_wires defaults, add/remove + validation, keys/arp
+dispatch through the wires, deck sink resolution, and select_patch reset.
 """
 
 import sys
@@ -16,7 +18,8 @@ sys.path.insert(0, str(REPO))
 
 from synthbase.rack import Rack  # noqa: E402
 from synthbase.drums import DrumMachine  # noqa: E402
-from synthbase.app import SynthApp  # noqa: E402
+from synthbase.app import SynthApp, default_ctl_wires  # noqa: E402
+from synthbase.looper import _FanSink  # noqa: E402
 
 FAILURES = []
 
@@ -177,6 +180,105 @@ def test_spawn_unconnected():
           {"from": "chorus", "to": None} in app.graph_wires)
 
 
+# ---- ctl_wires: the wire-defined control plane -----------------------------------
+
+class FakeNoteSink:
+    """MonoVoice-shaped recorder for dispatch checks."""
+
+    def __init__(self):
+        self.ons, self.offs = [], []
+        self.all_offs = 0
+        self.target_key = None   # looper._deck_voice pokes this on voice
+
+    def note_on(self, note, velocity=100): self.ons.append(note)
+    def note_off(self, note): self.offs.append(note)
+    def all_off(self): self.all_offs += 1
+    def set_sustain(self, on): pass
+    def set_bend(self, semitones): pass
+
+
+def test_ctl_wires():
+    app = SynthApp(use_midi=False, use_reload=False)
+    check("default ctl wires derived", app.ctl_wires == default_ctl_wires())
+    check("default set is keys→arp, arp→{voice,deck,drone}, deck→voice",
+          app.ctl_wires == [
+              {"from": "keys", "to": "arp"},
+              {"from": "arp", "to": "voice"},
+              {"from": "arp", "to": "deck"},
+              {"from": "arp", "to": "drone"},
+              {"from": "deck", "to": "voice"},
+          ])
+
+    # add / remove / dedupe
+    app.set_ctl_wire("add", "keys", "voice")
+    check("add appends", {"from": "keys", "to": "voice"} in app.ctl_wires)
+    n = len(app.ctl_wires)
+    app.set_ctl_wire("add", "keys", "voice")
+    check("add dedupes", len(app.ctl_wires) == n)
+    app.set_ctl_wire("remove", "keys", "voice")
+    check("remove removes", {"from": "keys", "to": "voice"} not in app.ctl_wires)
+
+    # validation: self-wires, keys-as-destination, unknown nodes all rejected
+    for src, dst in (("arp", "arp"), ("deck", "deck"), ("arp", "keys"),
+                     ("voice", "arp"), ("drone", "voice"), ("nope", "voice"),
+                     ("keys", "nope")):
+        try:
+            app.set_ctl_wire("add", src, dst)
+            check(f"reject {src}→{dst}", False)
+        except ValueError:
+            check(f"reject {src}→{dst}", True)
+
+    # dispatch: notes walk the wires — keys→arp default, rewire = new router
+    app2 = SynthApp(use_midi=False, use_reload=False)
+    app2.arp = FakeNoteSink()
+    app2.voice = FakeNoteSink()
+    app2.note_on(60)
+    check("keys→arp default routes to arp",
+          app2.arp.ons == [60] and app2.voice.ons == [])
+    app2.set_ctl_wire("remove", "keys", "arp")
+    check("removing arp's last input silences it", app2.arp.all_offs >= 1)
+    app2.note_on(61)
+    check("arp with no inbound wire receives nothing", app2.arp.ons == [60])
+    check("unwired keys dead-end silently", app2.voice.ons == [])
+    app2.set_ctl_wire("add", "keys", "voice")
+    app2.note_on(62)
+    app2.note_off(62)
+    check("keys→voice direct bypasses the arp",
+          app2.voice.ons == [62] and app2.voice.offs == [62]
+          and app2.arp.ons == [60])
+
+    # arp fan-out resolution: arp→{voice, deck(voiced), drone}
+    app3 = SynthApp(use_midi=False, use_reload=False)
+    app3.voice = FakeNoteSink()
+    sinks = app3._ctl_sinks("arp")
+    check("arp sinks resolve voice + deck voiced tap + drone tap",
+          app3.voice in sinks and app3._deck_voiced_tap in sinks
+          and app3._drone_tap in sinks and len(sinks) == 3)
+    app3.set_ctl_wire("add", "keys", "deck")
+    check("keys→deck resolves the RAW record tap",
+          app3._deck_raw_tap in app3._ctl_sinks("keys"))
+
+    # deck replay sink resolution (looper reads the same wires)
+    app4 = SynthApp(use_midi=False, use_reload=False)
+    app4.arp = FakeNoteSink()
+    check("deck→voice default resolves (deck-voice path, arp fallback w/o engine)",
+          app4.looper._sink() is app4.arp)
+    app4.ctl_wires = [{"from": "deck", "to": "arp"}]
+    check("deck→arp resolves to the arp", app4.looper._sink() is app4.arp)
+    app4.ctl_wires = [{"from": "deck", "to": "arp"}, {"from": "deck", "to": "drone"}]
+    check("deck multi-out fans", isinstance(app4.looper._sink(), _FanSink))
+    app4.ctl_wires = [{"from": "keys", "to": "deck"}]
+    check("deck with no outgoing wire is silent", app4.looper._sink() is None)
+
+    # state exposes the wires; select_patch resets them to default
+    app5 = SynthApp(use_midi=False, use_reload=False)
+    app5.ctl_wires = [{"from": "keys", "to": "voice"}]
+    app5._build_patch = lambda name: None   # no engine in this test
+    app5.select_patch("mock")
+    check("select_patch resets ctl_wires to default",
+          app5.ctl_wires == default_ctl_wires())
+
+
 # ---- drums target / to_chain compat --------------------------------------------
 
 def test_drums_target():
@@ -214,6 +316,7 @@ def main():
     test_wires_derivation()
     test_graph_wire_bookkeeping()
     test_spawn_unconnected()
+    test_ctl_wires()
     test_drums_target()
     print(f"\n{'PASS' if not FAILURES else 'FAIL'} — {len(FAILURES)} failures")
     return 1 if FAILURES else 0

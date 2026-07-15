@@ -1,8 +1,10 @@
 """Loop deck logic test — no audio server needed.
 
-Exercises the v2 deck: pre/post positioning, the _self_fire guard (no
-phantom overdub), overdub-off purity, wrap-around events, and phase().
-Run: python tests/test_looper.py
+Exercises the v3 deck: wire-defined record taps (record_raw / record_voiced),
+the _self_fire guard (no phantom overdub), wiring-derived replay sink
+(deck→voice / deck→arp / dead-end), wrap-around events, phase(), and the
+private deck-voice note stack. `position` is gone — configure() must accept
+and ignore it. Run: python tests/test_looper.py
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from synthbase.looper import Looper  # noqa: E402
+from synthbase.looper import Looper, _FanSink  # noqa: E402
 
 FAILS = []
 
@@ -48,13 +50,12 @@ class FakeTransport:
 
 
 class FakeSink:
-    """Stands in for arp/voice; feeds notes back into the looper taps
-    the way the real app does (this is what caused phantom overdub)."""
+    """Stands in for arp/voice; feeds notes back into the looper's record
+    taps the way the real app does (this is what caused phantom overdub)."""
 
     def __init__(self):
         self.ons, self.offs = [], []
-        self.looper = None
-        self.tap = None  # set to looper.observe or observe_input
+        self.tap = None  # set to looper.record_raw or record_voiced
 
     def note_on(self, note, velocity=100):
         self.ons.append(note)
@@ -68,47 +69,56 @@ class FakeSink:
 
 
 class FakeApp:
-    def __init__(self):
+    """Wire-aware host: the looper reads ctl_wires for its replay sink."""
+
+    def __init__(self, wires):
         self.transport = FakeTransport()
         self.arp = FakeSink()
         self.voice = None
+        self.ctl_wires = list(wires)
         self.events = []
         self._emit_midi_event = self.events.append
 
 
-def make(position):
-    app = FakeApp()
+# convenience wire sets
+VOICED = [{"from": "arp", "to": "deck"}, {"from": "deck", "to": "voice"}]
+RAW = [{"from": "keys", "to": "deck"}, {"from": "deck", "to": "arp"}]
+
+
+def make(wires, tap="voiced"):
+    app = FakeApp(wires)
     lp = Looper(app)
-    lp.configure(position=position, bars=1)
-    # post-mode _deck_voice falls back to app.arp when there's no engine —
-    # same code path, still exercises _self_fire through the sink
-    app.arp.tap = lp.observe if position == "post" else lp.observe_input
+    lp.configure(bars=1)
+    # deck→voice with no engine/voice falls back to app.arp — same code
+    # path, still exercises _self_fire through the sink
+    app.arp.tap = lp.record_voiced if tap == "voiced" else lp.record_raw
     return app, lp
 
 
-def record_pass(app, lp, notes=(60, 64)):
+def record_pass(app, lp, tap, notes=(60, 64)):
     lp.configure(action="record")
     deadline = time.monotonic() + 3
     while lp.state != "recording" and time.monotonic() < deadline:
         time.sleep(0.005)
     check("reached recording state", lp.state == "recording")
-    for n in notes:  # play through the tap the app would use
-        (lp.observe if lp.position == "post" else lp.observe_input)(n, True)
+    for n in notes:  # play through the tap the app's dispatcher would use
+        tap(n, True)
         time.sleep(0.05)
-        (lp.observe if lp.position == "post" else lp.observe_input)(n, False)
+        tap(n, False)
     while lp.state == "recording" and time.monotonic() < deadline:
         time.sleep(0.01)
 
 
 def main():
-    # --- post mode: records, replays, never re-records itself ---------------
-    app, lp = make("post")
-    check("position accepted", lp.settings()["position"] == "post")
-    record_pass(app, lp)
+    # --- voiced loop (old "post"): records arp output, replays, never
+    # --- re-records itself --------------------------------------------------
+    app, lp = make(VOICED)
+    check("derived position reads post", lp.settings()["position"] == "post")
+    record_pass(app, lp, lp.record_voiced)
     n0 = len(lp._events)
     check("events recorded", n0 == 4)
     check("state playing (overdub off)", lp.state == "playing")
-    # let it replay ~2 loops; sink feeds back into observe()
+    # let it replay ~2 loops; sink feeds back into record_voiced()
     time.sleep(app.transport.beat_duration * 9)
     check("no phantom overdub (event count stable)", len(lp._events) == n0)
     check("replay reached sink", len(app.arp.ons) >= 2)
@@ -118,13 +128,15 @@ def main():
           lp.settings()["loop_beats"] == 4.0 and len(lp.settings()["notes"]) == n0)
     lp.configure(action="stop")
     check("phase() none when stopped", lp.phase() is None)
-    check("position editable when stopped", (lp.configure(position="pre"),
-                                             lp.position)[1] == "pre")
+    # position is accepted and IGNORED (compat with old clients)
+    lp.configure(position="pre")
+    check("position param ignored", lp.settings()["position"] == "post"
+          and not hasattr(lp, "position"))
     lp.shutdown()
 
     # --- loop-top boundary ----------------------------------------------------
     # a note recorded at exactly beat 0 must voice on every replay cycle
-    app, lp = make("post")
+    app, lp = make(VOICED)
     lp._events = [(0.0, 60, True), (0.5, 60, False)]
     lp._loop_beats = 4.0
     lp._record_start_beat = 0.0
@@ -136,14 +148,14 @@ def main():
     lp.shutdown()
 
     # armed grace: a note struck just before the window opens lands at beat 0
-    app, lp = make("post")
+    app, lp = make(VOICED)
     lp._loop_beats = 4.0
     lp.state = "armed"
     lp._record_start_beat = app.transport.beats_now() + 0.2  # top is 0.2 beats away
-    lp.observe(55, True)
+    lp.record_voiced(55, True)
     check("armed grace clamps early note to beat 0",
           lp._events and lp._events[0] == (0.0, 55, True))
-    lp.observe(55, False)  # offs before the top are dropped
+    lp.record_voiced(55, False)  # offs before the top are dropped
     check("armed off ignored", len(lp._events) == 1)
     check("loop_note emitted live", any(
         e.get("kind") == "loop_note" for e in app.events))
@@ -151,7 +163,7 @@ def main():
     lp.shutdown()
 
     # a note still held when the window closes gets an off at the loop end
-    app, lp = make("post")
+    app, lp = make(VOICED)
     lp._loop_beats = 4.0
     lp._record_start_beat = app.transport.beats_now()
     lp.state = "recording"
@@ -169,7 +181,7 @@ def main():
         def set(self, **kw): self.sets.append(kw)
         def free(self): pass
 
-    app, lp = make("post")
+    app, lp = make(VOICED)
     lp._deck_node = FakeNode()
     lp._deck_key = "x"
     lp.note_on(60)
@@ -194,19 +206,51 @@ def main():
     check("stable sort keeps fire order at equal beats",
           srt == [(0.5, 62, True), (0.5, 61, False), (1.0, 60, True), (1.0, 60, False)])
 
-    # --- pre mode: only the input tap records --------------------------------
-    app, lp = make("pre")
-    record_pass(app, lp)
+    # --- raw loop (old "pre"): keys→deck records, deck→arp replays ------------
+    app, lp = make(RAW, tap="raw")
+    check("derived position reads pre", lp.settings()["position"] == "pre")
+    record_pass(app, lp, lp.record_raw)
     n0 = len(lp._events)
-    check("pre-mode records via observe_input", n0 == 4)
-    lp.observe(72, True)   # post tap must be ignored in pre mode
-    lp.observe(72, False)
-    check("post tap ignored in pre mode", len(lp._events) == n0)
+    check("raw tap records via record_raw", n0 == 4)
     time.sleep(app.transport.beat_duration * 9)
-    check("pre-mode replay is not re-recorded", len(lp._events) == n0)
-    # position locked while playing
-    lp.configure(position="post")
-    check("position locked while playing", lp.position == "pre")
+    check("deck→arp replay reaches the arp", len(app.arp.ons) >= 2)
+    check("replay is not re-recorded", len(lp._events) == n0)
+    lp.configure(action="stop")
+    lp.shutdown()
+
+    # --- wiring-derived sink resolution ----------------------------------------
+    app, lp = make(VOICED)
+    check("deck→voice resolves (falls back to arp w/o engine)",
+          lp._sink() is app.arp)
+    app.ctl_wires = list(RAW)
+    check("deck→arp resolves to the arp", lp._sink() is app.arp)
+    app.ctl_wires = [{"from": "keys", "to": "deck"}]  # record-only patching
+    check("no deck outgoing wire → sink None (silent dead-end)",
+          lp._sink() is None)
+    check("derived position without record source reads pre",
+          lp.settings()["position"] == "pre")
+    app.ctl_wires = []
+    check("derived position with deck unwired reads off",
+          lp.settings()["position"] == "off")
+    app.ctl_wires = RAW + [{"from": "deck", "to": "voice"}]
+    s = lp._sink()
+    check("multiple deck outputs fan out", isinstance(s, _FanSink)
+          and len(s.sinks) == 2)
+    s.note_on(70)   # a dead sink must not break the fan
+    check("fan delivers to every target", app.arp.ons.count(70) == 2)
+    lp.shutdown()
+
+    # a dead-end replay must not crash the run thread or _release_all
+    app, lp = make([{"from": "arp", "to": "deck"}])   # record yes, replay no
+    lp._events = [(0.0, 60, True), (0.5, 60, False)]
+    lp._loop_beats = 4.0
+    lp._record_start_beat = 0.0
+    lp.state = "playing"
+    lp._ensure_thread()
+    time.sleep(app.transport.beat_duration * 5)
+    check("dead-end replay spins silently", lp.state == "playing"
+          and not app.arp.ons)
+    lp.configure(action="stop")
     lp.shutdown()
 
     print(f"\n{'FAIL — ' + str(len(FAILS)) if FAILS else 'PASS — all'} checks"
