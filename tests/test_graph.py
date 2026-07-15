@@ -400,6 +400,299 @@ def test_alloff_closes_taps():
           rec == [(60, True), (60, False)])
 
 
+# ---- v7 regression: the deck's take must stay PAIRED ------------------------------
+# (an unpaired on in state.looper.notes draws a full-width smear on the deck
+# viz; an orphan off draws a bogus 0-to-beat bar -- both seen live)
+
+def test_deck_take_closure():
+    app = SynthApp(use_midi=False, use_reload=False)
+    l = app.looper
+
+    # (1) armed grace: an on clamps to beat 0; its off DURING armed must pair
+    # (v6 dropped it -> the take held a phantom note for the whole loop)
+    l.state = "armed"
+    l._loop_beats = 8.0
+    l._events = []
+    l._record_start_beat = app.transport.beats_now()
+    l._record(60, True)
+    check("armed on clamps to beat 0", (0.0, 60, True) in l._events)
+    l._record(60, False)
+    check("armed off pairs the clamped on (no phantom full-loop note)",
+          (0.0, 60, False) in l._events)
+    # an off during armed for a note we never clamped stays dropped
+    l._record(64, False)
+    check("armed off without a clamped on is dropped",
+          not any(n == 64 for _, n, _ in l._events))
+
+    # (2) recording->playing: _finish_recording ships authoritative notes with
+    # synthesized window-close offs for notes still open
+    events = []
+    app.on_midi_event = lambda e: events.append(dict(e))
+    l.state = "recording"
+    l._events = [(0.5, 62, True)]
+    l.overdub = False
+    l._finish_recording()
+    check("window close synthesizes the off", any(
+        n == 62 and not on for _, n, on in l._events))
+    looper_evs = [e for e in events if e.get("kind") == "looper"]
+    check("recording->playing emits authoritative notes incl. the close",
+          bool(looper_evs) and any(n == 62 and not on
+                                   for _, n, on in looper_evs[-1]["notes"]))
+
+    # (3) stop while overdubbing: open record-side notes close at stop
+    app2 = SynthApp(use_midi=False, use_reload=False)
+    l2 = app2.looper
+    l2.state = "overdubbing"
+    l2.overdub = True
+    l2._loop_beats = 8.0
+    l2._record_start_beat = app2.transport.beats_now() - 3.0
+    l2._events = [(1.0, 60, True), (2.0, 64, True), (2.5, 64, False)]
+    l2._stop()
+    offs60 = [b for b, n, on in l2._events if n == 60 and not on]
+    check("stop closes the held overdub note", len(offs60) == 1)
+    check("stop leaves paired notes alone",
+          sum(1 for _, n, on in l2._events if n == 64 and not on) == 1)
+
+    # (4) overdub toggled off mid-note: the transition closes opens too
+    app3 = SynthApp(use_midi=False, use_reload=False)
+    l3 = app3.looper
+    l3.state = "overdubbing"
+    l3.overdub = True
+    l3._loop_beats = 8.0
+    l3._record_start_beat = app3.transport.beats_now() - 2.0
+    l3._events = [(0.5, 55, True)]
+    l3.configure(overdub=False)
+    check("overdub-off transition closes open notes",
+          l3.state == "playing" and
+          any(n == 55 and not on for _, n, on in l3._events))
+
+    # (5) deck release must NOT re-record through a deck->arp->deck loop
+    class _ReentrantSink(FakeNoteSink):
+        def __init__(self, looper):
+            super().__init__()
+            self.looper = looper
+
+        def note_off(self, note):
+            super().note_off(note)
+            self.looper.record_voiced(note, False)  # echoes back like arp->deck
+
+    app4 = SynthApp(use_midi=False, use_reload=False)
+    l4 = app4.looper
+    app4.arp = _ReentrantSink(l4)
+    app4.ctl_wires = [{"from": "deck", "to": "arp"}]
+    l4.state = "recording"
+    l4._loop_beats = 8.0
+    l4._record_start_beat = app4.transport.beats_now()
+    l4._events = []
+    l4._sounding = {67}
+    l4._release_all()
+    check("release_all is self-fire guarded (no re-recorded orphan offs)",
+          l4._events == [])
+    check("release_all still released downstream", app4.arp.offs == [67])
+
+
+# ---- v7 regression: every keys off path emits its src=keys tap ---------------------
+
+def test_keys_off_paths():
+    import mido
+    from synthbase.midi import MidiRouter
+
+    app = SynthApp(use_midi=False, use_reload=False)
+    app.arp = FakeNoteSink()
+    taps = []
+    app.on_midi_event = lambda e: taps.append(dict(e))
+    keys_taps = lambda: [(e["note"], e["on"]) for e in taps
+                         if e.get("kind") == "tap" and e.get("src") == "keys"]
+
+    # hardware MIDI via the router (CP88 path): note_off AND vel-0 note_on
+    r = MidiRouter(None, voice=app._keys, on_event=app._emit_midi_event)
+    r._handle(mido.Message("note_on", note=60, velocity=90))
+    r._handle(mido.Message("note_off", note=60))
+    r._handle(mido.Message("note_on", note=64, velocity=80))
+    r._handle(mido.Message("note_on", note=64, velocity=0))   # vel-0 == off
+    check("router note_off + vel-0 note_on close their keys taps",
+          keys_taps() == [(60, True), (60, False), (64, True), (64, False)])
+
+    # sustain pedal up via the router must not strand anything
+    taps.clear()
+    r._handle(mido.Message("note_on", note=50, velocity=90))
+    r._handle(mido.Message("control_change", control=64, value=127))
+    r._handle(mido.Message("note_off", note=50))
+    r._handle(mido.Message("control_change", control=64, value=0))
+    check("sustained note tap still closes at key release",
+          (50, False) in keys_taps())
+
+
+# ---- v8: palette/alloc lifecycle on a FAKE ENGINE (real Rack + edit_chain) --------
+
+class _FakeBus:
+    _n = [16]
+
+    def __init__(self, count=2):
+        self.id = _FakeBus._n[0]
+        _FakeBus._n[0] += count
+
+    def __int__(self): return self.id
+    def free(self): pass
+
+
+class _FakeSynth:
+    def __init__(self, **kw): self.kw = kw
+    def set(self, **kw): self.kw.update(kw)
+    def free(self): pass
+    def move(self, *a, **k): pass
+    def pause(self): pass
+    def unpause(self): pass
+
+
+class _FakeServer:
+    def add_synthdefs(self, *a): pass
+    def sync(self): pass
+
+    def add_bus_group(self, calculation_rate=None, count=2):
+        return _FakeBus(count)
+
+    def add_synth(self, synthdef, add_action=None, target_node=None, **kw):
+        return _FakeSynth(**kw)
+
+
+class _FakeEngine:
+    def __init__(self):
+        self.server = _FakeServer()
+        self.root_group = None
+        self.boot_note = None
+
+    def register(self, *m): pass
+
+
+class _FakeMaster:
+    _master_node = None
+    volume = 0.8
+    def start(self): pass
+    def stop(self): pass
+
+
+def _fparam(default=0.5):
+    return SimpleNamespace(default=default, minimum=0.0, maximum=1.0,
+                           curve="lin", options=())
+
+
+def _fmod(key, kind, params, gate=False):
+    names = dict.fromkeys(list(params) + (["gate"] if gate else []), 0)
+    return SimpleNamespace(key=key, name=key.title(), kind=kind,
+                           family=kind, service=False,
+                           params={p: _fparam() for p in params},
+                           synthdef=SimpleNamespace(parameters=names,
+                                                    effective_name=key))
+
+
+def make_engine_app():
+    app = SynthApp(use_midi=False, use_reload=False)
+    app.registry = {
+        "pluck": _fmod("pluck", "source", ["freq", "amp", "gate"], gate=True),
+        "chorus": _fmod("chorus", "effect", ["mix"]),
+        "echo": _fmod("echo", "effect", ["amp"]),
+    }
+    app.engine = _FakeEngine()
+    app.master = _FakeMaster()
+    app._build_from({"chain": [("pluck", {}), ("chorus", {}), ("echo", {})]},
+                    "mock")
+    return app
+
+
+def test_spawn_delete_respawn_cycle():
+    """v8 #1 guard: palette types must never leave the registry, and freed
+    instance ids must be re-allocatable after a delete."""
+    app = make_engine_app()
+    n1 = app.spawn_unconnected("pluck")
+    check("second source allocs .2", n1 == "pluck.2")
+    check("registry retains the type after spawn", "pluck" in app.registry)
+    app.edit_chain("remove", "pluck.2")
+    check("instance removed", all(i.key != "pluck.2"
+                                  for i in app.rack.instances))
+    check("registry retains the type after delete", "pluck" in app.registry)
+    n2 = app.spawn_unconnected("pluck")
+    check("respawn after delete reuses the freed id", n2 == "pluck.2")
+    e1 = app.spawn_unconnected("echo")
+    app.edit_chain("remove", e1)
+    check("effect respawn-after-delete works too",
+          app.spawn_unconnected("echo") == "echo.2")
+    app.transport.shutdown()
+
+
+def test_snip_heal_audio():
+    """v8 #2: removing X from A→X→B on the AUDIO graph reconnects A→B."""
+    app = make_engine_app()
+    app.graph_wires = app.rack.audio_wires()  # pluck→chorus→echo→master
+    check("premise: chorus is mid-chain",
+          {"from": "pluck", "to": "chorus"} in app.graph_wires)
+    app.edit_chain("remove", "chorus")
+    check("audio snip-heal bridged A→B",
+          {"from": "pluck", "to": "echo"} in app.graph_wires)
+    check("no dangling wires to the removed module", all(
+        "chorus" not in (w.get("from"), w.get("to"))
+        for w in app.graph_wires))
+    app.transport.shutdown()
+
+
+# ---- v8: ctl snip-heal on tonic/keyshift removal -----------------------------------
+
+def test_snip_heal_ctl():
+    # 1-in/1-out through a deriver: heal A→B
+    app = SynthApp(use_midi=False, use_reload=False)
+    app.arp = FakeNoteSink()
+    app.spawn_tonic()
+    app.ctl_wires = []
+    app.set_ctl_wire("add", "keys", "tonic")
+    app.set_ctl_wire("add", "tonic", "arp")
+    app.remove_tonic("tonic")
+    check("removing a 1-in/1-out deriver heals A→B",
+          app.ctl_wires == [{"from": "keys", "to": "arp"}])
+
+    # multi-in: ambiguous — wires just drop
+    app.spawn_tonic()
+    app.ctl_wires = [{"from": "keys", "to": "tonic"},
+                     {"from": "deck", "to": "tonic"},
+                     {"from": "tonic", "to": "arp"}]
+    app.remove_tonic("tonic")
+    check("multi-in deriver removal drops (no invented wires)",
+          app.ctl_wires == [])
+
+    # heal that would self-loop is dropped, not raised
+    app.spawn_tonic()
+    app.ctl_wires = [{"from": "arp", "to": "tonic"},
+                     {"from": "tonic", "to": "arp"}]
+    app.remove_tonic("tonic")
+    check("self-loop heal is dropped silently", app.ctl_wires == [])
+
+    # tonic→drone wires are a different signal kind: never healed into
+    app2 = SynthApp(use_midi=False, use_reload=False)
+    app2.rack = RecordingRack([("pluck", "source"), ("drone", "source")], [])
+    app2.spawn_tonic()
+    app2.ctl_wires = [{"from": "keys", "to": "tonic"},
+                      {"from": "tonic", "to": "drone"}]
+    app2.remove_tonic("tonic")
+    check("tonic-out (drone) wires drop, never heal",
+          app2.ctl_wires == [])
+
+    # keyshift: heal PER LANE (each lane is its own A→X→B)
+    app3 = SynthApp(use_midi=False, use_reload=False)
+    app3.arp = FakeNoteSink()
+    kid = app3.spawn_keyshift()
+    app3.ctl_wires = []
+    app3.set_ctl_wire("add", "keys", f"{kid}:1")
+    app3.set_ctl_wire("add", f"{kid}:1", "arp")
+    app3.set_ctl_wire("add", "arp", f"{kid}:2")
+    app3.set_ctl_wire("add", f"{kid}:2", "deck")
+    app3.set_ctl_wire("add", "deck", f"{kid}:3")   # lane 3: in only — drop
+    app3.remove_keyshift(kid)
+    check("keyshift removal heals each 1-in/1-out lane",
+          {"from": "keys", "to": "arp"} in app3.ctl_wires and
+          {"from": "arp", "to": "deck"} in app3.ctl_wires)
+    check("half-wired lanes drop; nothing else invented",
+          len(app3.ctl_wires) == 2)
+
+
 # ---- v6: key shifter ------------------------------------------------------------
 
 def test_keyshift_offsets():
@@ -467,10 +760,13 @@ def test_keyshift_lanes_no_merge():
            if e.get("kind") == "tap" and e.get("src") == kid] ==
           [(55, True), (55, False)])
 
-    # removal drops the shifter AND its lane wires
+    # removal drops the shifter and its lane wires; v8 snip-heal bridges
+    # each 1-in/1-out lane (keys→ks:1→voice, keys→ks:2→voice.2)
     app.remove_keyshift(kid)
-    check("remove_keyshift drops shifter + lane wires",
-          kid not in app.keyshifts and app.ctl_wires == [])
+    check("remove_keyshift drops the shifter + lane wires (healed pairwise)",
+          kid not in app.keyshifts and
+          sorted((w["from"], w["to"]) for w in app.ctl_wires) ==
+          [("keys", "voice"), ("keys", "voice.2")])
 
 
 def test_keyshift_off_uses_ons_offset():
@@ -815,6 +1111,11 @@ def main():
     test_ctl_wires()
     test_tap_emission()
     test_alloff_closes_taps()
+    test_deck_take_closure()
+    test_keys_off_paths()
+    test_spawn_delete_respawn_cycle()
+    test_snip_heal_audio()
+    test_snip_heal_ctl()
     test_keyshift_offsets()
     test_keyshift_lanes_no_merge()
     test_keyshift_off_uses_ons_offset()

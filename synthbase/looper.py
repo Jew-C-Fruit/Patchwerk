@@ -63,6 +63,7 @@ class Looper:
         self._thread: threading.Thread | None = None
         self._timer: threading.Timer | None = None
         self._sounding: set[int] = set()
+        self._armed_open: set[int] = set()  # notes clamped to beat 0 while armed
         self._self_fire = False     # replayed notes must never be re-recorded
         self._deck_node = None      # private voice node for deck→voice replay
         self._deck_key = None
@@ -91,10 +92,21 @@ class Looper:
             return
         beat = self.app.transport.beats_now() - self._record_start_beat
         if self.state == "armed":
-            # a note struck just ahead of the loop top belongs at beat 0
-            if not on or beat < -0.35:
-                return
+            # a note struck just ahead of the loop top belongs at beat 0 —
+            # and if it's RELEASED before the window starts, its off clamps
+            # to beat 0 too (v6 dropped the off: the take kept a phantom note
+            # for the whole loop → full-width deck bar + droning replay)
+            if on:
+                if beat < -0.35:
+                    return
+                self._armed_open.add(int(note))
+            else:
+                if int(note) not in self._armed_open:
+                    return  # off for a note we never clamped — nothing to pair
+                self._armed_open.discard(int(note))
             beat = 0.0
+        else:
+            self._armed_open.discard(int(note))  # real off will pair it
         b = round(beat % self._loop_beats, 4)
         with self._lock:
             self._events.append((b, int(note), bool(on)))
@@ -119,6 +131,11 @@ class Looper:
                     self.state = "overdubbing"
                     self._emit()
                 elif self.state == "overdubbing" and not self.overdub:
+                    # leaving the record window mid-note: close opens so the
+                    # take stays paired (unpaired ons ring + smear the viz)
+                    p = self.phase()
+                    self._close_open_take(p if p is not None
+                                          else self._loop_beats - 0.02)
                     self.state = "playing"
                     self._emit()
             if action == "record":
@@ -299,9 +316,14 @@ class Looper:
         for n in list(self._sounding):
             if sink is not None:
                 try:
+                    # replay releases must never re-record (deck→arp→deck):
+                    # same _self_fire guard the replay thread uses
+                    self._self_fire = True
                     sink.note_off(n)
                 except Exception:  # noqa: BLE001
                     pass
+                finally:
+                    self._self_fire = False
             if emit:  # close the replay's viz taps too (no stuck bars)
                 emit({"kind": "tap", "src": "deck", "note": int(n), "on": False})
         self._sounding.clear()
@@ -316,6 +338,7 @@ class Looper:
         start_beat, t_start = transport.next_grid(float(transport.beats_per_bar))
         # known now — lets the armed-state grace clamp early notes to beat 0
         self._record_start_beat = start_beat
+        self._armed_open.clear()
         self.state = "armed"
         self._emit()
 
@@ -340,18 +363,26 @@ class Looper:
         self._timer.daemon = True
         self._timer.start()
 
+    def _close_open_take(self, at_beat: float) -> None:
+        """Synthesize offs at `at_beat` for every note the take holds open
+        (more ons than offs). Every record-window EXIT must call this — an
+        unpaired on rings forever on replay and smears a full-width bar on
+        the deck viz."""
+        with self._lock:
+            depth: dict[int, int] = {}
+            for _, note, on in self._events:
+                depth[note] = depth.get(note, 0) + (1 if on else -1)
+            b = round(max(0.0, min(at_beat, self._loop_beats - 0.02)), 4)
+            for note, n in depth.items():
+                for _ in range(max(0, n)):
+                    self._events.append((b, note, False))
+
     def _finish_recording(self) -> None:
         with self._lock:
             if self.state != "recording":
                 return
             # close notes still held when the window ends so nothing rings on
-            depth: dict[int, int] = {}
-            for _, note, on in sorted(self._events):
-                depth[note] = depth.get(note, 0) + (1 if on else -1)
-            for note, n in depth.items():
-                for _ in range(max(0, n)):
-                    self._events.append(
-                        (round(self._loop_beats - 0.02, 4), note, False))
+            self._close_open_take(self._loop_beats - 0.02)
             self.state = "overdubbing" if self.overdub else "playing"
             self._emit()
         self._ensure_thread()
@@ -365,6 +396,13 @@ class Looper:
     def _stop(self) -> None:
         if self._timer:
             self._timer.cancel()
+        if self.state in ("recording", "overdubbing"):
+            # leaving a record window with notes still held: close them at
+            # the current phase so the take stays paired
+            p = self.phase()
+            self._close_open_take(p if p is not None
+                                  else self._loop_beats - 0.02)
+        self._armed_open.clear()
         self.state = "stopped" if self._events else "empty"
         self._release_all()
         self._deck_teardown()

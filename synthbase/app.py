@@ -745,14 +745,32 @@ class SynthApp:
                 self.tonics[tid] = TonicDeriver(self, tid)
             return tid
 
+    def _heal_ctl_snip(self, ins: list, outs: list) -> None:
+        """SNIP-HEAL: removing a node that sat A→X→B on the ctl plane
+        auto-reconnects A→B — but ONLY when unambiguous (exactly 1 upstream
+        and 1 downstream); multi-in/multi-out just drops (pairwise N×M
+        healing would invent wires the user never patched). Call AFTER the
+        removed node's wires are gone."""
+        if len(ins) == 1 and len(outs) == 1:
+            try:
+                self.set_ctl_wire("add", ins[0], outs[0])
+            except (ValueError, KeyError):
+                pass  # e.g. A→B invalid (self-wire, keys-as-dst) — drop
+
     def remove_tonic(self, tid: str) -> None:
         with self._lock:
             d = self.tonics.pop(tid, None)
             if d is None:
                 raise KeyError(f"no tonic deriver {tid!r}")
             d.shutdown()
+            # snip-heal candidates: note streams IN, thru wires OUT (the
+            # amber tonic→drone wires are a different signal kind — dropped)
+            ins = [w["from"] for w in self.ctl_wires if w.get("to") == tid]
+            outs = [w["to"] for w in self.ctl_wires
+                    if w.get("from") == tid and not self._is_drone_id(w.get("to"))]
             self.ctl_wires = [w for w in self.ctl_wires
                               if tid not in (w.get("from"), w.get("to"))]
+            self._heal_ctl_snip(ins, outs)
             if self._legacy_drone and tid == "tonic":
                 self._legacy_drone = False
 
@@ -781,11 +799,20 @@ class SynthApp:
                 ks.shutdown()  # closes open notes downstream + their taps
             except Exception:  # noqa: BLE001
                 pass
+            # snip-heal candidates PER LANE: each lane is its own A→X→B path
+            lane_pairs = []
+            for lane in range(1, 5):
+                ep = f"{kid}:{lane}"
+                lane_pairs.append((
+                    [w["from"] for w in self.ctl_wires if w.get("to") == ep],
+                    [w["to"] for w in self.ctl_wires if w.get("from") == ep]))
             # its control-plane presence goes with it (lane endpoints too)
             self.ctl_wires = [
                 w for w in self.ctl_wires
                 if kid not in (self._split_ep(w.get("from"))[0],
                                self._split_ep(w.get("to"))[0])]
+            for ins, outs in lane_pairs:
+                self._heal_ctl_snip(ins, outs)
 
     def set_keyshift(self, kid: str, **settings) -> None:
         with self._lock:

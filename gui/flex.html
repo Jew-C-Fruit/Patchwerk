@@ -69,6 +69,10 @@
     background-size: 24px 24px; }
   svg#wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   svg#wires path.hit { pointer-events: stroke; cursor: default; }
+  /* v8: wire labels are DRAG HANDLES — grab a badge, drop it on a module */
+  #wire-labels g { pointer-events: auto; cursor: grab; }
+  .mod.splice-target { border-color: rgba(255,255,255,0.85);
+    box-shadow: 0 0 0 1.5px rgba(255,255,255,0.55), 0 3px 14px rgba(0,0,0,0.45); }
   svg#wires path.hit.cuttable { cursor: pointer; }
   svg#wires path.splice-hi { stroke-width: 5 !important;
     filter: brightness(1.4) drop-shadow(0 0 4px rgba(255,255,255,0.45)); }
@@ -292,7 +296,20 @@ function connect() {
     scheduleReconnect(3000);
     return;
   }
-  ws.onopen = () => { lastMsg = performance.now(); $("status").classList.add("ok"); };
+  ws.onopen = () => {
+    lastMsg = performance.now();
+    $("status").classList.add("ok");
+    // flush anything queued while the socket was down — a dropped note_off
+    // or all_notes_off leaves stuck notes + never-clearing monitor bars
+    const q = outbox.splice(0, outbox.length);
+    for (const m of q) {
+      try { ws.send(JSON.stringify(m)); } catch (_) { break; }
+    }
+    // a fresh socket means the server already silenced us (last-client
+    // disconnect = all_notes_off) — any tap still open predates this
+    // connection and would otherwise pin a full-width bar forever
+    for (const ev of tapNotes) if (ev.t1 === null) ev.t1 = performance.now();
+  };
   ws.onclose = () => { $("status").classList.remove("ok"); scheduleReconnect(800); };
   ws.onerror = () => { try { ws.close(); } catch (_) {} };
   ws.onmessage = (ev) => {
@@ -308,7 +325,16 @@ function connect() {
     else if (m.type === "error") console.warn("server:", m.message);
   };
 }
-function send(m) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); }
+// messages sent during a reconnect gap are QUEUED, not dropped (v7: dropped
+// note_offs were leaving stuck notes and permanent green monitor bars)
+const outbox = [];
+function send(m) {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(m));
+  else {
+    outbox.push(m);
+    if (outbox.length > 200) outbox.shift();  // bounded: knob spam can go
+  }
+}
 function ensureLive() {
   if (!ws || ws.readyState >= 2) { connect(); return; }
   if (ws.readyState === 1 && performance.now() - lastMsg > 3000) {
@@ -561,12 +587,28 @@ function layoutPorts(node) {
     p.el.style.left = (p.ox - 3.5) + "px";
     p.el.style.top = (p.oy - 3.5) + "px";
   }
-  // mod + tonic handles ride the sides (subtle); audio/ctl flow top→bottom
+  // TONIC INS pin to the card's UPPER-LEFT CORNER (v8) — a fixed spot that
+  // cannot collide with the audio in (top center) or the quiet per-param
+  // handles (left edge at row heights below the head): the amber root socket
+  for (const p of node.ports.filter(q => !q.quiet && q.sig === "tonic" &&
+                                         q.dir === "in")) {
+    p.edge = "left";
+    p.el.classList.remove("e-top", "e-bottom", "e-right");
+    p.el.classList.add("e-left", "subtle");
+    p.ox = 0;
+    p.oy = 10;
+    p.el.style.left = (p.ox - 4.5) + "px";
+    p.el.style.top = (p.oy - 4.5) + "px";
+  }
+  // mod handles ride the sides (subtle); audio/ctl flow top→bottom; the
+  // deriver's tonic OUT keeps the right edge
   const side = (p) => p.sig === "mod" || p.sig === "tonic";
+  const cornered = (p) => p.sig === "tonic" && p.dir === "in";
   const groups = {
     top:    node.ports.filter(p => !p.quiet && !side(p) && p.dir === "in"),
     bottom: node.ports.filter(p => !p.quiet && !side(p) && p.dir === "out"),
-    left:   node.ports.filter(p => !p.quiet && side(p) && p.dir === "in"),
+    left:   node.ports.filter(p => !p.quiet && side(p) && !cornered(p) &&
+                                   p.dir === "in"),
     right:  node.ports.filter(p => !p.quiet && side(p) && p.dir === "out"),
   };
   for (const [edge, list] of Object.entries(groups)) list.forEach((p, i) => {
@@ -1068,6 +1110,7 @@ function addWire(from, to, opts = {}) {
     hit.classList.add("cuttable");
     hit.addEventListener("click", () => opts.cut(w));
   }
+  bindLabelHandle(w);   // v8: the label badge is a splice drag handle
   wiresPerm.appendChild(el); wiresPerm.appendChild(hit);
   wiresPerm.appendChild(flow);
   const top = $("wiretop");
@@ -1498,6 +1541,73 @@ function spliceWaveIntoAudio(w, node) {
   rebuildGraph();
 }
 
+// ---------- v8: wire labels as splice handles ----------
+// Dragging a wire's LABEL badge over a compatible module highlights it
+// (white outline); dropping splices the module into that wire — the same
+// trio a card-drop performs. Audio wires take effects (or a Waveform
+// monitor ride); ctl wires take arp/deck/tonic/keyshift (lane 1) or a
+// Note Monitor ride.
+let labelDrag = null;   // {w, target, action}
+function labelSpliceAction(w, n) {
+  if (!n || n === w.from.node || n === w.to.node) return null;
+  if (w.sig === "audio") {
+    if (n.montype === "wave") return () => spliceWaveIntoAudio(w, n);
+    if (n.chainKey && n.mod && n.mod.kind === "effect" && !n.mod.service)
+      return () => spliceExistingIntoWire(w, n);
+    return null;
+  }
+  if (w.sig === "ctl") {
+    if (n.montype === "notes") return () => spliceMonitorIntoCtl(w, n);
+    const hasIn = n.ports.some(p => !p.quiet && p.dir === "in" && p.sig === "ctl");
+    const hasOut = n.ports.some(p => !p.quiet && p.dir === "out" && p.sig === "ctl");
+    if (!hasIn || !hasOut) return null;
+    const id = ctlId(n);
+    const ep = keyshiftIds().has(id) ? `${id}:1` : id;   // shifters: lane 1
+    const from = ctlEp(w.from.node, w.from.port);
+    const to = ctlEp(w.to.node, w.to.port);
+    if (!ctlDstOk(ep) || !ctlSrcOk(ep)) return null;     // e.g. voice: no thru
+    if (splitEp(from)[0] === id || splitEp(to)[0] === id) return null;
+    return () => {
+      send({type: "ctl_wire", action: "remove", from, to});
+      send({type: "ctl_wire", action: "add", from, to: ep});
+      send({type: "ctl_wire", action: "add", from: ep, to});
+    };
+  }
+  return null;
+}
+function bindLabelHandle(w) {
+  w.labelG.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    labelDrag = {w, target: null, action: null};
+    w.labelG.style.pointerEvents = "none";  // hit-test the cards underneath
+    document.body.style.cursor = "grabbing";
+  });
+}
+document.addEventListener("pointermove", (e) => {
+  if (!labelDrag) return;
+  const el = document.elementFromPoint(e.clientX, e.clientY);
+  const cardEl = el && el.closest ? el.closest(".mod") : null;
+  let target = null;
+  if (cardEl) for (const n of nodes.values()) if (n.el === cardEl) { target = n; break; }
+  const action = target ? labelSpliceAction(labelDrag.w, target) : null;
+  if (labelDrag.target && (labelDrag.target !== target || !action))
+    labelDrag.target.el.classList.remove("splice-target");
+  labelDrag.target = action ? target : null;
+  labelDrag.action = action;
+  if (labelDrag.target) labelDrag.target.el.classList.add("splice-target");
+});
+document.addEventListener("pointerup", () => {
+  if (!labelDrag) return;
+  const {w, target, action} = labelDrag;
+  labelDrag = null;
+  document.body.style.cursor = "";
+  try { w.labelG.style.pointerEvents = ""; } catch (_) {}
+  if (target) target.el.classList.remove("splice-target");
+  if (action) action();
+  flushRebuild();
+});
+
 // ---------- card drag + port-to-port patching gesture ----------
 let drag = null, patchDrag = null, dragRaf = 0;
 function bindNode(node) {
@@ -1602,7 +1712,7 @@ function flushRebuild() {
     rebuildGraph();
   }
 }
-function busy() { return !!(drag || patchDrag || sliderDrag); }
+function busy() { return !!(drag || patchDrag || sliderDrag || labelDrag); }
 
 // fallback for servers that predate state.wires: the old linear derivation
 function deriveLinearWires() {
@@ -2741,17 +2851,35 @@ function drawDeckViz(ctx, W, H, now, style) {
   ctx.globalAlpha = 1;
   if (l && Array.isArray(l.notes) && l.notes.length) {
     ctx.fillStyle = style.getPropertyValue("--danger");
-    const lo = 36, hi = 96, open = {};
+    const lo = 36, hi = 96, open = {}, orphanOffs = {};
     const segs = [];
     const evs = [...l.notes].sort((a, b) => a[0] - b[0]);
     for (const [beat, note, on] of evs) {
       if (on) { (open[note] = open[note] || []).push(beat); }
       else if (open[note] && open[note].length) segs.push([note, open[note].shift(), beat]);
-      else segs.push([note, 0, beat]);   // off before on = wrapped across the loop top
+      else (orphanOffs[note] = orphanOffs[note] || []).push(beat);
     }
+    // DEFENSIVE pairing (v7): the take should arrive fully paired from the
+    // server, but a full-width smear must be impossible regardless.
+    //  * leftover on + earlier orphan off = a note wrapped across the loop
+    //    top → draw the true wrap (tail + head)
+    //  * a still-open on caps to the record playhead while recording, or a
+    //    short stub otherwise — NEVER to the full loop width
+    //  * remaining orphan offs are dropped (nothing honest to draw)
     const rec = ["recording", "overdubbing"].includes(l.state);
-    for (const nn in open) for (const b0 of open[nn])
-      segs.push([+nn, b0, rec && livePhase !== null && livePhase >= b0 ? livePhase : loopBeats]);
+    for (const nn in open) for (const b0 of open[nn]) {
+      const offs = orphanOffs[nn];
+      const wi = offs ? offs.findIndex(b => b < b0) : -1;
+      if (wi >= 0) {
+        const wrapOff = offs.splice(wi, 1)[0];
+        segs.push([+nn, b0, loopBeats]);
+        segs.push([+nn, 0, wrapOff]);
+      } else if (rec && livePhase !== null && livePhase >= b0) {
+        segs.push([+nn, b0, livePhase]);   // sounding under the record head
+      } else {
+        segs.push([+nn, b0, Math.min(loopBeats, b0 + 0.25)]);  // stub
+      }
+    }
     for (const [note, b0, b1] of segs) {
       const y = H - ((Math.min(hi, Math.max(lo, note)) - lo) / (hi - lo)) * (H - 8) - 4;
       const x0 = (b0 / loopBeats) * W;
@@ -2923,7 +3051,13 @@ function syncCaps(e) {
 }
 window.addEventListener("keydown", (e) => {
   syncCaps(e);
-  if (e.repeat || keyTarget(e) || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.repeat || keyTarget(e) || e.metaKey || e.ctrlKey || e.altKey) {
+    // macOS swallows the keyup of letter keys while ⌘/ctrl is held — if a
+    // modifier lands while notes are down, release them NOW or their offs
+    // never arrive (stuck notes + never-clearing monitor bars)
+    if ((e.metaKey || e.ctrlKey) && held.size && !keyTarget(e)) noteOffAll();
+    return;
+  }
   if (e.key === " ") {   // spacebar = loop record, in any input mode
     send({type: "set_looper", action: "record"});
     e.preventDefault();

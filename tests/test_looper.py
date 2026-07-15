@@ -155,8 +155,11 @@ def main():
     lp.record_voiced(55, True)
     check("armed grace clamps early note to beat 0",
           lp._events and lp._events[0] == (0.0, 55, True))
-    lp.record_voiced(55, False)  # offs before the top are dropped
-    check("armed off ignored", len(lp._events) == 1)
+    lp.record_voiced(55, False)  # v7: the clamped note's off pairs at beat 0
+    check("armed off pairs the clamped on at beat 0",
+          (0.0, 55, False) in lp._events and len(lp._events) == 2)
+    lp.record_voiced(59, False)  # ...but an off with no clamped on stays dropped
+    check("armed off without a clamped on ignored", len(lp._events) == 2)
     check("loop_note emitted live", any(
         e.get("kind") == "loop_note" for e in app.events))
     lp.state = "empty"

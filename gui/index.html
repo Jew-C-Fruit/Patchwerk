@@ -362,9 +362,10 @@ function renderState() {
   const cur = ssel.value;
   ssel.innerHTML = `<option value="">off</option>` + state.chain.map(c =>
     `<option value="${c.key}" ${c.key === cur ? "selected" : ""}>${c.name}</option>`).join("");
-  const inChain = new Set(state.chain.map(c => c.key));
+  // v8: NO placed-filter — v5 instance ids allow duplicates ("lowpass.2"),
+  // and filtering by the type key hid a module forever once ANY instance
+  // existed (the "Signal Gen vanished / can never re-add" bug)
   document.getElementById("add-sel").innerHTML = (state.available || [])
-    .filter(a => !inChain.has(a.key))
     .map(a => `<option value="${a.key}">${a.name} (${a.family})</option>`).join("");
   renderModules();
   renderArp(); renderDrone(); renderTransport(); renderLooper(); renderDrums(); renderLfos();
