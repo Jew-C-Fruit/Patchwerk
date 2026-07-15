@@ -60,7 +60,7 @@ FAMILIES = {
     "lowpass": "filter", "telephone": "filter",
     # time & space
     "echo": "time", "reverb": "time", "chorus": "time", "flanger": "time",
-    "phaser": "time", "autopan": "time",
+    "phaser": "time", "golden_phaser": "time", "autopan": "time",
     # dirt & dynamics
     "drive": "dirt", "bitcrush": "dirt", "wavefolder": "dirt",
     "compressor": "dyn",
