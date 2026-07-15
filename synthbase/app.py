@@ -111,10 +111,19 @@ class _FanOut(_NullSink):
             except Exception:  # noqa: BLE001 — one dead target must not stop the rest
                 pass
 
+    def _tap(self, note: int, on: bool) -> None:
+        # ONE viz tap per source-fire (not per edge): monitors riding this
+        # node's outgoing wires filter client-side by src. Emitted even when
+        # unwired — a GLOBAL monitor still shows the fire.
+        self.app._emit_midi_event(
+            {"kind": "tap", "src": self.src, "note": int(note), "on": bool(on)})
+
     def note_on(self, note: int, velocity: int = 100) -> None:
+        self._tap(note, True)
         self._each(lambda s: s.note_on(note, velocity))
 
     def note_off(self, note: int) -> None:
+        self._tap(note, False)
         self._each(lambda s: s.note_off(note))
 
     def all_off(self) -> None:

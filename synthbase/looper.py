@@ -425,6 +425,10 @@ class Looper:
                         self._sounding.discard(note)
                 finally:
                     self._self_fire = False
+                emit = getattr(self.app, "_emit_midi_event", None)
+                if emit:  # ONE viz tap per replay fire (not per deck→X edge)
+                    emit({"kind": "tap", "src": "deck",
+                          "note": int(note), "on": bool(on)})
             if interrupted:
                 continue
             # cycle tail done — park at the next loop top before rescanning so

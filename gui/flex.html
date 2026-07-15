@@ -144,7 +144,12 @@
   .port.e-bottom::after { bottom: 14px; left: 50%; transform: translateX(-50%); }
   .port.e-left::after { left: 13px; top: 50%; transform: translateY(-50%); }
   .port.e-right::after { right: 13px; top: 50%; transform: translateY(-50%); }
-  .mod:hover .port::after, .port.hot::after { opacity: 1; }
+  .port:hover::after, .port.hot::after { opacity: 1; }
+  /* module highlight = white outline; params brighten gray -> white */
+  .mod:hover { border-color: rgba(255,255,255,0.65); }
+  .mini:hover label { color: #fff; }
+  .mini:hover .track i { background: #fff; }
+  .mini:hover .chip { color: #fff; }
   .port[data-sig=audio] { background: var(--audio); }
   .port[data-sig=ctl]   { background: var(--ctl); }
   .port[data-sig=mod]   { background: var(--mod); }
@@ -1259,7 +1264,8 @@ function enforceSeparation(node) {
 // approximation layer (cutMem/extraCtl + "approximated" toast) is gone.
 // A Note Monitor may visually ride a ctl wire (see monRide) — the backend
 // wire stays A→B untouched; the monitor only watches.
-const monRide = new Map();   // monitor gid -> "from>to" ctl wire it sits on (visual only)
+const monRide = new Map();   // monitor gid -> Set("from>to") ctl wires it sits on (visual only)
+const waveRide = new Map();  // wave monitor gid -> "from>to" audio wire it sits on (visual only)
 let toastTimer = 0;
 function toast(msg) {
   const t = $("toast");
@@ -1400,8 +1406,21 @@ function spliceExistingIntoWire(w, node) {
 function spliceMonitorIntoCtl(w, node) {
   const from = ctlId(w.from.node), to = ctlId(w.to.node);
   if (!CTL_SRC.has(from) || !CTL_DST.has(to)) return;  // half a ride / voice→target
-  monRide.set(node.gid, `${from}>${to}`);
+  const set = monRide.get(node.gid) || new Set();
+  set.add(`${from}>${to}`);       // fan-in: ride several wires = union of sources
+  monRide.set(node.gid, set);
   send({type: "ctl_wire", action: "add", from, to});
+  rebuildGraph();
+}
+// Waveform monitor dropped on an audio wire A→B: same visual-ride idea for
+// audio — the backend wire stays untouched; the monitor polls A's out bus
+// (300ms envelope) instead of the master meters. One wire per monitor.
+function spliceWaveIntoAudio(w, node) {
+  const from = audioKeyOut(w.from.node);
+  const to = w.to.node.gid === "master" ? "master" : w.to.node.chainKey;
+  if (!from || !to || from === "drums") return;
+  waveRide.set(node.gid, `${from}>${to}`);
+  node.waveHist = [];             // fresh history for the new feed
   rebuildGraph();
 }
 
@@ -1442,6 +1461,7 @@ function bindNode(node) {
     saveLayout();
     if (spliced) {
       if (node.montype === "notes") spliceMonitorIntoCtl(spliced, node);
+      else if (node.montype === "wave") spliceWaveIntoAudio(spliced, node);
       else spliceExistingIntoWire(spliced, node);        // live server rewire
     }
     flushRebuild();
@@ -1873,14 +1893,17 @@ function buildMonitor(type, gid, x, y, expanded) {
   gid = gid || `mon:${type}:${monN++}`;
   let n;
   if (type === "wave") {
-    n = addCard({gid, name: "Waveform", short: "Wave", sub: "output envelope",
+    // audio thru ports let the monitor sit INLINE on an audio wire (visual
+    // ride — drop the card on an audio wire; the backend wire stays untouched)
+    n = addCard({gid, name: "Waveform", short: "Wave", sub: "global",
       fam: "io", rows: [], persistent: true, montype: type,
+      ports: [["in", "audio", "thru"], ["out", "audio", "thru"]],
       vizHTML: `<canvas class="vz" data-viz="wave" height="34"></canvas>`,
-      kill: (nd) => { removeNode(nd); rerouteAll(); saveLayout(); }});
+      kill: (nd) => { waveRide.delete(nd.gid); removeNode(nd); rerouteAll(); saveLayout(); }});
   } else {  // notes
     // ctl thru ports let the monitor sit INLINE on a ctl wire (visual ride —
     // drop the card on a ctl wire; the backend wire stays untouched)
-    n = addCard({gid, name: "Note Monitor", short: "Notes", sub: "green live · red deck",
+    n = addCard({gid, name: "Note Monitor", short: "Notes", sub: "global",
       fam: "io", rows: [], persistent: true, montype: type,
       ports: [["in", "ctl", "thru"], ["out", "ctl", "thru"]],
       vizHTML: `<canvas class="vz" data-viz="notes" height="54"></canvas>`,
@@ -1994,8 +2017,8 @@ function rebuildGraph() {
                             from: cw.from, to: cw.to});
     // a Note Monitor may RIDE this wire (visual splice): draw A→mon→B but
     // keep the backend wire A→B — cutting either half cuts the real wire
-    const ride = [...monRide].find(([gid, wid]) =>
-      wid === `${cw.from}>${cw.to}` && nodes.get(gid));
+    const ride = [...monRide].find(([gid, set]) =>
+      set.has(`${cw.from}>${cw.to}`) && nodes.get(gid));
     if (ride) {
       const mon = nodes.get(ride[0]);
       W(a, "ctl", mon, "ctl", {cut});
@@ -2014,8 +2037,17 @@ function rebuildGraph() {
   const audioWires = state.wires || deriveLinearWires();
   for (const wr of audioWires) {
     const a = audioNode(wr.from), b = audioNode(wr.to);
-    if (a && b) W(a, "audio", b, "audio",
-      {cut: () => send({type: "graph_wire", action: "remove", from: wr.from})});
+    if (!a || !b) continue;
+    const cut = () => send({type: "graph_wire", action: "remove", from: wr.from});
+    // a Waveform monitor may RIDE this wire (visual splice, like monRide):
+    // draw A→mon→B but keep the backend wire A→B untouched
+    const ride = [...waveRide].find(([gid, wid]) =>
+      wid === `${wr.from}>${wr.to}` && nodes.get(gid));
+    if (ride) {
+      const mon = nodes.get(ride[0]);
+      W(a, "audio", mon, "audio", {cut});
+      W(mon, "audio", b, "audio", {cut});
+    } else W(a, "audio", b, "audio", {cut});
   }
   // drums audio out: a standard flexible output. target = key | "master" |
   // null (disconnected). Cut sends target null; re-drag sends a new target.
@@ -2207,9 +2239,17 @@ function onBeat(m) {
     ? null : {time: performance.now(), phase: m.loop};
 }
 
-const rollNotes = [];   // {note, t0, t1, deck} for the note monitor
+const rollNotes = [];   // {note, t0, t1, deck} from "voiced" (wire pulses)
+const tapNotes = [];    // {note, t0, t1, src} from "tap" — note monitor feed
 function onMidi(e) {
-  if (e.kind === "voiced") {
+  if (e.kind === "tap") {
+    // one tap per source-fire (keys/arp/deck) — monitors filter by src
+    if (e.on) tapNotes.push({note: e.note, t0: performance.now(), t1: null, src: e.src});
+    else for (let i = tapNotes.length - 1; i >= 0; i--)
+      if (tapNotes[i].note === e.note && tapNotes[i].t1 === null &&
+          tapNotes[i].src === e.src) { tapNotes[i].t1 = performance.now(); break; }
+    while (tapNotes.length > 400) tapNotes.shift();
+  } else if (e.kind === "voiced") {
     const deck = !!e.deck;
     if (e.on) rollNotes.push({note: e.note, t0: performance.now(), t1: null, deck});
     else for (let i = rollNotes.length - 1; i >= 0; i--)
@@ -2291,15 +2331,68 @@ function refreshActivity() {
 // ---------- monitors: scope polling + canvas painting ----------
 let scopeData = {};   // key -> samples
 function onScopeData(m) { scopeData[m.key] = m.samples; }
+// a scope_tap with NO incoming audio wire falls back to the master feed:
+// poll the first module wired to master instead (global), else nothing
+function scopePollKey(n) {
+  const aw = (state && state.wires) || [];
+  if (aw.some(w => w.to === n.scopeKey)) return n.scopeKey;      // fed → local
+  const m = aw.find(w => w.to === "master" && w.from !== n.scopeKey);
+  return m ? m.from : null;
+}
 setInterval(() => {
   if (document.hidden) return;   // poll only while the canvas is visible
   const asked = new Set();
   for (const n of nodes.values())
-    if (n.scopeKey && !asked.has(n.scopeKey)) {   // scope_tap module cards
-      asked.add(n.scopeKey);
-      send({type: "scope", key: n.scopeKey});
+    if (n.scopeKey) {            // scope_tap module cards
+      const key = scopePollKey(n);
+      if (!key || asked.has(key)) continue;
+      asked.add(key);
+      send({type: "scope", key});
     }
 }, 250);
+// Waveform monitors riding an audio wire A→B poll A's out bus every 300ms
+// and keep a peak-envelope history (unwired monitors use the master meters)
+function waveSrcKey(gid) {
+  const wid = waveRide.get(gid);
+  if (!wid) return null;
+  const [a, b] = wid.split(">");
+  return ((state && state.wires) || []).some(w => w.from === a && w.to === b)
+    ? a : null;   // ridden wire gone → back to global
+}
+setInterval(() => {
+  if (document.hidden) return;
+  for (const n of nodes.values()) {
+    if (n.montype !== "wave") continue;
+    const src = waveSrcKey(n.gid);
+    if (!src) continue;
+    const s = scopeData[src];
+    if (s && s.length) {   // envelope: peak of |samples| from the last reply
+      let pk = 0;
+      for (let i = 0; i < s.length; i++) pk = Math.max(pk, Math.abs(s[i]));
+      (n.waveHist = n.waveHist || []).push(pk);
+      if (n.waveHist.length > 200) n.waveHist.shift();
+    }
+    send({type: "scope", key: src});
+  }
+}, 300);
+// card sub-label: monitors show their scope — "global" / "local: arp+deck"
+function updateMonSub(n, txt) {
+  if (n._subTxt === txt) return;
+  n._subTxt = txt;
+  const el = n.el.querySelector(".sub");
+  if (el) el.textContent = txt;
+}
+// a Note Monitor's upstream source set: the from-ends of the LIVE ctl wires
+// it rides (fan-in = union). No wired-in position → null → GLOBAL.
+function monSources(gid) {
+  const rides = monRide.get(gid);
+  if (!rides || !rides.size) return null;
+  const live = new Set(((state && state.ctl_wires) || [])
+    .map(w => `${w.from}>${w.to}`));
+  const srcs = new Set();
+  for (const wid of rides) if (live.has(wid)) srcs.add(wid.split(">")[0]);
+  return srcs.size ? srcs : null;
+}
 
 function drawVizLoop(now) {
   const style = getComputedStyle(document.body);
@@ -2315,8 +2408,8 @@ function drawVizLoop(now) {
     ctx.clearRect(0, 0, W, H);
     if (viz === "deck") drawDeckViz(ctx, W, H, now, style);
     else if (viz === "scope") drawScopeViz(n, ctx, W, H, style);
-    else if (viz === "wave") drawWaveViz(ctx, W, H, style);
-    else if (viz === "notes") drawNotesViz(ctx, W, H, now, style);
+    else if (viz === "wave") drawWaveViz(n, ctx, W, H, style);
+    else if (viz === "notes") drawNotesViz(n, ctx, W, H, now, style);
   }
   requestAnimationFrame(drawVizLoop);
 }
@@ -2368,9 +2461,13 @@ function drawDeckViz(ctx, W, H, now, style) {
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
   }
 }
-// real scope trace, zero-cross synced (legacy port, per-card zoom)
+// real scope trace, zero-cross synced (legacy port, per-card zoom).
+// WIRED inline = local (its own bus); UNWIRED = global (master feed).
 function drawScopeViz(n, ctx, W, H, style) {
-  const s = n.scopeKey && scopeData[n.scopeKey];
+  const fed = ((state && state.wires) || []).some(w => w.to === n.scopeKey);
+  updateMonSub(n, fed ? "local" : "global (master feed)");
+  const key = fed ? n.scopeKey : scopePollKey(n);
+  const s = key && scopeData[key];
   ctx.strokeStyle = style.getPropertyValue("--hairline");
   ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
   if (!s || !s.length) return;
@@ -2390,18 +2487,26 @@ function drawScopeViz(n, ctx, W, H, style) {
   }
   ctx.stroke();
 }
-// rolling output envelope from real meters
-function drawWaveViz(ctx, W, H, style) {
+// rolling output envelope — global (master meters) or, riding an audio wire
+// A→B, the polled peak history of A's out bus
+function drawWaveViz(n, ctx, W, H, style) {
+  const src = waveSrcKey(n.gid);
+  updateMonSub(n, src ? "local: " + src : "global");
+  const hist = src ? (n.waveHist || []) : wave;
   ctx.fillStyle = style.getPropertyValue("--meter");
-  const nsmp = wave.length;
+  const nsmp = hist.length;
   for (let i = 0; i < nsmp; i++) {
-    const a = Math.min(1, Math.pow(wave[i], 0.5));
+    const a = Math.min(1, Math.pow(hist[i], 0.5));
     const h = Math.max(1, a * (H - 4));
     ctx.fillRect((i / nsmp) * W, (H - h) / 2, Math.max(1, W / nsmp - 0.5), h);
   }
 }
-// rolling REAL voiced notes on a beat grid — green live, red deck
-function drawNotesViz(ctx, W, H, now, style) {
+// rolling REAL source taps on a beat grid, colored by src. UNWIRED = GLOBAL
+// (all taps); riding ctl wires = LOCAL (only its upstream sources).
+const TAP_COLORS = {keys: "#1baf7a", arp: "#e8c832", deck: "#e34948"};
+function drawNotesViz(n, ctx, W, H, now, style) {
+  const srcs = monSources(n.gid);   // null = global
+  updateMonSub(n, srcs ? "local: " + [...srcs].sort().join("+") : "global");
   const bpm = state?.transport?.bpm || 100;
   const pxPerMs = W / (16 * 60000 / bpm);   // 16-beat window
   ctx.strokeStyle = style.getPropertyValue("--hairline");
@@ -2415,17 +2520,17 @@ function drawNotesViz(ctx, W, H, now, style) {
     }
   }
   const lo = 36, hi = 96;
-  for (let i = rollNotes.length - 1; i >= 0; i--) {
-    const ev = rollNotes[i];
-    if (ev.t1 !== null && (now - ev.t1) * pxPerMs > W) rollNotes.splice(i, 1);
+  for (let i = tapNotes.length - 1; i >= 0; i--) {
+    const ev = tapNotes[i];
+    if (ev.t1 !== null && (now - ev.t1) * pxPerMs > W) tapNotes.splice(i, 1);
   }
-  const green = style.getPropertyValue("--ctl"), red = style.getPropertyValue("--danger");
-  for (const ev of rollNotes) {
+  for (const ev of tapNotes) {
+    if (srcs && !srcs.has(ev.src)) continue;   // local: filter by upstream set
     const x0 = W - (now - ev.t0) * pxPerMs;
     const x1 = ev.t1 === null ? W : W - (now - ev.t1) * pxPerMs;
     if (x1 <= 0) continue;
     const y = H - ((Math.min(hi, Math.max(lo, ev.note)) - lo) / (hi - lo)) * (H - 6) - 3;
-    ctx.fillStyle = ev.deck ? red : green;
+    ctx.fillStyle = TAP_COLORS[ev.src] || style.getPropertyValue("--ctl");
     ctx.fillRect(Math.max(0, x0), y - 2, Math.max(2, x1 - x0), 4);
   }
 }

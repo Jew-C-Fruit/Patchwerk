@@ -279,6 +279,40 @@ def test_ctl_wires():
           app5.ctl_wires == default_ctl_wires())
 
 
+# ---- tap emission: one tagged viz event per source-fire ---------------------------
+
+def test_tap_emission():
+    app = SynthApp(use_midi=False, use_reload=False)
+    app.arp = FakeNoteSink()
+    app.voice = FakeNoteSink()
+    taps = []
+    app.on_midi_event = lambda e: taps.append(dict(e))
+
+    app.note_on(60)   # keys dispatch (default wires: keys→arp)
+    tap = [e for e in taps if e.get("kind") == "tap"]
+    check("keys dispatch emits exactly one src=keys tap",
+          tap == [{"kind": "tap", "src": "keys", "note": 60, "on": True}])
+    check("tap reached the wired sink too", app.arp.ons == [60])
+
+    taps.clear()
+    app.set_ctl_wire("add", "keys", "voice")   # 2 outgoing edges now
+    app.note_on(61)
+    tap = [e for e in taps if e.get("kind") == "tap"]
+    check("tap is per source-fire, not per edge", len(tap) == 1)
+
+    taps.clear()
+    app.note_off(61)
+    tap = [e for e in taps if e.get("kind") == "tap"]
+    check("note_off taps with on=False",
+          tap == [{"kind": "tap", "src": "keys", "note": 61, "on": False}])
+
+    taps.clear()
+    app._arp_out.note_on(64)   # the arp's scheduled fire path
+    tap = [e for e in taps if e.get("kind") == "tap"]
+    check("arp fire emits exactly one src=arp tap (3 default edges)",
+          tap == [{"kind": "tap", "src": "arp", "note": 64, "on": True}])
+
+
 # ---- drums target / to_chain compat --------------------------------------------
 
 def test_drums_target():
@@ -317,6 +351,7 @@ def main():
     test_graph_wire_bookkeeping()
     test_spawn_unconnected()
     test_ctl_wires()
+    test_tap_emission()
     test_drums_target()
     print(f"\n{'PASS' if not FAILURES else 'FAIL'} — {len(FAILURES)} failures")
     return 1 if FAILURES else 0
