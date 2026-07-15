@@ -11,8 +11,9 @@ record_raw(); arp→deck feeds record_voiced(); the dispatcher in app.py only
 calls these for sources actually wired in. Replay _sink() is resolved from
 deck→X wires: deck→arp replays into the arp, deck→voice plays a private
 second node of the voice's target module (so the deck never steals your
-live voice), deck→drone lets the drone brain hear the replay. No outgoing
-wire = the loop spins silently (honest patching).
+live voice), deck→voice.N drives that extra mono voice, deck→tonic.N lets
+a tonic deriver hear the replay. No outgoing wire = the loop spins
+silently (honest patching).
 
 (v1 was an audio looper; scsynth buffer reads returned allocation garbage
 through supriya on this setup — see docs/HISTORY.md. Notes are deterministic.)
@@ -173,25 +174,29 @@ class Looper:
     def _sink(self):
         """Where replay goes: resolved LIVE from the control wires deck→X.
         deck→arp = replay into the arp pool; deck→voice = the private deck
-        voice; deck→drone = the drone brain hears the replay. No outgoing
-        wire = None, and the loop spins silently."""
+        voice (never steals the live primary); deck→voice.N drives that
+        extra voice directly; deck→tonic.N = the deriver hears the replay.
+        No outgoing wire = None, and the loop spins silently."""
         wires = getattr(self.app, "ctl_wires", None)
         if wires is None:  # wire-unaware host (bare unit tests) — old default
             return self._deck_voice()
+        voices = getattr(self.app, "voices", {}) or {}
+        tonics = getattr(self.app, "tonics", {}) or {}
         sinks = []
         for w in wires:
             if w.get("from") != "deck":
                 continue
-            if w.get("to") == "arp" and self.app.arp:
+            t = w.get("to")
+            if t == "arp" and self.app.arp:
                 sinks.append(self.app.arp)
-            elif w.get("to") == "voice":
+            elif t == "voice":
                 s = self._deck_voice()
                 if s is not None:
                     sinks.append(s)
-            elif w.get("to") == "drone":
-                tap = getattr(self.app, "_drone_tap", None)
-                if tap is not None:
-                    sinks.append(tap)
+            elif t in voices:
+                sinks.append(voices[t])
+            elif t in tonics:
+                sinks.append(tonics[t])
         if not sinks:
             return None
         return sinks[0] if len(sinks) == 1 else _FanSink(sinks)

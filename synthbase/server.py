@@ -2,8 +2,10 @@
 
 Protocol (JSON messages):
 
-  client -> server:
-    {"type": "set_param", "key": "lowpass", "name": "cutoff", "unit": 0.7}
+  client -> server (module/instance "key"s are INSTANCE ids in v5 —
+  "lowpass", "lowpass.2", ...; legacy type keys resolve to the FIRST
+  instance of that type):
+    {"type": "set_param", "key": "lowpass.2", "name": "cutoff", "unit": 0.7}
     {"type": "set_enabled", "key": "echo", "enabled": false}   (module bypass)
     {"type": "set_volume", "volume": 0.8}
     {"type": "note_on", "note": 60} / {"type": "note_off", "note": 60}
@@ -14,12 +16,21 @@ Protocol (JSON messages):
     {"type": "set_arp", "enabled": true, "division": "1/8", "gate": 0.6, "octaves": 2, "pattern": "updown"}
     {"type": "set_transport", "bpm": 110, "beats_per_bar": 4, "click": true}
     {"type": "set_drone", "enabled": true, "every": "1 bar", "octave": 2}
+        (LEGACY: maps onto a tonic-deriver + drone-instance pair)
     {"type": "graph_wire", "action": "add"|"remove", "from": "pluck", "to": "echo"|"master"}
     {"type": "ctl_wire", "action": "add"|"remove", "from": "keys", "to": "arp"}
-        (control-plane wiring among keys/arp/deck/voice/drone — the graph IS
-         the note router; set_looper's old "position" is accepted and ignored)
-    {"type": "spawn_module", "key": "reverb"}      (add to rack, audio out unconnected)
-    {"type": "set_voice_target", "key": "pluck"}   (re-aim the mono voice)
+        (control-plane wiring among keys/arp/deck/voice ids/tonic ids/drone
+         instance ids — the graph IS the note router; tonic outs only land
+         on drone tonic-ins; set_looper's old "position" is accepted and
+         ignored)
+    {"type": "spawn_module", "key": "reverb"}      (key = module TYPE; adds a
+         fresh instance — duplicates allowed — audio out unconnected)
+    {"type": "spawn_voice"} / {"type": "remove_voice", "id": "voice.2"}
+    {"type": "spawn_tonic"} / {"type": "remove_tonic", "id": "tonic.2"}
+    {"type": "set_tonic", "id": "tonic", "every": "1 bar", "octave": 2}
+    {"type": "drone_follow", "id": "drone", "on": true}  (tonic-in toggle)
+    {"type": "set_voice_target", "key": "pluck", "voice": "voice.2"}
+        (re-aim a mono voice; "voice" when omitted)
     {"type": "set_drums", "target": "echo"|"master"|null}  (drums audio out routing)
 
   server -> client:
@@ -135,8 +146,27 @@ class GuiServer:
             await loop.run_in_executor(
                 None, lambda: self.synth.spawn_unconnected(m["key"]))
             await self._broadcast_state()
+        elif t == "spawn_voice":
+            self.synth.spawn_voice()
+            await self._broadcast_state()
+        elif t == "remove_voice":
+            self.synth.remove_voice(m["id"])
+            await self._broadcast_state()
+        elif t == "spawn_tonic":
+            self.synth.spawn_tonic()
+            await self._broadcast_state()
+        elif t == "remove_tonic":
+            self.synth.remove_tonic(m["id"])
+            await self._broadcast_state()
+        elif t == "set_tonic":
+            self.synth.set_tonic(m["id"], every=m.get("every"),
+                                 octave=m.get("octave"))
+            await self._broadcast_state()
+        elif t == "drone_follow":
+            self.synth.set_drone_follow(m["id"], m.get("on", True))
+            await self._broadcast_state()
         elif t == "set_voice_target":
-            self.synth.set_voice_target(m["key"])
+            self.synth.set_voice_target(m["key"], m.get("voice", "voice"))
             await self._broadcast_state()
         elif t == "set_looper":
             # "position" from old clients is dropped here — pre/post is wiring
@@ -199,9 +229,8 @@ class GuiServer:
             data = await loop.run_in_executor(None, self.synth.scope.capture, m["key"])
             await sender.send_json({"type": "scope_data", **data})
         elif t == "sustain":
-            sink = self.synth.arp or self.synth.voice
-            if sink:
-                sink.set_sustain(bool(m.get("on")))
+            # global pedal: the arp latch + every mono voice
+            self.synth._keys.set_sustain(bool(m.get("on")))
         elif t == "all_notes_off":
             self.synth.all_notes_off()
         elif t == "select_patch":

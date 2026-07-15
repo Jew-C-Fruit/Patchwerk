@@ -1,13 +1,24 @@
-"""DroneBrain: listens to played notes, infers a root, moves the drone.
+"""TonicDeriver: a ctl-plane node that listens to notes and derives a root.
 
-The drone SOUND is an ordinary module (modules/drone.py) — this class is
-the control-plane brain, structured like the arp: it taps every note from
-any controller, keeps a time-decaying pitch-class histogram with bass
-emphasis, scores candidate roots by harmonic support (root, fifth, thirds,
-minor seventh), and moves the drone's freq — but only at transport grid
-points ("every" 1 beat … 4 bars), with hysteresis so near-ties don't
-cause flip-flopping. The drone node writes into the same bus as the
-chain's first source, so it rides the whole effect chain.
+v5 split of the old DroneBrain. The drone SOUND is an ordinary spawnable
+module (modules/drone.py); this file is the control-plane component,
+Grasshopper-style: notes in, two outs.
+
+  IN   note events (wired like any ctl node: keys/arp/deck/... -> tonic)
+  OUT1 ctl THRU — the unmodified note stream fans to the deriver's
+       outgoing ctl wires (tonic -> arp/deck/voice/tonic ...)
+  OUT2 TONIC — a "tonic" wire kind carrying root-note updates into drone
+       instances (tonic.X -> drone.Y); the deriver drives each wired
+       drone's `freq`, grid-quantized exactly like the old brain.
+
+The estimation brain is extracted into RootEstimator: a time-decaying
+pitch-class histogram with bass emphasis, harmonic-support scoring
+(root, fifth, thirds, minor seventh) and hysteresis so near-ties don't
+flip-flop. Decisions land only at transport grid points ("every"
+1 beat ... 4 bars).
+
+Emits {"kind": "tap", "src": "<id>", ...} viz taps for the thru stream and
+{"kind": "tonic_out", "id": "<id>", "root": "Eb"} on root changes.
 """
 
 from __future__ import annotations
@@ -31,21 +42,14 @@ def midi_to_freq(note: float) -> float:
     return 440.0 * 2 ** ((note - 69) / 12)
 
 
-class DroneBrain:
-    def __init__(self, app) -> None:
-        self.app = app  # needs .rack, .registry, .transport, ._emit_midi_event
-        self.enabled = False
-        self.every = "1 bar"
-        self.octave = 2          # root lands at C{octave}..B{octave}
-        self.root: int | None = None  # pitch class 0-11
+class RootEstimator:
+    """The extracted estimation brain: observe notes, estimate a root
+    pitch class with decay, bass emphasis and hysteresis."""
 
+    def __init__(self) -> None:
         self._weights = [0.0] * 12
         self._last_decay = time.monotonic()
         self._lock = threading.Lock()
-        self._thread: threading.Thread | None = None
-        self._quit = threading.Event()
-
-    # -- note tap (called from any controller thread) ---------------------------
 
     def observe(self, note: int) -> None:
         now = time.monotonic()
@@ -62,51 +66,93 @@ class DroneBrain:
             self._weights = [w * factor for w in self._weights]
             self._last_decay = now
 
-    # -- root estimation -----------------------------------------------------------
+    def weights(self) -> list[float]:
+        with self._lock:
+            self._decay(time.monotonic())
+            return list(self._weights)
 
-    def _score(self, weights: list[float], candidate: int) -> float:
+    @staticmethod
+    def _score(weights: list[float], candidate: int) -> float:
         return sum(
             weights[(candidate + interval) % 12] * support
             for interval, support in PROFILE.items()
         )
 
-    def estimate(self) -> int | None:
-        with self._lock:
-            self._decay(time.monotonic())
-            weights = list(self._weights)
+    def estimate(self, incumbent: int | None) -> int | None:
+        """Best root right now; the incumbent holds unless clearly beaten."""
+        weights = self.weights()
         if sum(weights) < 0.1:
-            return self.root  # nothing heard lately — hold
+            return incumbent  # nothing heard lately — hold
         scores = [self._score(weights, r) for r in range(12)]
         best = max(range(12), key=lambda r: scores[r])
-        if self.root is None:
+        if incumbent is None:
             return best
-        # Hysteresis: incumbent keeps the seat unless clearly beaten.
-        if scores[best] > scores[self.root] * HYSTERESIS:
+        if scores[best] > scores[incumbent] * HYSTERESIS:
             return best
-        return self.root
+        return incumbent
 
-    # -- configuration ---------------------------------------------------------------
+
+class TonicDeriver:
+    """One spawnable ctl-plane deriver node (id "tonic", "tonic.2", ...)."""
+
+    def __init__(self, app, tid: str = "tonic") -> None:
+        self.app = app  # needs .rack, .transport, .ctl_wires, ._emit_midi_event
+        self.id = tid
+        self.every = "1 bar"
+        self.octave = 2               # root lands at C{octave}..B{octave}
+        self.root: int | None = None  # pitch class 0-11
+        self.est = RootEstimator()
+
+        self._thread: threading.Thread | None = None
+        self._quit = threading.Event()
+        self._ensure_thread()
+
+    # -- note-sink interface (a ctl node: observe + thru) -----------------------
+
+    def _tap(self, note: int, on: bool) -> None:
+        try:
+            self.app._emit_midi_event(
+                {"kind": "tap", "src": self.id, "note": int(note), "on": bool(on)})
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _thru(self, fn) -> None:
+        for s in self.app._ctl_sinks(self.id):
+            try:
+                fn(s)
+            except Exception:  # noqa: BLE001 — one dead target must not stop the rest
+                pass
+
+    def note_on(self, note: int, velocity: int = 100) -> None:
+        self.est.observe(note)
+        self._tap(note, True)
+        self._thru(lambda s: s.note_on(note, velocity))
+
+    def note_off(self, note: int) -> None:
+        self._tap(note, False)
+        self._thru(lambda s: s.note_off(note))
+
+    def all_off(self) -> None:
+        self._thru(lambda s: s.all_off())
+
+    def set_sustain(self, on: bool) -> None:
+        self._thru(lambda s: s.set_sustain(on))
+
+    def set_bend(self, semitones: float) -> None:
+        self._thru(lambda s: s.set_bend(semitones))
+
+    # -- configuration ---------------------------------------------------------
 
     def configure(self, **kw) -> None:
         if kw.get("every") in EVERY:
             self.every = kw["every"]
         if kw.get("octave") is not None:
             self.octave = min(4, max(0, int(kw["octave"])))
-            if self.enabled and self.root is not None:
-                self._apply_root(self.root)  # re-pitch immediately at new octave
-        if kw.get("enabled") is not None:
-            enabled = bool(kw["enabled"])
-            if enabled and not self.enabled:
-                self.enabled = True
-                self.spawn()
-                self._ensure_thread()
-            elif self.enabled and not enabled:
-                self.enabled = False
-                self._despawn()
+            self.drive_drones()  # re-pitch wired drones at the new octave
 
     def settings(self) -> dict:
         return {
-            "enabled": self.enabled,
+            "id": self.id,
             "every": self.every,
             "everies": list(EVERY),
             "octave": self.octave,
@@ -118,47 +164,51 @@ class DroneBrain:
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=1)
 
-    # -- drone node management ----------------------------------------------------------
+    # -- the TONIC out: drive wired drone instances ------------------------------
 
-    def spawn(self) -> None:
-        """(Re)create the drone instance in the current rack (idempotent).
-        Called on enable and again after every patch rebuild."""
-        rack = self.app.rack
-        mod = self.app.registry.get("drone")
-        if not (self.enabled and rack and mod):
-            return
-        try:
-            rack.find("drone")
-            return  # already present
-        except KeyError:
-            pass
-        overrides = {}
-        if self.root is not None:
-            overrides["freq"] = midi_to_freq(12 * (self.octave + 1) + self.root)
-        try:
-            rack.add_service_source(mod, overrides)
-        except Exception as exc:  # noqa: BLE001
-            print(f"[drone] could not spawn: {exc}")
+    def _root_note(self) -> int | None:
+        if self.root is None:
+            return None
+        return 12 * (self.octave + 1) + self.root
 
-    def _despawn(self) -> None:
-        rack = self.app.rack
-        if rack is None:
+    def drive_drones(self, only: str | None = None) -> None:
+        """Push the current root into every drone wired tonic.<id> -> drone.X
+        (or just `only`), honoring each drone's follow toggle."""
+        note = self._root_note()
+        app = self.app
+        if note is None or app.rack is None:
             return
+        for w in list(getattr(app, "ctl_wires", []) or []):
+            if w.get("from") != self.id:
+                continue
+            dst = w.get("to")
+            if only is not None and dst != only:
+                continue
+            if not app._is_drone_id(dst):
+                continue
+            if not app.drone_follow.get(dst, True):
+                continue
+            try:
+                app.rack.set_param(dst, "freq", midi_to_freq(note))
+            except Exception:  # noqa: BLE001 — rack mid-rebuild; next tick lands
+                pass
+
+    def decide(self) -> None:
+        """One grid-point decision: estimate, and on a root change drive the
+        wired drones + emit the tonic_out event. (The thread calls this;
+        tests may call it directly.)"""
+        new_root = self.est.estimate(self.root)
+        if new_root is None or new_root == self.root:
+            return
+        self.root = new_root
+        self.drive_drones()
         try:
-            rack.remove_instance("drone")
+            self.app._emit_midi_event(
+                {"kind": "tonic_out", "id": self.id, "root": NOTE_NAMES[new_root]})
         except Exception:  # noqa: BLE001
             pass
 
-    def _apply_root(self, root: int) -> None:
-        rack = self.app.rack
-        if rack is None:
-            return
-        try:
-            rack.set_param("drone", "freq", midi_to_freq(12 * (self.octave + 1) + root))
-        except Exception:  # noqa: BLE001
-            pass  # rack mid-rebuild; next tick will land
-
-    # -- the decision thread (grid-quantized) ----------------------------------------------
+    # -- the decision thread (grid-quantized) -------------------------------------
 
     def _interval_beats(self, transport: Transport) -> float:
         v = EVERY[self.every]
@@ -188,23 +238,7 @@ class DroneBrain:
     def _run(self) -> None:
         transport = self.app.transport
         while not self._quit.is_set():
-            if not self.enabled:
-                return  # parked; re-enabled via configure -> _ensure_thread
             _, t = transport.next_grid(self._interval_beats(transport))
             if not self._sleep_until(t):
                 return
-            if not self.enabled:
-                return
-            new_root = self.estimate()
-            if new_root is not None and new_root != self.root:
-                self.root = new_root
-                self._apply_root(new_root)
-                try:
-                    self.app._emit_midi_event(
-                        {"kind": "drone", "root": NOTE_NAMES[new_root]}
-                    )
-                except Exception:  # noqa: BLE001
-                    pass
-            elif self.root is None and new_root is not None:
-                self.root = new_root
-                self._apply_root(new_root)
+            self.decide()

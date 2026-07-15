@@ -16,7 +16,8 @@ import threading
 from pathlib import Path
 
 from .arp import Arpeggiator
-from .drone import DroneBrain
+from .drone import EVERY as TONIC_EVERY
+from .drone import NOTE_NAMES, TonicDeriver, midi_to_freq
 from .drums import DrumMachine
 from .lfo import LFOManager
 from .scope import Scope
@@ -29,7 +30,7 @@ from .master import MasterSection
 from .midi import MidiRouter, MonoVoice
 from .midi import list_inputs as _list_midi_inputs
 from .module import load_all_modules
-from .rack import Rack
+from .rack import Rack, alloc_id, type_of
 from .watcher import Reloader
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -37,25 +38,27 @@ MODULES_DIR = REPO_ROOT / "modules"
 PATCHES_DIR = REPO_ROOT / "patches"
 
 # -- the control plane: wires among control nodes --------------------------------
-# Node ids: "keys" (all controllers: GUI keys, hardware MIDI, CP88), "arp",
-# "deck" (the loop deck), "voice" (the mono voice), "drone" (the drone brain).
-# Control FLOW is defined by wires — keys→(arp?)→(deck?)→voice, any topology.
-# keys is never a destination (that would re-enter the controllers); self-wires
-# are forbidden. deck→arp→deck is legal: the deck's _self_fire guard prevents
-# replayed notes from re-recording.
+# Node ids (v5): "keys" (all controllers: GUI keys, hardware MIDI, CP88),
+# "arp", "deck" (the loop deck), voice ids ("voice", "voice.2", ...), tonic
+# deriver ids ("tonic", "tonic.2", ...), and drone INSTANCE ids ("drone",
+# "drone.2", ... — tonic-in only). Control FLOW is defined by wires —
+# keys→(arp?)→(deck?)→voice, any topology. keys is never a destination
+# (that would re-enter the controllers); self-wires are forbidden.
+# deck→arp→deck is legal: the deck's _self_fire guard prevents replayed
+# notes from re-recording. Wire type rules: tonic outs (deriver TONIC out)
+# only connect to tonic ins (drone instances).
 CTL_SOURCES = ("keys", "arp", "deck")
-CTL_TARGETS = ("arp", "deck", "voice", "drone")
+CTL_TARGETS = ("arp", "deck")
 
 
 def default_ctl_wires() -> list[dict]:
     """Today's fixed flow, expressed as wires (preserves v2 behavior):
-    keys feed the arp, the arp drives voice + deck-record + drone, and the
-    deck replays through its private voice node."""
+    keys feed the arp, the arp drives voice + deck-record, and the deck
+    replays through its private voice node."""
     return [
         {"from": "keys", "to": "arp"},
         {"from": "arp", "to": "voice"},
         {"from": "arp", "to": "deck"},
-        {"from": "arp", "to": "drone"},
         {"from": "deck", "to": "voice"},
     ]
 
@@ -84,16 +87,6 @@ class _DeckRecordTap(_NullSink):
     def note_off(self, note: int) -> None:
         (self.looper.record_voiced if self.voiced
          else self.looper.record_raw)(note, False)
-
-
-class _DroneTap(_NullSink):
-    """The drone brain listens to on-events only."""
-
-    def __init__(self, drone) -> None:
-        self.drone = drone
-
-    def note_on(self, note: int, velocity: int = 100) -> None:
-        self.drone.observe(note)
 
 
 class _FanOut(_NullSink):
@@ -139,24 +132,26 @@ class _FanOut(_NullSink):
 class _KeysNode(_FanOut):
     """The controllers' node: GUI keys, hardware MIDI, sensors — all enter
     the graph here. Sustain/bend stay GLOBAL (pedal and wheel are physical
-    gestures on the instrument, not events in a note path)."""
+    gestures on the instrument, not events in a note path); with multiple
+    mono voices they apply to ALL of them."""
 
     def __init__(self, app) -> None:
         super().__init__(app, "keys")
 
     def set_sustain(self, on: bool) -> None:
-        sink = self.app.arp or self.app.voice
-        if sink:
-            sink.set_sustain(on)
+        self.app._global_sustain(on)
 
     def set_bend(self, semitones: float) -> None:
-        if self.app.voice:
-            self.app.voice.set_bend(semitones)
+        for v in list(self.app.voices.values()):
+            try:
+                v.set_bend(semitones)
+            except Exception:  # noqa: BLE001
+                pass
 
     def all_off(self) -> None:
-        # panic is global too: silence the arp pool AND the voice directly,
+        # panic is global too: silence the arp pool AND every voice directly,
         # whatever the wiring says
-        for s in (self.app.arp, self.app.voice):
+        for s in (self.app.arp, *self.app.voices.values()):
             if s is None:
                 continue
             try:
@@ -201,21 +196,28 @@ class SynthApp:
         self.master: MasterSection | None = None
         self.router: MidiRouter | None = None
         self.reloader: Reloader | None = None
-        self.voice: MonoVoice | None = None
+        # v5: multiple mono voices, id -> MonoVoice. "voice" is the primary;
+        # spawned ones are "voice.2", "voice.3", ... (self.voice = primary).
+        self.voices: dict[str, MonoVoice] = {}
+        self._voice_targets: dict[str, str | None] = {"voice": None}  # id -> override
         self.arp: Arpeggiator | None = None
         self._arp_settings: dict = {}  # persists across patch switches
         self.transport = Transport()
-        self.drone = DroneBrain(self)
+        # v5: tonic derivers (spawnable ctl nodes) replace the DroneBrain.
+        self.tonics: dict[str, TonicDeriver] = {}
+        self.drone_follow: dict[str, bool] = {}  # drone instance id -> follow tonic
+        self._legacy_drone = False               # set_drone compat pair active
+        self._legacy_drone_id: str | None = None
         self.drums = DrumMachine(self)
         self.lfos = LFOManager(self)
         self.looper = Looper(self)
         self.scope = Scope(self)
-        # control plane: wires among {keys, arp, deck, voice, drone}. Survive
-        # rebuilds (like graph_wires); reset to default on select_patch.
+        # control plane: wires among {keys, arp, deck, voice ids, tonic ids,
+        # drone ids}. Survive rebuilds (like graph_wires); reset to default
+        # on select_patch.
         self.ctl_wires: list[dict] = default_ctl_wires()
         self._keys = _KeysNode(self)                    # every controller enters here
         self._arp_out = _FanOut(self, "arp")            # the arp fires into this
-        self._drone_tap = _DroneTap(self.drone)
         self._deck_raw_tap = _DeckRecordTap(self.looper, voiced=False)
         self._deck_voiced_tap = _DeckRecordTap(self.looper, voiced=True)
         self.on_beat_event = None  # set by GuiServer; called from the beat thread
@@ -224,13 +226,25 @@ class SynthApp:
         self.patch_name: str | None = None
         self.patch: dict | None = None
         # graph overlay over the linear chain: None = pure linear derivation;
-        # a list of {"from": key, "to": key|"master"|None} = user rewires,
-        # re-applied after every rebuild for keys that still exist.
+        # a list of {"from": id, "to": id|"master"|None} = user rewires,
+        # re-applied after every rebuild for ids that still exist.
         self.graph_wires: list[dict] | None = None
-        self._voice_target_override: str | None = None  # set_voice_target survivor
+        self._transpose = 0
         self.registry: dict = {}
         self.module_errors: dict = {}
         self._lock = threading.RLock()  # GUI thread + MIDI thread both call in
+
+    # primary-voice accessor (lots of code — and tests — talk to "the voice")
+    @property
+    def voice(self) -> MonoVoice | None:
+        return self.voices.get("voice")
+
+    @voice.setter
+    def voice(self, v) -> None:
+        if v is None:
+            self.voices.pop("voice", None)
+        else:
+            self.voices["voice"] = v
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -278,21 +292,11 @@ class SynthApp:
         if self.reloader:
             self.reloader.rack = self.rack  # point hot reload at the new rack
 
-        bindings = patch.get("bindings", {})
-        target = bindings.get("notes_to") or self._guess_voice_target()
-        if self._voice_target_override:
-            try:
-                inst = self.rack.find(self._voice_target_override)
-                if inst.module.kind == "source" and "gate" in inst.settings:
-                    target = self._voice_target_override
-            except KeyError:
-                pass  # override's module left the chain — fall back
-        self.voice = MonoVoice(self.rack, target) if target else None
+        self._make_voices(patch)
         if self.voice:
             # the arp fires into a live fan-out over the arp→X wires — no
-            # hardwired voice/deck/drone taps anymore
+            # hardwired voice/deck taps anymore
             self.arp = Arpeggiator(self._arp_out, self.transport)
-            self.voice.on_voiced = self._emit_voiced
             self.arp.configure(**{**self._arp_settings, **patch.get("arp", {})})
             self._arp_settings = {
                 k: v for k, v in self.arp.settings().items() if k != "patterns"
@@ -302,9 +306,39 @@ class SynthApp:
         self.rack.on_node_replaced = self._on_node_replaced
         self.lfos.assignments.clear()  # old rack's nodes are gone with it
         self.rack.mapped.clear()
-        self.drone.spawn()  # re-add the drone to the fresh rack if enabled
+        if self._legacy_drone:  # re-add the compat deriver+drone pair
+            self._ensure_legacy_drone()
         self._reapply_graph_wires()
         self._restart_midi()
+
+    def _make_voices(self, patch: dict) -> None:
+        """(Re)create every mono voice against the fresh rack, keeping ids
+        and stored target overrides where the target module still exists."""
+        bindings = patch.get("bindings", {})
+        if "voice" not in self._voice_targets:
+            self._voice_targets["voice"] = None
+        self.voices = {}
+        guess = self._guess_voice_target()
+        for vid, override in self._voice_targets.items():
+            target = None
+            for cand in (override,
+                         bindings.get("notes_to") if vid == "voice" else None):
+                if not cand:
+                    continue
+                try:
+                    inst = self.rack.find(cand)
+                    if inst.module.kind == "source" and "gate" in inst.settings:
+                        target = inst.key
+                        break
+                except KeyError:
+                    pass  # override's module left the chain — fall back
+            target = target or guess
+            if not target:
+                continue
+            v = MonoVoice(self.rack, target)
+            v.transpose = self._transpose
+            v.on_voiced = self._emit_voiced
+            self.voices[vid] = v
 
     def _reapply_graph_wires(self) -> None:
         """After ANY rebuild the rack comes up linear; re-impose the user's
@@ -336,10 +370,26 @@ class SynthApp:
 
     # -- control-plane wiring --------------------------------------------------
 
+    def _is_drone_id(self, nid) -> bool:
+        """Is nid a drone INSTANCE id (the only tonic-in nodes)?"""
+        if not isinstance(nid, str) or not self.rack:
+            return False
+        return any(i.key == nid and i.type == "drone"
+                   for i in self.rack.instances)
+
+    def _ctl_src_ok(self, src) -> bool:
+        return src in CTL_SOURCES or src in self.tonics
+
+    def _ctl_dst_ok(self, dst) -> bool:
+        return (dst in CTL_TARGETS or dst == "voice"  # primary id is reserved
+                or dst in self.voices or dst in self.tonics
+                or self._is_drone_id(dst))
+
     def _ctl_sinks(self, src: str) -> list:
         """Resolve a node's outgoing wires to note-sink objects, live.
         (Deck REPLAY resolution lives in looper._sink(), which reads the same
-        ctl_wires — this handles keys/arp dispatch.)"""
+        ctl_wires — this handles keys/arp/tonic dispatch. Wires INTO drone
+        instances are tonic wires: root updates, not note events — skipped.)"""
         sinks = []
         for w in self.ctl_wires:
             if w["from"] != src:
@@ -347,30 +397,40 @@ class SynthApp:
             t = w["to"]
             if t == "arp" and self.arp is not None:
                 sinks.append(self.arp)
-            elif t == "voice" and self.voice is not None:
-                sinks.append(self.voice)
+            elif t in self.voices:
+                sinks.append(self.voices[t])
             elif t == "deck":
                 # keys→deck records the raw input; arp→deck records arp output
                 sinks.append(self._deck_voiced_tap if src == "arp"
                              else self._deck_raw_tap)
-            elif t == "drone":
-                sinks.append(self._drone_tap)
+            elif t in self.tonics:
+                sinks.append(self.tonics[t])
         return sinks
 
     def set_ctl_wire(self, action: str, src: str, dst: str | None = None) -> None:
         """Add/remove a control wire. The graph IS the router: an unwired
         node's events dead-end silently."""
         with self._lock:
-            if src not in CTL_SOURCES:
+            # legacy vocabulary: "drone" the brain → the first tonic deriver
+            if src == "drone" and src not in self.tonics and \
+                    not self._is_drone_id("drone"):
+                src = "tonic"
+            if not self._ctl_src_ok(src):
                 raise ValueError(f"{src!r} has no control output")
             if action == "add":
-                if dst not in CTL_TARGETS:
+                if not self._ctl_dst_ok(dst):
                     raise ValueError(f"cannot wire control into {dst!r}")
                 if src == dst:
                     raise ValueError(f"{src} → {dst} would loop on itself")
+                if self._is_drone_id(dst) and src not in self.tonics:
+                    raise ValueError(
+                        f"{dst!r} takes only a tonic input (wire a Tonic Deriver)")
                 w = {"from": src, "to": dst}
                 if w not in self.ctl_wires:
                     self.ctl_wires.append(w)
+                    if src in self.tonics and self._is_drone_id(dst):
+                        # fresh tonic wire: push the current root immediately
+                        self.tonics[src].drive_drones(only=dst)
             elif action == "remove":
                 n0 = len(self.ctl_wires)
                 self.ctl_wires = [w for w in self.ctl_wires
@@ -381,12 +441,15 @@ class SynthApp:
                     if dst == "arp" and self.arp and \
                             not any(w["to"] == "arp" for w in self.ctl_wires):
                         self.arp.all_off()
-                    if dst == "voice" and self.voice and \
-                            not any(w["to"] == "voice" for w in self.ctl_wires):
-                        self.voice.all_off()
+                    if dst in self.voices and \
+                            not any(w["to"] == dst for w in self.ctl_wires):
+                        self.voices[dst].all_off()
                     # unhooking the deck's replay must not leave notes ringing
-                    if src == "deck" and dst == "voice":
-                        self.looper._deck_teardown()
+                    if src == "deck" and dst in self.voices:
+                        if dst == "voice":
+                            self.looper._deck_teardown()
+                        else:
+                            self.voices[dst].all_off()
                     elif src == "deck" and dst == "arp" and self.arp:
                         for n in list(self.looper._sounding):
                             try:
@@ -395,6 +458,22 @@ class SynthApp:
                                 pass
             else:
                 raise ValueError(f"unknown ctl_wire action {action!r}")
+
+    def _global_sustain(self, on: bool) -> None:
+        """The pedal is a physical gesture — one pedal, ALL voices. The arp
+        latches its pool; a voice fed exclusively by the ENABLED arp skips
+        the direct latch (a latched voice would defeat the arp's gating)."""
+        if self.arp:
+            self.arp.set_sustain(on)  # latch the pool
+        arp_gating = bool(self.arp and self.arp.enabled)
+        for vid, v in self.voices.items():
+            feeds = {w["from"] for w in self.ctl_wires if w["to"] == vid}
+            if arp_gating and "arp" in feeds:
+                continue  # the arp's latch carries this voice's stream
+            try:
+                v.set_sustain(on)
+            except Exception:  # noqa: BLE001
+                pass
 
     def _restart_midi(self) -> None:
         """(Re)open the MIDI router against the current rack/voice/port."""
@@ -423,22 +502,29 @@ class SynthApp:
             except Exception:  # noqa: BLE001
                 pass
 
-    def edit_chain(self, action: str, key: str, index: int | None = None) -> None:
+    def edit_chain(self, action: str, key: str, index: int | None = None) -> str | None:
         """Live chain surgery: add/remove/move a stage. Auto-snaps wiring by
         rebuilding the chain in the new order with all settings, enabled
-        states, and LFO assignments preserved."""
+        states, and LFO assignments preserved.
+
+        v5: `key` is an instance id for remove/move; for add it's a module
+        TYPE (duplicates allowed — the new instance auto-suffixes to a fresh
+        id, which is returned)."""
         with self._lock:
             stages = [
                 (i.key, dict(i.settings), i.enabled)
                 for i in self.rack.instances if not i.service
             ]
             keys = [k for k, _, _ in stages]
+            result: str | None = None
             if action == "add":
-                if key not in self.registry:
+                base = type_of(key)
+                if base not in self.registry:
                     raise ValueError(f"unknown module {key!r}")
-                if key in keys:
-                    raise ValueError(f"{key} is already in the chain")
-                stages.append((key, {}, True))
+                new_id = key if ("." in key and key not in keys) \
+                    else alloc_id(base, keys)
+                stages.append((new_id, {}, True))
+                result = new_id
             elif action == "remove":
                 stages = [s for s in stages if s[0] != key]
                 if self.graph_wires is not None:
@@ -452,15 +538,23 @@ class SynthApp:
                     ]
                     if self.drums.target == key:
                         self.drums.target = dst
+                # the removed instance's control-plane presence goes with it
+                self.ctl_wires = [w for w in self.ctl_wires
+                                  if key not in (w.get("from"), w.get("to"))]
+                self.drone_follow.pop(key, None)
+                if self._legacy_drone_id == key:
+                    self._legacy_drone_id = None
+                    self._legacy_drone = False
             elif action == "move":
                 i = keys.index(key)
                 j = max(0, min(len(stages) - 1, i + (index or 0)))
                 stages.insert(j, stages.pop(i))
             # keep a source at the head (effects can't start a chain)
-            stages.sort(key=lambda s: 0 if (self.registry[s[0]].kind == "source") else 1)
+            stages.sort(key=lambda s: 0 if (self.registry[type_of(s[0])].kind
+                                            == "source") else 1)
             if not stages:
                 raise ValueError("chain cannot be empty")
-            if self.registry[stages[0][0]].kind != "source":
+            if self.registry[type_of(stages[0][0])].kind != "source":
                 raise ValueError("chain needs at least one source")
             lfo_snap = self.lfos.snapshot()
             new_patch = dict(self.patch or {})
@@ -469,15 +563,17 @@ class SynthApp:
             for k, settings, enabled in stages:
                 try:
                     clean = {n: v for n, v in settings.items()
-                             if n in self.registry[k].params}
+                             if n in self.registry[type_of(k)].params}
                     if clean:
                         self.rack.set_params(k, **clean)
                     if not enabled:
                         self.rack.set_enabled(k, False)
                 except KeyError:
                     pass
+            live = [k for k, _, _ in stages]
             self.lfos.restore({aid: cfg for aid, cfg in lfo_snap.items()
-                               if aid.split(".")[0] in [k for k, _, _ in stages]})
+                               if aid.rsplit(".", 1)[0] in live})
+            return result
 
     def graph_wire(self, action: str, src: str, dst: str | None = None) -> None:
         """Live audio rewiring: add (src → dst|"master") or remove (park src on
@@ -486,7 +582,8 @@ class SynthApp:
         with self._lock:
             if not self.rack:
                 raise RuntimeError("no rack running")
-            self.rack.find(src)  # raises a helpful KeyError for the GUI
+            # normalize legacy type keys to instance ids (raises for the GUI)
+            src = self.rack.find(src).key
             if self.graph_wires is None:
                 self.graph_wires = self.rack.audio_wires()
             wires = [w for w in self.graph_wires if w["from"] != src]
@@ -494,7 +591,7 @@ class SynthApp:
                 if not dst:
                     raise ValueError("graph_wire add needs a destination")
                 if dst != "master":
-                    self.rack.find(dst)
+                    dst = self.rack.find(dst).key
                     adj = {w["from"]: w["to"] for w in wires}
                     cur, hops = dst, 0
                     while cur not in (None, "master") and hops < 64:
@@ -513,28 +610,102 @@ class SynthApp:
                 raise ValueError(f"unknown graph_wire action {action!r}")
             self.rack.reorder_for_wires(self.graph_wires)
 
-    def spawn_unconnected(self, key: str) -> None:
+    def spawn_unconnected(self, key: str) -> str:
         """Add a module to the rack with its audio out parked on the null bus
         (palette click / empty-canvas drop). Snapshot the current wiring FIRST
-        so the linear rebuild's re-tailing doesn't reroute existing modules."""
+        so the linear rebuild's re-tailing doesn't reroute existing modules.
+        `key` is a module TYPE; the fresh instance id is returned."""
         with self._lock:
             if self.graph_wires is None and self.rack:
                 self.graph_wires = self.rack.audio_wires()
-            self.edit_chain("add", key)
-            self.graph_wire("remove", key)
+            new_id = self.edit_chain("add", key)
+            self.graph_wire("remove", new_id)
+            return new_id
 
-    def set_voice_target(self, key: str) -> None:
-        """Re-aim the mono voice at another playable source (GUI wire re-drag)."""
+    def set_voice_target(self, key: str, voice: str = "voice") -> None:
+        """Re-aim a mono voice at another playable source (GUI wire re-drag)."""
         with self._lock:
-            if not (self.rack and self.voice):
-                raise RuntimeError("no voice to retarget")
+            v = self.voices.get(voice)
+            if not (self.rack and v):
+                raise RuntimeError(f"no voice {voice!r} to retarget")
             inst = self.rack.find(key)
             if inst.module.kind != "source" or "gate" not in inst.settings \
                     or "freq" not in inst.settings:
                 raise ValueError(f"{key} is not a note-playable source")
-            self.voice.all_off()  # silence the old target before switching
-            self.voice.target_key = key
-            self._voice_target_override = key
+            v.all_off()  # silence the old target before switching
+            v.target_key = inst.key
+            self._voice_targets[voice] = inst.key
+
+    # -- multiple mono voices ----------------------------------------------------
+
+    def spawn_voice(self) -> str:
+        """Add another mono voice ("voice.2", ...). It arrives unwired —
+        patch keys/arp/deck into it — aimed at the first playable source."""
+        with self._lock:
+            if not self.rack:
+                raise RuntimeError("no rack running")
+            target = self._guess_voice_target()
+            if not target:
+                raise ValueError("no note-playable source to aim a voice at")
+            vid = alloc_id("voice", self.voices.keys() | self._voice_targets.keys())
+            v = MonoVoice(self.rack, target)
+            v.transpose = self._transpose
+            v.on_voiced = self._emit_voiced
+            self.voices[vid] = v
+            self._voice_targets[vid] = None
+            return vid
+
+    def remove_voice(self, vid: str) -> None:
+        with self._lock:
+            if vid == "voice":
+                raise ValueError("the primary voice cannot be removed")
+            v = self.voices.pop(vid, None)
+            self._voice_targets.pop(vid, None)
+            if v is None:
+                raise KeyError(f"no voice {vid!r}")
+            try:
+                v.all_off()
+            except Exception:  # noqa: BLE001
+                pass
+            self.ctl_wires = [w for w in self.ctl_wires
+                              if vid not in (w.get("from"), w.get("to"))]
+
+    # -- tonic derivers ------------------------------------------------------------
+
+    def spawn_tonic(self, want_id: str | None = None) -> str:
+        with self._lock:
+            tid = want_id or alloc_id("tonic", self.tonics.keys())
+            if tid not in self.tonics:
+                self.tonics[tid] = TonicDeriver(self, tid)
+            return tid
+
+    def remove_tonic(self, tid: str) -> None:
+        with self._lock:
+            d = self.tonics.pop(tid, None)
+            if d is None:
+                raise KeyError(f"no tonic deriver {tid!r}")
+            d.shutdown()
+            self.ctl_wires = [w for w in self.ctl_wires
+                              if tid not in (w.get("from"), w.get("to"))]
+            if self._legacy_drone and tid == "tonic":
+                self._legacy_drone = False
+
+    def set_tonic(self, tid: str, **settings) -> None:
+        with self._lock:
+            d = self.tonics.get(tid)
+            if d is None:
+                raise KeyError(f"no tonic deriver {tid!r}")
+            d.configure(**settings)
+
+    def set_drone_follow(self, iid: str, on: bool) -> None:
+        """The drone card's tonic toggle: root updates drive freq or don't."""
+        with self._lock:
+            if not self._is_drone_id(iid):
+                raise KeyError(f"no drone instance {iid!r}")
+            self.drone_follow[iid] = bool(on)
+            if on:
+                for d in self.tonics.values():
+                    d.drive_drones(only=iid)
 
     def _guess_voice_target(self) -> str | None:
         """First source in the chain that looks note-playable (freq + gate)."""
@@ -567,8 +738,9 @@ class SynthApp:
 
     def set_transpose(self, semitones: int) -> None:
         with self._lock:
-            if self.voice:
-                self.voice.transpose = max(-24, min(24, int(semitones)))
+            self._transpose = max(-24, min(24, int(semitones)))
+            for v in self.voices.values():  # transpose is GLOBAL
+                v.transpose = self._transpose
 
     def set_drums(self, **settings) -> None:
         with self._lock:
@@ -600,20 +772,70 @@ class SynthApp:
         presets_mod.delete_preset(name)
 
     def tonic_state(self) -> dict:
-        with self.drone._lock:
-            self.drone._decay(__import__("time").monotonic())
-            weights = list(self.drone._weights)
+        """Header strip: the FIRST deriver's histogram + root (legacy shape)."""
+        d = self.tonics.get("tonic") or next(iter(self.tonics.values()), None)
+        if d is None:
+            return {"weights": [0.0] * 12, "root": None}
+        weights = d.est.weights()
         total = max(sum(weights), 1e-9)
-        est = self.drone.estimate()
-        from .drone import NOTE_NAMES
+        est = d.est.estimate(d.root)
         return {
             "weights": [round(w / total, 4) for w in weights],
             "root": NOTE_NAMES[est] if est is not None else None,
         }
 
-    def set_drone(self, **settings) -> None:
+    def set_drone(self, enabled=None, every=None, octave=None, **_ignored) -> None:
+        """LEGACY compat (/legacy GUI, old presets): the monolithic drone
+        maps onto a deriver+drone pair — ensure a "tonic" deriver exists
+        (configured with every/octave), and on enable spawn a drone instance
+        riding the chain head, wired arp→tonic→drone with follow on."""
         with self._lock:
-            self.drone.configure(**settings)
+            if enabled is True or every is not None or octave is not None:
+                tid = self.spawn_tonic(want_id="tonic")
+                self.tonics[tid].configure(every=every, octave=octave)
+            if enabled is True:
+                self._legacy_drone = True
+                self._ensure_legacy_drone()
+            elif enabled is False and self._legacy_drone:
+                self._legacy_drone = False
+                did = self._legacy_drone_id
+                self._legacy_drone_id = None
+                if did and self.rack:
+                    try:
+                        self.rack.remove_instance(did)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self.ctl_wires = [w for w in self.ctl_wires
+                                      if w.get("to") != did]
+
+    def _ensure_legacy_drone(self) -> None:
+        """Idempotent: (re)spawn the compat drone instance in the current
+        rack and (re)impose the default deriver wiring."""
+        rack, mod = self.rack, self.registry.get("drone")
+        if not (self._legacy_drone and rack and mod):
+            return
+        d = self.tonics.get("tonic")
+        inst = None
+        if self._legacy_drone_id:
+            try:
+                inst = rack.find(self._legacy_drone_id)
+            except KeyError:
+                inst = None
+        if inst is None:
+            overrides = {}
+            if d and d.root is not None:
+                overrides["freq"] = midi_to_freq(12 * (d.octave + 1) + d.root)
+            try:
+                inst = rack.add_service_source(mod, overrides)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[drone] could not spawn: {exc}")
+                return
+            self._legacy_drone_id = inst.key
+        did = self._legacy_drone_id
+        self.drone_follow.setdefault(did, True)
+        for w in ({"from": "arp", "to": "tonic"}, {"from": "tonic", "to": did}):
+            if w not in self.ctl_wires:
+                self.ctl_wires.append(w)
 
     def set_transport(self, bpm=None, beats_per_bar=None, click=None, accent=None,
                       playing=None) -> None:
@@ -621,18 +843,14 @@ class SynthApp:
             self.transport.click_accent = bool(accent)
         if playing is not None:
             self.transport.set_running(bool(playing))
-            if not playing:
-                if self.arp:
-                    self.arp._safe_all_off() if hasattr(self.arp, "_safe_all_off") else None
+            if not playing and self.arp:
+                self.arp._safe_all_off() if hasattr(self.arp, "_safe_all_off") else None
+            # transport stop/start pauses every drone instance
+            for inst in (self.rack.instances if self.rack else []):
+                if inst.type != "drone" or inst.node is None or not inst.enabled:
+                    continue
                 try:
-                    inst = self.rack.find("drone")
-                    inst.node.pause()
-                except Exception:  # noqa: BLE001
-                    pass
-            else:
-                try:
-                    inst = self.rack.find("drone")
-                    inst.node.unpause()
+                    (inst.node.unpause if playing else inst.node.pause)()
                 except Exception:  # noqa: BLE001
                     pass
         if bpm is not None:
@@ -647,7 +865,8 @@ class SynthApp:
             self.looper.shutdown()
             self.drums.shutdown()
             self.lfos.clear()
-            self.drone.shutdown()
+            for d in self.tonics.values():
+                d.shutdown()
             self.transport.shutdown()
             if self.reloader:
                 self.reloader.stop()
@@ -695,6 +914,7 @@ class SynthApp:
         If the param is LFO-mapped, the value steers the LFO's center."""
         with self._lock:
             inst = self.rack.find(key)
+            key = inst.key  # normalize a legacy type key to the instance id
             p = inst.module.params[name]
             value = p.from_unit(float(unit_value))
             if self.lfos.set_center_unit(key, name, float(unit_value)):
@@ -744,14 +964,27 @@ class SynthApp:
 
     # -- state snapshot for clients -----------------------------------------------
 
+    def _legacy_drone_settings(self) -> dict:
+        """state.drone kept for /legacy clients (the old brain's shape)."""
+        d = self.tonics.get("tonic")
+        return {
+            "enabled": bool(self._legacy_drone),
+            "every": d.every if d else "1 bar",
+            "everies": list(TONIC_EVERY),
+            "octave": d.octave if d else 2,
+            "root": (NOTE_NAMES[d.root] if d and d.root is not None else None),
+        }
+
     def state(self) -> dict:
         with self._lock:
             chain = []
             if self.rack:
                 for inst in self.rack.instances:
-                    chain.append({
-                        "key": inst.key,
-                        "name": inst.module.name,
+                    suffix = inst.key.split(".", 1)[1] if "." in inst.key else ""
+                    entry = {
+                        "key": inst.key,      # UNIQUE instance id
+                        "type": inst.type,    # module key (registry/LIB lookups)
+                        "name": inst.module.name + (f" {suffix}" if suffix else ""),
                         "kind": inst.module.kind,
                         "family": inst.module.family,
                         "enabled": inst.enabled,
@@ -768,7 +1001,10 @@ class SynthApp:
                             }
                             for pname, p in inst.module.params.items()
                         },
-                    })
+                    }
+                    if inst.type == "drone":
+                        entry["tonic_follow"] = self.drone_follow.get(inst.key, True)
+                    chain.append(entry)
             return {
                 "patch": self.patch_name,
                 "patches": list_patches(),
@@ -782,7 +1018,10 @@ class SynthApp:
                 ),
                 "boot_note": self.engine.boot_note if self.engine else None,
                 "voice_target": self.voice.target_key if self.voice else None,
-                "transpose": self.voice.transpose if self.voice else 0,
+                "voices": [{"id": vid, "target": v.target_key}
+                           for vid, v in self.voices.items()],
+                "tonics": [d.settings() for d in self.tonics.values()],
+                "transpose": self._transpose,
                 "midi_inputs": _list_midi_inputs(),
                 "midi_port": self.router.active_port if self.router else None,
                 "midi_enabled": self.midi_enabled,
@@ -791,7 +1030,7 @@ class SynthApp:
                 "drums_target": self.drums.target,
                 "arp": self.arp.settings() if self.arp else None,
                 "transport": self.transport.settings(),
-                "drone": self.drone.settings(),
+                "drone": self._legacy_drone_settings(),
                 "drums": self.drums.settings(),
                 "looper": self.looper.settings(),
                 "lfos": self.lfos.state(),
@@ -799,7 +1038,7 @@ class SynthApp:
                 "available": sorted(
                     ({"key": m.key, "name": m.name, "kind": m.kind,
                       "family": m.family}
-                     for m in self.registry.values() if m.key != "drone"),
+                     for m in self.registry.values()),
                     key=lambda d: (d["kind"] != "source", d["family"], d["key"]),
                 ),
                 "module_errors": {k: repr(v) for k, v in self.module_errors.items()},

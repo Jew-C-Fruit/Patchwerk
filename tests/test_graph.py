@@ -4,9 +4,11 @@
 
 Covers: audio-wire derivation from rack settings, graph_wires bookkeeping
 (one-out-per-source, cycle rejection, disconnect memory, reapply-after-
-rebuild), the drums target / to_chain compatibility mapping, and the v3
-control plane: ctl_wires defaults, add/remove + validation, keys/arp
-dispatch through the wires, deck sink resolution, and select_patch reset.
+rebuild), the drums target / to_chain compatibility mapping, the control
+plane (ctl_wires defaults, add/remove + validation, keys/arp dispatch
+through the wires, deck sink resolution, select_patch reset), and the v5
+structure: instance ids (duplicates, legacy type-key resolution), multiple
+mono voices, and tonic-deriver → drone root-follow.
 """
 
 import sys
@@ -16,10 +18,11 @@ from types import SimpleNamespace
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from synthbase.rack import Rack  # noqa: E402
+from synthbase.rack import Rack, alloc_id, type_of  # noqa: E402
 from synthbase.drums import DrumMachine  # noqa: E402
 from synthbase.app import SynthApp, default_ctl_wires  # noqa: E402
 from synthbase.looper import _FanSink  # noqa: E402
+from synthbase.midi import MonoVoice  # noqa: E402
 
 FAILURES = []
 
@@ -30,9 +33,19 @@ def check(name, cond):
         FAILURES.append(name)
 
 
-def fake_inst(key, kind, settings, service=False):
+class FakeNode:
+    def __init__(self):
+        self.sets = []
+
+    def set(self, **kw):
+        self.sets.append(kw)
+
+
+def fake_inst(key, kind, settings, service=False, type=None):
     return SimpleNamespace(key=key, module=SimpleNamespace(kind=kind),
-                           settings=dict(settings), service=service, node=None)
+                           settings=dict(settings), service=service,
+                           node=FakeNode(), enabled=True,
+                           type=type or type_of(key))
 
 
 def make_rack(instances):
@@ -108,6 +121,14 @@ class RecordingRack:
     def reorder_for_wires(self, wires):
         self.calls.append(("reorder", len(wires)))
 
+    def set_param(self, key, name, value):
+        self.calls.append(("set_param", key, name, value))
+        self.find(key).settings[name] = value
+
+    def set_params(self, key, **values):
+        self.calls.append(("set_params", key, dict(values)))
+        self.find(key).settings.update(values)
+
 
 def make_app():
     app = SynthApp(use_midi=False, use_reload=False)
@@ -164,20 +185,21 @@ def test_graph_wire_bookkeeping():
 def test_spawn_unconnected():
     app = make_app()
     added = []
-    orig_gw = app.graph_wire
 
     def fake_edit_chain(action, key, index=None):
         added.append((action, key))
         app.rack.instances.append(fake_inst(key, "effect", {}))
+        return key  # v5: edit_chain add returns the fresh instance id
 
     app.edit_chain = fake_edit_chain
-    app.spawn_unconnected("chorus")
+    new_id = app.spawn_unconnected("chorus")
     check("spawn snapshots wiring before add",
           app.graph_wires is not None and
           {"from": "pluck", "to": "echo"} in app.graph_wires)
     check("spawn adds then disconnects",
           added == [("add", "chorus")] and
           {"from": "chorus", "to": None} in app.graph_wires)
+    check("spawn returns the fresh id", new_id == "chorus")
 
 
 # ---- ctl_wires: the wire-defined control plane -----------------------------------
@@ -200,12 +222,11 @@ class FakeNoteSink:
 def test_ctl_wires():
     app = SynthApp(use_midi=False, use_reload=False)
     check("default ctl wires derived", app.ctl_wires == default_ctl_wires())
-    check("default set is keys→arp, arp→{voice,deck,drone}, deck→voice",
+    check("default set is keys→arp, arp→{voice,deck}, deck→voice",
           app.ctl_wires == [
               {"from": "keys", "to": "arp"},
               {"from": "arp", "to": "voice"},
               {"from": "arp", "to": "deck"},
-              {"from": "arp", "to": "drone"},
               {"from": "deck", "to": "voice"},
           ])
 
@@ -247,13 +268,13 @@ def test_ctl_wires():
           app2.voice.ons == [62] and app2.voice.offs == [62]
           and app2.arp.ons == [60])
 
-    # arp fan-out resolution: arp→{voice, deck(voiced), drone}
+    # arp fan-out resolution: arp→{voice, deck(voiced)}
     app3 = SynthApp(use_midi=False, use_reload=False)
     app3.voice = FakeNoteSink()
     sinks = app3._ctl_sinks("arp")
-    check("arp sinks resolve voice + deck voiced tap + drone tap",
+    check("arp sinks resolve voice + deck voiced tap",
           app3.voice in sinks and app3._deck_voiced_tap in sinks
-          and app3._drone_tap in sinks and len(sinks) == 3)
+          and len(sinks) == 2)
     app3.set_ctl_wire("add", "keys", "deck")
     check("keys→deck resolves the RAW record tap",
           app3._deck_raw_tap in app3._ctl_sinks("keys"))
@@ -265,7 +286,7 @@ def test_ctl_wires():
           app4.looper._sink() is app4.arp)
     app4.ctl_wires = [{"from": "deck", "to": "arp"}]
     check("deck→arp resolves to the arp", app4.looper._sink() is app4.arp)
-    app4.ctl_wires = [{"from": "deck", "to": "arp"}, {"from": "deck", "to": "drone"}]
+    app4.ctl_wires = [{"from": "deck", "to": "arp"}, {"from": "deck", "to": "voice"}]
     check("deck multi-out fans", isinstance(app4.looper._sink(), _FanSink))
     app4.ctl_wires = [{"from": "keys", "to": "deck"}]
     check("deck with no outgoing wire is silent", app4.looper._sink() is None)
@@ -309,7 +330,7 @@ def test_tap_emission():
     taps.clear()
     app._arp_out.note_on(64)   # the arp's scheduled fire path
     tap = [e for e in taps if e.get("kind") == "tap"]
-    check("arp fire emits exactly one src=arp tap (3 default edges)",
+    check("arp fire emits exactly one src=arp tap (2 default edges)",
           tap == [{"kind": "tap", "src": "arp", "note": 64, "on": True}])
 
 
@@ -346,6 +367,207 @@ def test_drums_target():
           DrumMachine(app).settings()["to_chain"] is False)
 
 
+# ---- v5: instance ids -----------------------------------------------------------
+
+def test_instance_ids():
+    # id allocation: first instance = type key, then ".2", ".3"
+    check("alloc first id = type", alloc_id("lowpass", []) == "lowpass")
+    check("alloc second id suffixes",
+          alloc_id("lowpass", ["lowpass"]) == "lowpass.2")
+    check("alloc skips taken suffixes",
+          alloc_id("lowpass", ["lowpass", "lowpass.2"]) == "lowpass.3")
+    check("type_of strips the suffix",
+          type_of("lowpass.2") == "lowpass" and type_of("lowpass") == "lowpass")
+
+    # duplicate module keys in a plain chain spec auto-suffix
+    norm = Rack._normalize(["pluck", "lowpass", "lowpass", ("lowpass", {})])
+    check("normalize auto-suffixes duplicates",
+          [k for k, _ in norm] == ["pluck", "lowpass", "lowpass.2", "lowpass.3"])
+
+    # two lowpass instances: independent params + independent wiring
+    rack = make_rack([
+        fake_inst("pluck", "source", {"out": 16}),
+        fake_inst("lowpass", "effect", {"in_bus": 16, "out": 18, "cutoff": 500}),
+        fake_inst("lowpass.2", "effect", {"in_bus": 18, "out": 0, "cutoff": 500}),
+    ])
+    rack.set_param("lowpass.2", "cutoff", 2000)
+    check("duplicate instances keep independent params",
+          rack.find("lowpass").settings["cutoff"] == 500 and
+          rack.find("lowpass.2").settings["cutoff"] == 2000)
+    check("set_param hit only the addressed node",
+          rack.find("lowpass").node.sets == [] and
+          rack.find("lowpass.2").node.sets == [{"cutoff": 2000}])
+    wires = rack.audio_wires()
+    check("wires carry instance ids",
+          {"from": "pluck", "to": "lowpass"} in wires and
+          {"from": "lowpass", "to": "lowpass.2"} in wires and
+          {"from": "lowpass.2", "to": "master"} in wires)
+
+    # legacy type-key resolution: bare type finds the FIRST instance of it
+    check("find prefers the exact id", rack.find("lowpass").key == "lowpass")
+    rack2 = make_rack([
+        fake_inst("pluck", "source", {"out": 16}),
+        fake_inst("lowpass.2", "effect", {"in_bus": 16, "out": 0}),
+    ])
+    check("legacy type key resolves to first instance of the type",
+          rack2.find("lowpass").key == "lowpass.2")
+    try:
+        rack2.find("nope")
+        check("unknown id still raises", False)
+    except KeyError:
+        check("unknown id still raises", True)
+
+
+# ---- v5: multiple mono voices ------------------------------------------------------
+
+def test_multi_voice():
+    app = SynthApp(use_midi=False, use_reload=False)
+    app.rack = RecordingRack(
+        [("pluck", "source"), ("fm_bell", "source"), ("echo", "effect")],
+        [{"from": "pluck", "to": "echo"}, {"from": "echo", "to": "master"}],
+    )
+    for k in ("pluck", "fm_bell"):
+        app.rack.find(k).settings.update({"gate": 0, "freq": 220})
+    app.voices["voice"] = MonoVoice(app.rack, "pluck")
+
+    vid = app.spawn_voice()
+    check("second voice id is voice.2", vid == "voice.2")
+    check("state exposes voices with targets", sorted(
+        (v["id"], v["target"]) for v in
+        [{"id": i, "target": v.target_key} for i, v in app.voices.items()]
+    ) == [("voice", "pluck"), ("voice.2", "pluck")])
+
+    app.set_voice_target("fm_bell", voice="voice.2")
+    check("voices retarget independently",
+          app.voices["voice"].target_key == "pluck" and
+          app.voices["voice.2"].target_key == "fm_bell")
+
+    # keys fan to whichever voices are wired
+    app.ctl_wires = [{"from": "keys", "to": "voice"},
+                     {"from": "keys", "to": "voice.2"}]
+    app.rack.calls.clear()
+    app.note_on(60)
+    tgt = [c[1] for c in app.rack.calls if c[0] == "set_params"]
+    check("keys fan to both wired voices, each at its own target",
+          tgt == ["pluck", "fm_bell"])
+    app.note_off(60)
+
+    # only one wired → only that voice fires
+    app.ctl_wires = [{"from": "keys", "to": "voice.2"}]
+    app.rack.calls.clear()
+    app.note_on(62)
+    tgt = [c[1] for c in app.rack.calls if c[0] == "set_params"]
+    check("unwired voice stays silent", tgt == ["fm_bell"])
+    app.note_off(62)
+
+    # transpose is global
+    app.set_transpose(5)
+    check("transpose hits every voice",
+          all(v.transpose == 5 for v in app.voices.values()))
+
+    # removal: wires drop with the voice; the primary is fixed
+    app.ctl_wires = [{"from": "keys", "to": "voice.2"}]
+    app.remove_voice("voice.2")
+    check("remove_voice drops the voice + its wires",
+          "voice.2" not in app.voices and app.ctl_wires == [])
+    try:
+        app.remove_voice("voice")
+        check("primary voice cannot be removed", False)
+    except ValueError:
+        check("primary voice cannot be removed", True)
+
+
+# ---- v5: tonic deriver → drone root-follow --------------------------------------------
+
+def test_tonic_drone():
+    app = SynthApp(use_midi=False, use_reload=False)
+    app.rack = RecordingRack([("pluck", "source"), ("drone", "source")], [])
+    app.rack.find("drone").settings["freq"] = 55.0
+    events = []
+    app.on_midi_event = events.append
+
+    tid = app.spawn_tonic()
+    check("first deriver id is tonic", tid == "tonic")
+    check("second deriver suffixes", app.spawn_tonic() == "tonic.2")
+    app.remove_tonic("tonic.2")
+
+    # tonic outs only connect to tonic ins (drone instances)
+    try:
+        app.set_ctl_wire("add", "keys", "drone")
+        check("non-tonic src rejected into a drone", False)
+    except ValueError:
+        check("non-tonic src rejected into a drone", True)
+    app.set_ctl_wire("add", "tonic", "drone")
+    check("tonic→drone wire accepted",
+          {"from": "tonic", "to": "drone"} in app.ctl_wires)
+
+    # thru: notes wired INTO the deriver observe + fan out its ctl wires
+    sink = FakeNoteSink()
+    app.voices["voice"] = sink
+    app.set_ctl_wire("add", "keys", "tonic")
+    app.set_ctl_wire("add", "tonic", "voice")
+    d = app.tonics["tonic"]
+    app.note_on(48)  # C2, heavy bass evidence
+    check("deriver thru forwards the unmodified stream", sink.ons == [48])
+    check("deriver emitted a thru tap", any(
+        e.get("kind") == "tap" and e.get("src") == "tonic" for e in events))
+
+    # fake estimator feed → grid decision drives the wired drone's freq
+    for _ in range(4):
+        d.est.observe(48)
+        d.est.observe(60)
+        d.est.observe(67)  # C major-ish: root should land on C (pc 0)
+    d.decide()
+    check("decide() picked C as root", d.root == 0)
+    freq_sets = [c for c in app.rack.calls
+                 if c[0] == "set_param" and c[1] == "drone" and c[2] == "freq"]
+    check("root change drove the wired drone's freq", len(freq_sets) >= 1
+          and abs(freq_sets[-1][3] - 65.41) < 0.1)   # C2 at octave 2
+    check("tonic_out event emitted", any(
+        e.get("kind") == "tonic_out" and e.get("id") == "tonic"
+        and e.get("root") == "C" for e in events))
+
+    # follow toggle off: further root changes leave the drone alone
+    app.set_drone_follow("drone", False)
+    app.rack.calls.clear()
+    for _ in range(30):
+        d.est.observe(43)
+        d.est.observe(50)
+        d.est.observe(55)  # strong G evidence
+    d.decide()
+    check("root moved on", d.root == 7)
+    check("follow off leaves the drone alone", not any(
+        c[0] == "set_param" and c[1] == "drone" for c in app.rack.calls))
+    # ...and toggling back on re-applies the current root immediately
+    app.set_drone_follow("drone", True)
+    check("follow on re-pitches immediately", any(
+        c[0] == "set_param" and c[1] == "drone" and c[2] == "freq"
+        for c in app.rack.calls))
+
+    # octave knob re-pitches wired drones
+    app.rack.calls.clear()
+    app.set_tonic("tonic", octave=1)
+    fs = [c for c in app.rack.calls if c[0] == "set_param" and c[1] == "drone"]
+    check("octave change re-pitches at the new octave",
+          fs and abs(fs[-1][3] - 49.0) < 0.5)  # G1 at octave 1
+
+    # legacy set_drone maps to a deriver+drone pair with default wiring
+    app2 = SynthApp(use_midi=False, use_reload=False)
+    app2.rack = RecordingRack([("pluck", "source")], [])
+    app2.registry = {}
+    app2.set_drone(enabled=True, every="2 bars", octave=3)
+    check("legacy set_drone ensures a tonic deriver",
+          "tonic" in app2.tonics and app2.tonics["tonic"].every == "2 bars"
+          and app2.tonics["tonic"].octave == 3)
+    check("legacy drone settings shape preserved", set(
+        app2._legacy_drone_settings()) ==
+        {"enabled", "every", "everies", "octave", "root"})
+    for d2 in app2.tonics.values():
+        d2.shutdown()
+    for d2 in app.tonics.values():
+        d2.shutdown()
+
+
 def main():
     test_wires_derivation()
     test_graph_wire_bookkeeping()
@@ -353,6 +575,9 @@ def main():
     test_ctl_wires()
     test_tap_emission()
     test_drums_target()
+    test_instance_ids()
+    test_multi_voice()
+    test_tonic_drone()
     print(f"\n{'PASS' if not FAILURES else 'FAIL'} — {len(FAILURES)} failures")
     return 1 if FAILURES else 0
 

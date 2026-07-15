@@ -238,6 +238,14 @@ def main():
           and len(s.sinks) == 2)
     s.note_on(70)   # a dead sink must not break the fan
     check("fan delivers to every target", app.arp.ons.count(70) == 2)
+    # v5: deck→voice.2 drives that EXTRA mono voice directly (the private
+    # deck node is only for the primary "voice")
+    extra = FakeSink()
+    app.voices = {"voice.2": extra}
+    app.ctl_wires = [{"from": "deck", "to": "voice.2"}]
+    check("deck→voice.2 resolves to the extra voice", lp._sink() is extra)
+    lp._sink().note_on(71)
+    check("replay reaches the extra voice", extra.ons == [71])
     lp.shutdown()
 
     # a dead-end replay must not crash the run thread or _release_all

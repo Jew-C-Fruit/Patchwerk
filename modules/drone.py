@@ -1,9 +1,11 @@
 """Drone: a sustained pedal tone with slow portamento.
 
-The DroneBrain (synthbase/drone.py) drives `freq` toward the root it hears
-in your playing; `glide` sets how slowly the drone slides there. No gate —
-the drone sounds for as long as its node exists (toggle it off with the
-module's bypass switch or the DRONE control in the GUI).
+An ordinary spawnable audio source (multiple instances allowed) with one
+extra: a control-plane presence. Wire a Tonic Deriver's TONIC out into a
+drone instance's tonic-in and root changes drive that instance's `freq`
+(grid-quantized by the deriver); `glide` sets how slowly the drone slides
+there. No gate — the drone sounds for as long as its node exists (toggle
+it off with the module's bypass switch).
 """
 
 from supriya import synthdef

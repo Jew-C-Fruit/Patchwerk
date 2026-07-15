@@ -71,8 +71,9 @@ class LFOManager:
     def assign(self, key: str, pname: str, **cfg) -> str:
         rack = self.app.rack
         inst = rack.find(key)
+        key = inst.key  # normalize a legacy type key to the instance id
         p = inst.module.params[pname]
-        aid = f"{key}.{pname}"
+        aid = f"{key}.{pname}"  # ids may contain dots: "lowpass.2.cutoff"
         if aid in self.assignments:
             return aid
         self._ensure_synthdef()
@@ -177,7 +178,9 @@ class LFOManager:
     def restore(self, data: dict) -> None:
         self.clear()
         for aid, settings in (data or {}).items():
-            key, _, pname = aid.partition(".")
+            # aid = "<instance id>.<param>"; ids may contain dots
+            # ("lowpass.2.cutoff"), so split on the LAST dot
+            key, _, pname = aid.rpartition(".")
             try:
                 self.assign(key, pname, **settings)
             except Exception as exc:  # noqa: BLE001

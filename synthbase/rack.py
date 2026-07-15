@@ -30,9 +30,29 @@ def _bypass(in_bus=0, out=0):
 ChainSpec = list  # list of str | (str, dict) — normalized by Rack.build
 
 
+def type_of(iid: str) -> str:
+    """Module type of an instance id: "lowpass.2" -> "lowpass"."""
+    return str(iid).split(".", 1)[0]
+
+
+def alloc_id(type_key: str, existing) -> str:
+    """First free instance id for a type: "lowpass", then "lowpass.2", ..."""
+    existing = set(existing)
+    if type_key not in existing:
+        return type_key
+    n = 2
+    while f"{type_key}.{n}" in existing:
+        n += 1
+    return f"{type_key}.{n}"
+
+
 @dataclass
 class Instance:
-    """A running module: its node on the server plus current settings."""
+    """A running module: its node on the server plus current settings.
+
+    v5: `key` is a UNIQUE instance id ("lowpass", "lowpass.2", ...);
+    `type` is the module key (synthdef name) the registry is keyed by.
+    """
 
     key: str
     module: Module
@@ -41,6 +61,11 @@ class Instance:
     bus_group: Any = None  # audio bus group feeding the *next* stage (None for last)
     enabled: bool = True
     service: bool = False  # side-instance (drone, LFO) rather than a chain stage
+    type: str = ""         # module key; defaults to type_of(key)
+
+    def __post_init__(self) -> None:
+        if not self.type:
+            self.type = type_of(self.key)
 
     @property
     def display(self) -> str:
@@ -62,12 +87,17 @@ class Rack:
     @staticmethod
     def _normalize(chain_spec: ChainSpec) -> list[tuple[str, dict]]:
         normalized = []
+        seen: set[str] = set()
         for entry in chain_spec:
             if isinstance(entry, str):
-                normalized.append((entry, {}))
+                key, settings = entry, {}
             else:
                 key, settings = entry
-                normalized.append((key, dict(settings)))
+            # duplicates in a plain patch spec auto-suffix into fresh ids
+            if key in seen:
+                key = alloc_id(type_of(key), seen)
+            seen.add(key)
+            normalized.append((key, dict(settings)))
         return normalized
 
     def build(self, chain_spec: ChainSpec) -> None:
@@ -128,7 +158,8 @@ class Rack:
                 **settings,
             )
             self.instances.append(
-                Instance(key=key, module=mod, settings=settings, node=node, bus_group=bus_group)
+                Instance(key=key, module=mod, settings=settings, node=node,
+                         bus_group=bus_group, type=mod.key)
             )
             if bus_group is not None:
                 prev_bus_group = bus_group
@@ -166,7 +197,8 @@ class Rack:
 
     # -- service sources (drone, future LFO modules) -----------------------------
 
-    def add_service_source(self, module: Module, overrides: dict | None = None) -> Instance:
+    def add_service_source(self, module: Module, overrides: dict | None = None,
+                           iid: str | None = None) -> Instance:
         """Add an extra source alongside the chain's head, writing into the
         same bus as the first source so it rides the whole effect chain."""
         assert self.engine.server is not None and self.instances, "rack not built"
@@ -183,12 +215,17 @@ class Rack:
             target_node=self.engine.root_group,
             **settings,
         )
+        iid = iid or self.alloc_id(module.key)
         inst = Instance(
-            key=module.key, module=module, settings=settings, node=node, service=True
+            key=iid, module=module, settings=settings, node=node, service=True,
+            type=module.key,
         )
         self.instances.append(inst)
         self.registry[module.key] = module
         return inst
+
+    def alloc_id(self, type_key: str) -> str:
+        return alloc_id(type_key, (i.key for i in self.instances))
 
     def remove_instance(self, key: str) -> None:
         inst = self.find(key)
@@ -201,13 +238,19 @@ class Rack:
     # -- runtime control -------------------------------------------------------
 
     def find(self, key: str) -> Instance:
+        """Look up an instance by id. Legacy compat: a bare TYPE key resolves
+        to the FIRST instance of that type (old clients are type-keyed)."""
         for inst in self.instances:
             if inst.key == key:
+                return inst
+        for inst in self.instances:
+            if inst.type == key:
                 return inst
         raise KeyError(f"no instance of {key!r} in rack")
 
     def set_param(self, key: str, name: str, value: float) -> None:
         inst = self.find(key)
+        key = inst.key  # normalize a legacy type key to the instance id
         inst.settings[name] = value
         if (key, name) in self.mapped:
             return  # LFO drives this param; value is stored for later restore
@@ -216,6 +259,7 @@ class Rack:
 
     def set_params(self, key: str, **values: float) -> None:
         inst = self.find(key)
+        key = inst.key
         inst.settings.update(values)
         live = {k: v for k, v in values.items() if (key, k) not in self.mapped}
         if live and (inst.enabled or inst.module.kind == "source"):
@@ -388,7 +432,7 @@ class Rack:
         server = self.engine.server
         replaced = False
         for inst in self.instances:
-            if inst.key != new_module.key:
+            if inst.type != new_module.key:   # hot reload matches by TYPE
                 continue
             # Merge: keep live settings, adopt defaults for any new params.
             settings = {name: p.default for name, p in new_module.params.items()}
@@ -424,8 +468,9 @@ class Rack:
     # -- helpers ---------------------------------------------------------------
 
     def _lookup(self, key: str) -> Module:
+        """Registry lookup for an instance id OR a bare type key."""
         try:
-            return self.registry[key]
+            return self.registry[type_of(key)]
         except KeyError:
             known = ", ".join(sorted(self.registry)) or "(none loaded)"
             raise KeyError(f"unknown module {key!r}; loaded modules: {known}") from None

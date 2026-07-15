@@ -8,8 +8,8 @@
   :root {
     --plane: #0d0d0d; --surface: #1a1a19; --card: #202020; --ink-1: #f2f1ea;
     --ink-2: #a9a89e; --hairline: #2c2c2a; --border: rgba(255,255,255,0.10);
-    --audio: #3987e5; --ctl: #1baf7a; --mod: #9085e9; --danger: #e34948;
-    --meter: #1baf7a; --grid: rgba(255,255,255,0.045);
+    --audio: #3987e5; --ctl: #1baf7a; --mod: #9085e9; --tonic: #d9a521;
+    --danger: #e34948; --meter: #1baf7a; --grid: rgba(255,255,255,0.045);
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; overflow: hidden; }
@@ -144,15 +144,12 @@
   .port.e-bottom::after { bottom: 14px; left: 50%; transform: translateX(-50%); }
   .port.e-left::after { left: 13px; top: 50%; transform: translateY(-50%); }
   .port.e-right::after { right: 13px; top: 50%; transform: translateY(-50%); }
-  .port:hover::after, .port.hot::after { opacity: 1; }
-  /* module highlight = white outline; params brighten gray -> white */
-  .mod:hover { border-color: rgba(255,255,255,0.65); }
-  .mini:hover label { color: #fff; }
-  .mini:hover .track i { background: #fff; }
-  .mini:hover .chip { color: #fff; }
+  .mod:hover .port::after, .port.hot::after { opacity: 1; }
   .port[data-sig=audio] { background: var(--audio); }
   .port[data-sig=ctl]   { background: var(--ctl); }
   .port[data-sig=mod]   { background: var(--mod); }
+  /* tonic handles sit above the quiet per-param mod handles on the same edge */
+  .port[data-sig=tonic] { background: var(--tonic); z-index: 6; }
   .port.quiet { width: 7px; height: 7px; border-width: 1.5px;
     background: #6f6d64; opacity: 0.5; }
   .port.quiet:hover, .port.quiet.hot { opacity: 1; background: var(--mod); }
@@ -207,6 +204,7 @@
     <span><b style="background:linear-gradient(90deg,#3987e5,#22b8d4)"></b>audio</span>
     <span><b style="background:linear-gradient(90deg,#1baf7a,#e8c832)"></b>notes</span>
     <span><b style="background:linear-gradient(90deg,#e34948,#9085e9)"></b>mod</span>
+    <span data-legend="tonic"><b style="background:linear-gradient(90deg,#d9a521,#f0c96a)"></b>tonic</span>
   </div>
   <a href="/legacy">legacy gui →</a>
 </header>
@@ -241,16 +239,18 @@ const FAMILY = {
   io: "#c3c2b7", ctl: "#1baf7a", source: "#3987e5", effect: "#199e70",
 };
 // subway line palettes — audio owns the cools, notes/control green→yellow,
-// mod the warm+violet half (the population that grows).
+// mod the warm+violet half (the population that grows), tonic amber/gold.
 const LINES = {
   audio: ["#3987e5", "#22b8d4", "#1f9e9e", "#6db1ff", "#4a5fd0", "#7fd4ef"],
   ctl:   ["#1baf7a", "#8cc63f", "#e8c832", "#4fd08c", "#c9d94d", "#0f8f66"],
   mod:   ["#e34948", "#f2842c", "#d446b8", "#9085e9", "#e87ba4", "#ff6b5e", "#7a5fd0"],
+  tonic: ["#d9a521", "#f0c96a", "#b8860b", "#e8b93e"],
 };
-const lineCount = {audio: 0, ctl: 0, mod: 0};
+const lineCount = {audio: 0, ctl: 0, mod: 0, tonic: 0};
 const BASE_R = 9, LANE = 6;
 const LANE_SEQ = [0, -1, 1, -2, 2, -3, 3];
-const SIG_CSS = {audio: "var(--audio)", ctl: "var(--ctl)", mod: "var(--mod)"};
+const SIG_CSS = {audio: "var(--audio)", ctl: "var(--ctl)", mod: "var(--mod)",
+                 tonic: "var(--tonic)"};
 
 const world = document.getElementById("world");
 const wiresPerm = document.getElementById("wire-perm");
@@ -544,18 +544,20 @@ function layoutPorts(node) {
     p.el.style.left = (p.ox - 3.5) + "px";
     p.el.style.top = (p.oy - 3.5) + "px";
   }
+  // mod + tonic handles ride the sides (subtle); audio/ctl flow top→bottom
+  const side = (p) => p.sig === "mod" || p.sig === "tonic";
   const groups = {
-    top:    node.ports.filter(p => !p.quiet && p.sig !== "mod" && p.dir === "in"),
-    bottom: node.ports.filter(p => !p.quiet && p.sig !== "mod" && p.dir === "out"),
-    left:   node.ports.filter(p => !p.quiet && p.sig === "mod" && p.dir === "in"),
-    right:  node.ports.filter(p => !p.quiet && p.sig === "mod" && p.dir === "out"),
+    top:    node.ports.filter(p => !p.quiet && !side(p) && p.dir === "in"),
+    bottom: node.ports.filter(p => !p.quiet && !side(p) && p.dir === "out"),
+    left:   node.ports.filter(p => !p.quiet && side(p) && p.dir === "in"),
+    right:  node.ports.filter(p => !p.quiet && side(p) && p.dir === "out"),
   };
   for (const [edge, list] of Object.entries(groups)) list.forEach((p, i) => {
     p.edge = edge;
     p.el.classList.remove("e-top", "e-bottom", "e-left", "e-right");
     p.el.classList.add("e-" + edge);
-    p.el.classList.toggle("subtle", p.sig === "mod");
-    const half = p.sig === "mod" ? 4.5 : 6;
+    p.el.classList.toggle("subtle", side(p));
+    const half = side(p) ? 4.5 : 6;
     if (edge === "top" || edge === "bottom") {
       const cw = node.w || CARD_W;
       let x = cw * (i + 1) / (list.length + 1);
@@ -1287,13 +1289,25 @@ function wouldCycle(from, to) {
   return false;
 }
 // what does connecting out-port → in-port MEAN? returns a sender fn or null.
-// audio: real graph rewiring. mod: LFO (re)assignment. ctl: real control-plane
-// wiring (ctl_wire add among keys/arp/deck/voice/drone); voice.out → source
-// stays set_voice_target (the voice always drives exactly one target).
-const CTL_SRC = new Set(["keys", "arp", "deck"]);
-const CTL_DST = new Set(["arp", "deck", "voice", "drone"]);
-// backend node id for a canvas node ("drone" the brain = the m:drone card)
-function ctlId(n) { return n.gid === "m:drone" ? "drone" : n.gid; }
+// audio: real graph rewiring. mod: LFO (re)assignment. tonic: deriver TONIC
+// out → a drone instance's tonic-in (ctl_wire — same vocabulary). ctl: real
+// control-plane wiring (ctl_wire add among keys/arp/deck/voice ids/tonic
+// ids); voice.out → source stays set_voice_target (each voice always drives
+// exactly one target).
+function voiceIds() {
+  return new Set(((state && state.voices) || [{id: "voice"}]).map(v => v.id));
+}
+function tonicIds() {
+  return new Set(((state && state.tonics) || []).map(t => t.id));
+}
+function ctlSrcOk(s) {
+  return s === "keys" || s === "arp" || s === "deck" || tonicIds().has(s);
+}
+function ctlDstOk(d) {
+  return d === "arp" || d === "deck" || voiceIds().has(d) || tonicIds().has(d);
+}
+// backend node id for a canvas node (module cards carry their instance id)
+function ctlId(n) { return n.chainKey || n.gid; }
 function connectAction(out, inn) {
   const po = out.port, pi = inn.port;
   if (!po || !pi || po.sig !== pi.sig || out.node === inn.node) return null;
@@ -1321,12 +1335,20 @@ function connectAction(out, inn) {
       send({type: "lfo_assign", key: inn.node.chainKey, name: pi.param});
     };
   }
+  if (sig === "tonic") {
+    // tonic outs only connect to tonic ins (drone instances)
+    const from = ctlId(out.node), to = ctlId(inn.node);
+    if (!tonicIds().has(from)) return null;
+    if (!(inn.node.mod && inn.node.mod.type === "drone")) return null;
+    return () => send({type: "ctl_wire", action: "add", from, to});
+  }
   // ---- ctl ----
-  if (out.node.gid === "voice" && inn.node.mod && inn.node.mod.kind === "source" &&
+  if (voiceIds().has(out.node.gid) && inn.node.mod && inn.node.mod.kind === "source" &&
       inn.node.mod.params && "freq" in inn.node.mod.params && "gate" in inn.node.mod.params)
-    return () => send({type: "set_voice_target", key: inn.node.chainKey});
+    return () => send({type: "set_voice_target", key: inn.node.chainKey,
+                       voice: out.node.gid});
   const from = ctlId(out.node), to = ctlId(inn.node);
-  if (CTL_SRC.has(from) && CTL_DST.has(to) && from !== to)
+  if (ctlSrcOk(from) && ctlDstOk(to) && from !== to)
     return () => send({type: "ctl_wire", action: "add", from, to});
   return null;
 }
@@ -1354,23 +1376,34 @@ function wireNearPoint(x, y, maxD = 18) {
   }
   return best;
 }
+// predict the instance id the server will assign a fresh spawn of `type`
+// (same deterministic allocation: bare type first, then ".2", ".3", ...)
+function nextId(type) {
+  const taken = new Set(((state && state.chain) || []).map(c => c.key));
+  if (!taken.has(type)) return type;
+  let n = 2;
+  while (taken.has(`${type}.${n}`)) n++;
+  return `${type}.${n}`;
+}
 // splice a FRESHLY SPAWNED module into wire w. spawn_module snapshots the
 // wiring server-side BEFORE the linear append (so nothing else re-routes),
 // then two targeted graph_wire adds re-aim the wire through the newcomer.
+// `key` is a module TYPE; the wires must address the PREDICTED instance id.
 function spliceNewIntoWire(w, key, kind, wx, wy) {
   const A = w.from.node, B = w.to.node;
   const fromKey = audioKeyOut(A);
   const toKey = B.gid === "master" ? "master" : B.chainKey;
   if (!toKey) return;
-  posMem["m:" + key] = [snap(Math.max(MIN_X, wx - CARD_W / 2)),
-                        snap(Math.max(MIN_Y, wy - GRID))];
+  const id = nextId(key);
+  posMem["m:" + id] = [snap(Math.max(MIN_X, wx - CARD_W / 2)),
+                       snap(Math.max(MIN_Y, wy - GRID))];
   send({type: "spawn_module", key});
   if (kind === "effect" && fromKey) {
-    if (fromKey === "drums") send({type: "set_drums", target: key});
-    else send({type: "graph_wire", action: "add", from: fromKey, to: key});
+    if (fromKey === "drums") send({type: "set_drums", target: id});
+    else send({type: "graph_wire", action: "add", from: fromKey, to: id});
   }
   // sources can't take input — they simply fan into the wire's destination
-  send({type: "graph_wire", action: "add", from: key, to: toKey});
+  send({type: "graph_wire", action: "add", from: id, to: toKey});
 }
 // splice an EXISTING card into wire w (drop a card on a highlighted wire).
 // Order is chosen so every intermediate step stays acyclic: first aim the
@@ -1405,7 +1438,7 @@ function spliceExistingIntoWire(w, node) {
 // and remember the monitor rides it; rebuildGraph then draws A→mon→B.
 function spliceMonitorIntoCtl(w, node) {
   const from = ctlId(w.from.node), to = ctlId(w.to.node);
-  if (!CTL_SRC.has(from) || !CTL_DST.has(to)) return;  // half a ride / voice→target
+  if (!ctlSrcOk(from) || !ctlDstOk(to)) return;  // half a ride / voice→target
   const set = monRide.get(node.gid) || new Set();
   set.add(`${from}>${to}`);       // fan-in: ride several wires = union of sources
   monRide.set(node.gid, set);
@@ -1596,49 +1629,40 @@ function buildChainCard(mod) {
     rows.push(row);
     quietRows.push({pname, rowEl: row});
   }
-  // the drone service card carries its scheduler settings as extra chips
-  if (mod.key === "drone" && state.drone) {
-    const d = state.drone;
-    rows.push(rowChip({gid}, "every", {
-      text: d.every,
+  const mtype = mod.type || mod.key;   // LIB/type lookups; key is the instance id
+  const isDrone = mtype === "drone";
+  if (isDrone) {
+    // the drone's ctl-plane presence: a follow toggle for its tonic-in
+    rows.push(rowChip({gid}, "follow", {
+      text: (mod.tonic_follow !== false) ? "on" : "off",
       onClick: (chip) => {
-        const es = d.everies || [];
-        const i = (es.indexOf(chip.textContent) + 1) % es.length;
-        chip.textContent = es[i];
-        send({type: "set_drone", enabled: true, every: es[i], octave: d.octave});
+        const on = chip.textContent !== "on";
+        chip.textContent = on ? "on" : "off";
+        send({type: "drone_follow", id: mod.key, on});
       },
     }));
-    rows.push(rowChip({gid}, "d.octave", {
-      text: String(d.octave),
-      onClick: (chip) => {
-        const o = (parseInt(chip.textContent, 10) + 1) % 5;
-        chip.textContent = String(o);
-        send({type: "set_drone", enabled: true, every: d.every, octave: o});
-      },
-    }));
-    rows.push(rowChip({gid}, "root", {text: d.root || "listening…", static: true}));
   }
   const ports = [];
-  if (mod.service) ports.push(["in", "ctl", "listen"]);
+  if (isDrone) ports.push(["in", "tonic", "tonic"]);  // subtle side handle
+  else if (mod.service) ports.push(["in", "ctl", "listen"]);
   else if (mod.kind === "source") ports.push(["in", "ctl", "play"]);
   else ports.push(["in", "audio", "in"]);
   if (!mod.service) ports.push(["out", "audio", "out"]);
   // the scope tap module IS the oscilloscope: an ordinary effect with real
   // IO handles (spawn/splice/wire it like any other), plus a live trace of
   // its out bus (polled via the existing {"type":"scope"} message)
-  const isScope = mod.key === "scope_tap";
+  const isScope = mtype === "scope_tap";
   const n = addCard({
-    gid, name: mod.name, sub: `${mod.key} · ${mod.family}`, fam: mod.family,
+    gid, name: mod.name, sub: `${mtype} · ${mod.family}`, fam: mod.family,
     seed: mod.kind === "source" && !mod.service,
     vizHTML: isScope ? `<canvas class="vz" data-viz="scope" height="44"></canvas>` : null,
     headCheck: {
       checked: mod.enabled,
-      onChange: (on) => mod.key === "drone"
-        ? send({type: "set_drone", enabled: on})
-        : send({type: "set_enabled", key: mod.key, enabled: on}),
+      onChange: (on) => send({type: "set_enabled", key: mod.key, enabled: on}),
     },
-    kill: mod.service ? null
-      : (nd) => send({type: "edit_chain", action: "remove", key: mod.key}),
+    kill: (nd) => (mod.service && isDrone)
+      ? send({type: "set_drone", enabled: false})   // legacy compat pair
+      : send({type: "edit_chain", action: "remove", key: mod.key}),
     rows, quietRows, ports, mod,
   });
   if (isScope) {
@@ -1711,15 +1735,66 @@ function buildArpCard() {
     ports: [["in", "ctl", "notes"], ["out", "ctl", "notes"]]});
 }
 
-function buildVoiceCard() {
-  const gid = "voice";
+// one card per mono voice (state.voices). The target chip cycles through
+// the playable sources; the target wire re-drags via set_voice_target.
+function playableSources() {
+  return (state.chain || []).filter(c => c.kind === "source" &&
+    c.params && c.params.freq && c.params.gate).map(c => c.key);
+}
+function buildVoiceCard(v) {
+  const gid = v.id;
+  const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
   const rows = [
     rowChip({gid}, "bend", {text: "±2 st", static: true}),
-    rowChip({gid}, "target", {text: state.voice_target || "—", static: true}),
+    rowChip({gid}, "target", {
+      text: v.target || "—",
+      onClick: (chip) => {
+        const srcs = playableSources();
+        if (!srcs.length) return;
+        const key = srcs[(srcs.indexOf(chip.textContent) + 1) % srcs.length];
+        chip.textContent = key;
+        send({type: "set_voice_target", key, voice: gid});
+      },
+    }),
   ];
-  return addCard({gid, name: "Mono Voice", short: "Voice", sub: "last-note priority",
-                  fam: "ctl", rows,
+  return addCard({gid, name: "Mono Voice" + suffix, short: "Voice" + suffix,
+                  sub: "last-note priority", fam: "ctl", rows,
+                  kill: gid === "voice" ? null
+                    : () => send({type: "remove_voice", id: gid}),
                   ports: [["in", "ctl", "notes"], ["out", "ctl", "drive"]]});
+}
+
+// one card per tonic deriver (state.tonics): estimator knobs + root readout,
+// ctl THRU out and the amber TONIC out.
+function buildTonicCard(t) {
+  const gid = t.id;
+  const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
+  const rows = [
+    rowChip({gid}, "every", {
+      text: t.every,
+      onClick: (chip) => {
+        const es = t.everies || [];
+        if (!es.length) return;
+        const v = es[(es.indexOf(chip.textContent) + 1) % es.length];
+        chip.textContent = v;
+        send({type: "set_tonic", id: gid, every: v});
+      },
+    }),
+    rowChip({gid}, "octave", {
+      text: String(t.octave),
+      onClick: (chip) => {
+        const o = (parseInt(chip.textContent, 10) + 1) % 5;
+        chip.textContent = String(o);
+        send({type: "set_tonic", id: gid, octave: o});
+      },
+    }),
+    rowChip({gid}, "root", {text: t.root || "listening…", static: true}),
+  ];
+  return addCard({gid, name: "Tonic Deriver" + suffix, short: "Tonic" + suffix,
+                  sub: "root estimator", fam: "service", rows,
+                  kill: () => send({type: "remove_tonic", id: gid}),
+                  ports: [["in", "ctl", "notes"], ["out", "ctl", "thru"],
+                          ["out", "tonic", "tonic"]]});
 }
 
 function buildDeckCard() {
@@ -1946,7 +2021,7 @@ function rebuildGraph() {
     if (n.gid === "drums") expandMem.drums = n.expanded;
   }
   for (const w of [...wires]) removeWire(w);
-  lineCount.audio = 0; lineCount.ctl = 0; lineCount.mod = 0;
+  lineCount.audio = 0; lineCount.ctl = 0; lineCount.mod = 0; lineCount.tonic = 0;
   for (const n of [...nodes.values()]) if (!n.persistent) removeNode(n);
   for (const k of Object.keys(uiParam))
     if (!k.startsWith("mon:")) delete uiParam[k];
@@ -1955,7 +2030,10 @@ function rebuildGraph() {
   const keys = buildKeysCard();
   const arp = state.arp ? buildArpCard() : null;
   const deck = buildDeckCard();
-  const voice = buildVoiceCard();
+  const voiceList = (state.voices && state.voices.length)
+    ? state.voices : [{id: "voice", target: state.voice_target}];
+  const voiceNodes = voiceList.map(buildVoiceCard);
+  const tonicNodes = (state.tonics || []).map(buildTonicCard);
   const services = [], chainNodes = [];
   for (const mod of state.chain) {
     const n = buildChainCard(mod);
@@ -1981,12 +2059,12 @@ function rebuildGraph() {
       y = n.y + Math.ceil((n.el.offsetHeight || 64) / GRID) * GRID + GRID;
     }
   };
-  placeCol([keys, arp, deck, voice], CTL_X, MIN_Y);
+  placeCol([keys, arp, deck, ...voiceNodes], CTL_X, MIN_Y);
   placeCol([...chainNodes, master], CHAIN_X, MIN_Y);
-  // services sit left of the chain, below the controller cascade
-  const svcY = Math.max(...[keys, arp, deck, voice].filter(Boolean)
+  // derivers + services sit left of the chain, below the controller cascade
+  const svcY = Math.max(...[keys, arp, deck, ...voiceNodes].filter(Boolean)
     .map(n => n.y + (n.el.offsetHeight || 64))) + 2 * GRID;
-  placeCol(services, CTL_X, snap(svcY));
+  placeCol([...tonicNodes, ...services], CTL_X, snap(svcY));
   placeCol([drums], RIGHT_X, MIN_Y);
   // each LFO lands left of its target module
   for (let i = 0; i < lfoNodes.length; i++) {
@@ -2006,15 +2084,20 @@ function rebuildGraph() {
     {node: a, port: port(a, "out", asig)},
     {node: b, port: port(b, "in", bsig, opts && opts.param)}, opts || {});
   // control: SERVER TRUTH — state.ctl_wires defines the note router among
-  // keys/arp/deck/voice/drone. Cut = ctl_wire remove; port drag ctl-out →
-  // ctl-in = ctl_wire add (connectAction). Wire keys→voice directly and the
-  // arp is simply not in that path.
-  const ctlNode = (k) => k === "drone" ? nodes.get("m:drone") : nodes.get(k);
+  // keys/arp/deck/voice ids/tonic ids/drone instance ids. Cut = ctl_wire
+  // remove; port drag ctl-out → ctl-in = ctl_wire add (connectAction). A
+  // wire INTO a drone instance is a TONIC wire (amber, deriver tonic-out →
+  // drone tonic-in); everything else rides the green ctl family.
+  const ctlNode = (k) => nodes.get(k) || nodes.get("m:" + k);
   for (const cw of (state.ctl_wires || [])) {
     const a = ctlNode(cw.from), b = ctlNode(cw.to);
-    if (!a || !b) continue;   // e.g. drone wired but its card not spawned
+    if (!a || !b) continue;   // e.g. a wired node whose card isn't spawned
     const cut = () => send({type: "ctl_wire", action: "remove",
                             from: cw.from, to: cw.to});
+    if (b.mod && (b.mod.type || b.mod.key) === "drone") {
+      W(a, "tonic", b, "tonic", {cut});   // its own color family + handles
+      continue;
+    }
     // a Note Monitor may RIDE this wire (visual splice): draw A→mon→B but
     // keep the backend wire A→B — cutting either half cuts the real wire
     const ride = [...monRide].find(([gid, set]) =>
@@ -2025,11 +2108,14 @@ function rebuildGraph() {
       W(mon, "ctl", b, "ctl", {cut});
     } else W(a, "ctl", b, "ctl", {cut});
   }
-  // voice → its target source stays derived (re-drag = set_voice_target; the
-  // mono voice always drives exactly one target, so this wire is not cuttable)
-  const target = nodes.get("m:" + state.voice_target) ||
-                 chainNodes.find(n => n.mod && n.mod.kind === "source") || null;
-  W(voice, "ctl", target, "ctl");
+  // each voice → its target source stays derived (re-drag/chip-click =
+  // set_voice_target; a mono voice always drives exactly one target, so
+  // this wire is not cuttable)
+  for (let i = 0; i < voiceNodes.length; i++) {
+    const target = nodes.get("m:" + voiceList[i].target) ||
+                   chainNodes.find(n => n.mod && n.mod.kind === "source") || null;
+    W(voiceNodes[i], "ctl", target, "ctl");
+  }
   // audio: SERVER TRUTH — state.wires is derived from the actual bus routing,
   // so multiple cascades / fan-in render exactly as they sound. Every audio
   // wire cuts with graph_wire remove; master's in port takes any fan-in.
@@ -2092,12 +2178,14 @@ function renderPalette() {
   const h3 = (t) => {
     const h = document.createElement("h3"); h.textContent = t; pal.appendChild(h);
   };
+  h3("voices");
+  btn("Mono Voice", FAMILY.ctl, () => send({type: "spawn_voice"}));
   h3("control");
   btn("LFO ∿", FAMILY.service, () => buildArmedLfo());
-  if (state && state.drone && !state.drone.enabled)
-    btn("Drone", FAMILY.service, () => send({type: "set_drone", enabled: true}));
-  const inChain = new Set(state ? state.chain.map(c => c.key) : []);
-  const avail = (state && state.available || []).filter(a => !inChain.has(a.key));
+  btn("Tonic Deriver", "#d9a521", () => send({type: "spawn_tonic"}));
+  // the palette NEVER removes placed modules: any entry can be spawned
+  // again — every click/drag makes a fresh instance ("lowpass.2", ...)
+  const avail = (state && state.available) || [];
   for (const [label, kind] of [["sources", "source"], ["effects", "effect"]]) {
     h3(label);
     for (const a of avail.filter(x => x.kind === kind)) {
@@ -2169,8 +2257,8 @@ function startPaletteDrag(e, btn, a) {
     } else if (pd.hover) {
       spliceNewIntoWire(pd.hover, a.key, a.kind, wx, wy); // drop on wire → splice
     } else if (overBoard(ev)) {
-      posMem["m:" + a.key] = [snap(Math.max(MIN_X, wx - CARD_W / 2)),
-                              snap(Math.max(MIN_Y, wy))];
+      posMem["m:" + nextId(a.key)] = [snap(Math.max(MIN_X, wx - CARD_W / 2)),
+                                      snap(Math.max(MIN_Y, wy))];
       send({type: "spawn_module", key: a.key});           // empty drop → unconnected here
     }
   };
@@ -2272,9 +2360,12 @@ function onMidi(e) {
       state.looper = {...state.looper, ...rest};
       updateDeckCard(nodes.get("deck"));
     }
-  } else if (e.kind === "drone") {
-    const id = "m:drone.root";
+  } else if (e.kind === "tonic_out") {
+    // a deriver's root changed — update its card's readout in place
+    const id = `${e.id}.root`;
     if (uiParam[id]) uiParam[id](0, e.root);
+    const t = (state && state.tonics || []).find(x => x.id === e.id);
+    if (t) t.root = e.root;
   }
 }
 
@@ -2504,6 +2595,11 @@ function drawWaveViz(n, ctx, W, H, style) {
 // rolling REAL source taps on a beat grid, colored by src. UNWIRED = GLOBAL
 // (all taps); riding ctl wires = LOCAL (only its upstream sources).
 const TAP_COLORS = {keys: "#1baf7a", arp: "#e8c832", deck: "#e34948"};
+function tapColor(src, style) {
+  if (TAP_COLORS[src]) return TAP_COLORS[src];
+  if (String(src).startsWith("tonic")) return "#d9a521";  // deriver thru taps
+  return style.getPropertyValue("--ctl");
+}
 function drawNotesViz(n, ctx, W, H, now, style) {
   const srcs = monSources(n.gid);   // null = global
   updateMonSub(n, srcs ? "local: " + [...srcs].sort().join("+") : "global");
@@ -2530,7 +2626,7 @@ function drawNotesViz(n, ctx, W, H, now, style) {
     const x1 = ev.t1 === null ? W : W - (now - ev.t1) * pxPerMs;
     if (x1 <= 0) continue;
     const y = H - ((Math.min(hi, Math.max(lo, ev.note)) - lo) / (hi - lo)) * (H - 6) - 3;
-    ctx.fillStyle = TAP_COLORS[ev.src] || style.getPropertyValue("--ctl");
+    ctx.fillStyle = tapColor(ev.src, style);
     ctx.fillRect(Math.max(0, x0), y - 2, Math.max(2, x1 - x0), 4);
   }
 }

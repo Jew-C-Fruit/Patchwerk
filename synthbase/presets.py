@@ -27,11 +27,15 @@ def list_presets() -> list[str]:
 
 
 def snapshot(app) -> dict:
-    """Capture the app's full performable state. Call under app._lock."""
+    """Capture the app's full performable state. Call under app._lock.
+
+    v2 (v5 code): modules are keyed by INSTANCE id and carry their module
+    "type"; loading a pre-v2 preset (no type) treats the key as the type."""
     modules = {}
     if app.rack:
         for inst in app.rack.instances:
             modules[inst.key] = {
+                "type": inst.type,
                 "settings": {
                     k: v for k, v in inst.settings.items()
                     if k in inst.module.params
@@ -40,7 +44,7 @@ def snapshot(app) -> dict:
                 "service": inst.service,
             }
     data = {
-        "version": 1,
+        "version": 2,
         "patch": app.patch_name,
         "modules": modules,
         "volume": app.master.volume if app.master else 0.8,
@@ -52,8 +56,11 @@ def snapshot(app) -> dict:
         },
         "arp": {k: v for k, v in (app.arp.settings() if app.arp else {}).items()
                 if k not in ("patterns", "divisions")},
-        "drone": {k: v for k, v in app.drone.settings().items()
+        "drone": {k: v for k, v in app._legacy_drone_settings().items()
                   if k not in ("everies", "root")},
+        "tonics": [{k: v for k, v in d.settings().items()
+                    if k in ("id", "every", "octave")}
+                   for d in app.tonics.values()],
     }
     if getattr(app, "drums", None):
         data["drums"] = app.drums.snapshot()
@@ -92,15 +99,22 @@ def load_preset(app, name: str) -> None:
         app.set_transport(bpm=t.get("bpm"), beats_per_bar=t.get("beats_per_bar"),
                           click=t.get("click"), accent=t.get("accent"))
 
-        # 3. Drone brain (enable state spawns/despawns its instance)
-        if app.drone and "drone" in data:
-            app.drone.configure(**data["drone"])
+        # 3. Tonic derivers, then the legacy drone pair (enable state
+        #    spawns/despawns its compat instance)
+        for t in data.get("tonics", []):
+            tid = t.get("id") or "tonic"
+            app.spawn_tonic(want_id=tid)
+            app.set_tonic(tid, every=t.get("every"), octave=t.get("octave"))
+        if "drone" in data:
+            app.set_drone(**data["drone"])
 
         # 4. Arp
         if app.arp and "arp" in data:
             app.arp.configure(**data["arp"])
 
-        # 5. Module params + enabled states
+        # 5. Module params + enabled states. Preset keys are instance ids
+        #    (old presets: type keys — rack.find falls back to the first
+        #    instance of that type).
         for key, mod_state in data.get("modules", {}).items():
             try:
                 inst = app.rack.find(key)
