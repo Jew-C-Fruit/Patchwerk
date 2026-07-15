@@ -1,4 +1,4 @@
-# SuperSynth
+# Patchwerk
 
 A synthesizer base designed for **vibecoding**: modules are small Python
 files, hot-reloaded into a running audio engine; the signal path is a live
@@ -8,6 +8,9 @@ MIDI/sensors/GUI all land in the same control layer.
 Engine: [SuperCollider](https://supercollider.github.io/)'s `scsynth` server
 (a separate, crash-isolated process). Control plane: Python via
 [supriya](https://github.com/supriya-project/supriya).
+
+Formerly developed under the name SuperSynth — if you find old links or
+clones under that name, they're the same project.
 
 ## What it does today
 
@@ -65,11 +68,25 @@ old version playing.
 | `synthbase/{arp,looper,drums,drone,keyshift,lfo,transport}.py` | The players: arpeggiator, loop deck, drum machine, tonic deriver, key shifter, LFOs, clock |
 | `synthbase/watcher.py` | Hot reload of module files into the running rack |
 | `tests/` | Engine-free suites: `smoke`, `test_graph`, `test_looper`, `gui_check*` (Playwright) |
-| `CLAUDE.md` | House rules + module template for LLM-driven development |
+| `CLAUDE.md` | House rules + module template for LLM-driven development (also see `AGENTS.md`) |
 | `docs/HISTORY.md` | The build story, version by version — bugs and all |
+| `docs/ARCHITECTURE.md` | How the pieces fit together, at a higher level than this table |
+| `docs/TROUBLESHOOTING.md` | Known sharp edges, symptom-indexed |
+| `CONTRIBUTING.md` | How to add a module or fix something, and what CI checks |
 
 ## Roadmap
 
 Sensor input over serial (same binding layer as MIDI), polyphony as a
 voice-allocation wrapper, more control-modifier nodes in the key-shifter
 mold (chord memory, strummers, humanizers).
+
+## Contributing
+
+Want to add a module, fix a bug, or just poke around? See
+[CONTRIBUTING.md](CONTRIBUTING.md). New modules are the easiest way in —
+copy an existing file in `modules/`, follow the contract in `CLAUDE.md`, and
+open a PR.
+
+## License
+
+[MIT](LICENSE).

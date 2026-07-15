@@ -1,5 +1,5 @@
 #!/bin/bash
-# Relaunch SuperSynth: cleanly stop any old instance, start the GUI.
+# Relaunch Patchwerk: cleanly stop any old instance, start the GUI.
 #   ./run.sh                    -> pad_space patch
 #   ./run.sh demo               -> named patch
 #   ./run.sh demo --no-browser  -> extra flags pass through
@@ -7,7 +7,7 @@
 # Logs: /tmp/synth_gui.log (always; unbuffered).
 cd "$(dirname "$0")"
 
-PIDFILE=/tmp/supersynth.pid
+PIDFILE=/tmp/patchwerk.pid
 # Stop the previous instance by pid (no pkill pattern races), then stragglers.
 if [ -f "$PIDFILE" ]; then
   OLD=$(cat "$PIDFILE" 2>/dev/null)
@@ -29,7 +29,7 @@ NEW=$!
 echo $NEW > "$PIDFILE"
 sleep 5
 if curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/ | grep -q 200; then
-  echo "SuperSynth running (pid $NEW) — http://127.0.0.1:8765 — log: /tmp/synth_gui.log"
+  echo "Patchwerk running (pid $NEW) — http://127.0.0.1:8765 — log: /tmp/synth_gui.log"
 else
   echo "STARTUP PROBLEM — tail of /tmp/synth_gui.log:"
   tail -5 /tmp/synth_gui.log

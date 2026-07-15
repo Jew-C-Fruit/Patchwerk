@@ -4,6 +4,12 @@ This repo is a synth base on the SuperCollider server (scsynth), controlled
 entirely from Python via **supriya**. The audio engine is a separate process:
 broken Python can never glitch running audio.
 
+Patchwerk's engine package is called `synthbase` — a name from before the
+project's own rename to Patchwerk. It stuck; renaming a working import path
+across every module for cosmetic reasons isn't worth the risk (see Don'ts).
+This is the canonical AI-guidance file; `AGENTS.md` at the repo root just
+points here so tools that look for that name find it too.
+
 ## Architecture in one breath
 
 `modules/*.py` (DSP recipes) → loaded by `synthbase/module.py` → instantiated
@@ -147,10 +153,16 @@ There's no audio in CI/cloud contexts. Before claiming anything works, run:
   progression, tap-closure and snip-heal invariants (no server needed).
 - `python3 tests/test_looper.py` — deck record/replay/overdub timing and
   take pairing.
-- `python3 tests/gui_check*.py` — headless Playwright checks of flex.html
+- `python3 tests/gui_check8.py` — headless Playwright checks of flex.html
   against mock state/events (cards, wires, monitors, splices, key shifter,
-  closure regressions). Write NEW checks failing-first against the broken
-  behavior.
+  closure regressions). This is the current one; `gui_check.py`/`gui_check6.py`/
+  `gui_check7.py` are earlier snapshots kept for reference, not upkeep. Write
+  NEW checks failing-first against the broken behavior.
+
+`test_mixed_sources.py`, `diag_*.py`, `hear_check.py`, and `probe_ws.py`
+talk to a **live** server over websocket instead of running headless — they
+need `python -m synthbase gui` actually running with real audio, so treat
+them as Mac-only manual checks, not something CI or a cloud session can run.
 
 On the Mac, `python -m synthbase test` is the real proof.
 
@@ -171,9 +183,16 @@ On the Mac, `python -m synthbase test` is the real proof.
 - GUI sends during a websocket reconnect gap must queue, not drop (note-offs
   especially); macOS swallows letter keyups while ⌘ is held.
 
+`docs/TROUBLESHOOTING.md` has the complementary, symptom-indexed list —
+runtime/hardware gotchas (sample rate, Bluetooth, MIDI controllers) that
+aren't code-facing enough to belong here.
+
 ## Don'ts
 
 - Don't use sclang or .scd files — Python only, we talk straight to scsynth.
 - Don't add heavyweight wrapper abstractions; modules use supriya UGens
   directly. The base stays thin.
 - Don't block in MIDI callbacks (they run on the port's thread).
+- Don't rename the `synthbase` package or its `python -m synthbase` entry
+  point as a side effect of an unrelated change — it's intentionally stable
+  even though the product name around it is now Patchwerk.

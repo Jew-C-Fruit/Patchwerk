@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  headless-tests:
+    name: Engine + graph tests (no audio hardware)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Module / synthdef / patch smoke test
+        run: python tests/smoke.py
+
+      - name: Graph + control-plane tests
+        run: python tests/test_graph.py
+
+      - name: Loop deck tests
+        run: python tests/test_looper.py
+
+  gui-checks:
+    name: GUI checks (headless Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # tests/gui_check8.py locates Chromium via a hardcoded path glob
+      # (/opt/pw-browsers/chromium-*/...), matching the dev sandbox this
+      # repo has been built in. Install Playwright's browser to that same
+      # location here so the existing test script finds it unmodified.
+      # GitHub-hosted runners grant the default user passwordless sudo,
+      # which we need since /opt isn't writable by default.
+      - name: Prepare browser install location
+        run: |
+          sudo mkdir -p /opt/pw-browsers
+          sudo chown "$(whoami)" /opt/pw-browsers
+
+      - name: Install Playwright + Chromium
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: /opt/pw-browsers
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Run GUI checks
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: /opt/pw-browsers
+        run: python tests/gui_check8.py

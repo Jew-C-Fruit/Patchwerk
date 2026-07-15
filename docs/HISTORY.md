@@ -1,4 +1,4 @@
-# SuperSynth — Build History
+# Patchwerk — Build History
 
 A version-by-version account of how this instrument came to be: the thinking
 behind each step, what changed, how the sound and interaction changed, and —
@@ -8,11 +8,11 @@ Every version below is a git tag. To run any legacy version without touching
 your working copy:
 
 ```bash
-git worktree add /tmp/supersynth-v0.2 v0.2-gui
-cd /tmp/supersynth-v0.2
+git worktree add /tmp/patchwerk-v0.2 v0.2-gui
+cd /tmp/patchwerk-v0.2
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m synthbase gui demo        # (older versions: `play patches/demo.py`)
-# when done:  git worktree remove /tmp/supersynth-v0.2
+# when done:  git worktree remove /tmp/patchwerk-v0.2
 ```
 
 ---

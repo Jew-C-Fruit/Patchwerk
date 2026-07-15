@@ -2,3 +2,14 @@
 __pycache__/
 *.pyc
 .DS_Store
+
+# secrets, if any ever show up
+.env
+
+# editor
+.vscode/
+.idea/
+*.swp
+
+# build/deploy artifacts
+*.zip
