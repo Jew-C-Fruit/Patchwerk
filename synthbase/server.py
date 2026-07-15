@@ -55,8 +55,9 @@ class GuiServer:
     # -- http ----------------------------------------------------------------
 
     async def _index(self, request: web.Request) -> web.FileResponse:
+        # flex patch-canvas is the front door; classic gui stays at /legacy
         return web.FileResponse(
-            GUI_DIR / "index.html", headers={"Cache-Control": "no-store"},
+            GUI_DIR / "flex.html", headers={"Cache-Control": "no-store"},
         )
 
     async def _legacy(self, request: web.Request) -> web.FileResponse:
