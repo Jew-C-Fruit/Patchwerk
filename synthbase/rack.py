@@ -55,6 +55,7 @@ class Rack:
         self.mapped: set[tuple[str, str]] = set()   # (key, param) driven by LFOs
         self.on_node_replaced = None                 # callback(key) after respawn/re-enable
         self._tail_router = None                     # bus->hardware bypass when the chain ends on a summed source
+        self._null_bus = None                        # persistent silent bus: "disconnected" outputs park here
 
     # -- building ------------------------------------------------------------
 
@@ -144,6 +145,12 @@ class Rack:
             )
 
     def teardown(self) -> None:
+        if self._null_bus is not None:
+            try:
+                self._null_bus.free()
+            except Exception:  # noqa: BLE001
+                pass
+            self._null_bus = None
         if self._tail_router is not None:
             try:
                 self._tail_router.free()
@@ -247,6 +254,125 @@ class Rack:
         if enabled and self.on_node_replaced:
             try:
                 self.on_node_replaced(key)
+            except Exception:  # noqa: BLE001
+                pass
+
+    # -- graph overlay: live audio rewiring WITHOUT a rebuild ---------------------
+    #
+    # Every effect already owns a unique stereo input bus (its predecessor's
+    # bus_group), so rewiring is just: point the source node's `out` at the
+    # destination's in-bus and make sure the source executes BEFORE the
+    # destination on the server (supriya: node.move(target, ADD_BEFORE) →
+    # /n_before). "master" means hardware bus 0. Disconnecting parks the
+    # output on a persistent silent bus.
+
+    def null_bus(self) -> int:
+        """Lazy per-rack silent stereo bus for disconnected outputs."""
+        if self._null_bus is None:
+            assert self.engine.server is not None
+            self._null_bus = self.engine.server.add_bus_group(
+                calculation_rate=CalculationRate.AUDIO, count=2
+            )
+        return int(self._null_bus)
+
+    def _dst_bus(self, dst_key: str) -> int:
+        """Bus an audio wire INTO dst_key lands on. Effects: their in_bus.
+        Sources: their own out bus (fan-in by summing). Master: hardware 0."""
+        if dst_key == "master":
+            return 0
+        dst = self.find(dst_key)
+        if dst.module.kind == "effect":
+            return int(dst.settings["in_bus"])
+        return int(dst.settings.get("out", 0))
+
+    def audio_rewire(self, src_key: str, dst_key: str) -> None:
+        """Point src's audio out at dst's input bus, live, and reorder the
+        src node before dst so the signal arrives within the same block."""
+        src = self.find(src_key)
+        bus = self._dst_bus(dst_key)
+        src.settings["out"] = bus
+        if src.node is None:
+            return
+        src.node.set(out=bus)
+        try:
+            if dst_key == "master":
+                src.node.move(self.engine.root_group, AddAction.ADD_TO_TAIL)
+            else:
+                dst = self.find(dst_key)
+                if dst.node is not None:
+                    src.node.move(dst.node, AddAction.ADD_BEFORE)
+        except Exception:  # noqa: BLE001 — a failed reorder still leaves audio flowing
+            pass
+
+    def audio_disconnect(self, src_key: str) -> None:
+        """Silence src's output by parking it on the rack's null bus."""
+        src = self.find(src_key)
+        bus = self.null_bus()
+        src.settings["out"] = bus
+        if src.node is not None:
+            src.node.set(out=bus)
+
+    def audio_wires(self) -> list[dict]:
+        """Derive current audio wiring from settings: map each effect's
+        in_bus back to a key; bus 0 (or a tail-routed bus) is master."""
+        in_map = {}
+        for inst in self.instances:
+            if inst.service or inst.module.kind != "effect":
+                continue
+            if "in_bus" in inst.settings:
+                in_map[int(inst.settings["in_bus"])] = inst.key
+        null = int(self._null_bus) if self._null_bus is not None else None
+        out = []
+        for inst in self.instances:
+            if inst.service:
+                continue
+            bus = int(inst.settings.get("out", 0))
+            if null is not None and bus == null:
+                continue  # disconnected
+            if bus in in_map:
+                out.append({"from": inst.key, "to": in_map[bus]})
+            else:
+                # bus 0 = hardware; an unmapped bus is the all-source chain's
+                # summed bus, which the tail router forwards to hardware
+                out.append({"from": inst.key, "to": "master"})
+        return out
+
+    def reorder_for_wires(self, wires: list[dict]) -> None:
+        """Globally order nodes so every wire's src executes before its dst:
+        topological sort, then move each node to the root group's tail in
+        order (sequential ADD_TO_TAIL ⇒ final order = topo order). Services
+        (drone/LFO writers at the head) are left alone."""
+        keys = [i.key for i in self.instances if not i.service]
+        kset = set(keys)
+        indeg = {k: 0 for k in keys}
+        adj = {k: [] for k in keys}
+        for w in wires:
+            a, b = w.get("from"), w.get("to")
+            if a in kset and b in kset:
+                adj[a].append(b)
+                indeg[b] += 1
+        ready = [k for k in keys if indeg[k] == 0]
+        order = []
+        while ready:
+            k = ready.pop(0)
+            order.append(k)
+            for b in adj[k]:
+                indeg[b] -= 1
+                if indeg[b] == 0:
+                    ready.append(b)
+        if len(order) != len(keys):
+            return  # cycle in the wire list — refuse to reorder
+        for k in order:
+            inst = self.find(k)
+            if inst.node is None:
+                continue
+            try:
+                inst.node.move(self.engine.root_group, AddAction.ADD_TO_TAIL)
+            except Exception:  # noqa: BLE001
+                pass
+        if self._tail_router is not None:
+            try:
+                self._tail_router.move(self.engine.root_group, AddAction.ADD_TO_TAIL)
             except Exception:  # noqa: BLE001
                 pass
 

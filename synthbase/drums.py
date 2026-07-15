@@ -61,6 +61,8 @@ def _clap(amp=0.35, out=0):
 
 _DEFS = {"kick": _kick, "snare": _snare, "hat": _hat, "clap": _clap}
 
+_UNSET = object()  # configure() sentinel: "target not mentioned" ≠ "target None"
+
 DEFAULT_PATTERNS = {
     "kick": [1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
     "snare": [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
@@ -75,16 +77,22 @@ class DrumMachine:
         self.enabled = False
         self.patterns = {lane: list(steps) for lane, steps in DEFAULT_PATTERNS.items()}
         self.levels = {"kick": 0.8, "snare": 0.7, "hat": 0.6, "clap": 0.7}
-        self.to_chain = False  # route hits into the FX chain head bus
+        # audio out target: "master" (hardware), a module key (hits land on
+        # that module's input bus), or None (disconnected — hits go nowhere).
+        self.target: str | None = "master"
         self._registered = False
         self._quit = threading.Event()
         self._thread: threading.Thread | None = None
 
     # -- config / persistence ----------------------------------------------------
 
-    def configure(self, enabled=None, patterns=None, levels=None, to_chain=None) -> None:
-        if to_chain is not None:
-            self.to_chain = bool(to_chain)
+    def configure(self, enabled=None, patterns=None, levels=None, to_chain=None,
+                  target=_UNSET) -> None:
+        if target is not _UNSET:
+            self.target = target if target in (None, "master") else str(target)
+        elif to_chain is not None:
+            # legacy switch: True → the chain's head module, False → master
+            self.target = (self._chain_head() or "master") if to_chain else "master"
         if patterns is not None:
             for lane in LANES:
                 if lane in patterns:
@@ -103,16 +111,31 @@ class DrumMachine:
             elif self.enabled and not enabled:
                 self.enabled = False
 
+    def _chain_head(self) -> str | None:
+        rack = getattr(self.app, "rack", None)
+        if rack:
+            for inst in rack.instances:
+                if not inst.service:
+                    return inst.key
+        return None
+
     def snapshot(self) -> dict:
         return {"enabled": self.enabled, "patterns": self.patterns,
-                "levels": self.levels, "to_chain": self.to_chain}
+                "levels": self.levels, "target": self.target}
 
     def restore(self, data: dict) -> None:
-        self.configure(enabled=data.get("enabled"), patterns=data.get("patterns"),
-                       levels=data.get("levels"), to_chain=data.get("to_chain"))
+        kw = dict(enabled=data.get("enabled"), patterns=data.get("patterns"),
+                  levels=data.get("levels"))
+        if "target" in data:
+            kw["target"] = data["target"]
+        elif "to_chain" in data:  # presets saved before targets existed
+            kw["to_chain"] = data["to_chain"]
+        self.configure(**kw)
 
     def settings(self) -> dict:
-        return {**self.snapshot(), "lanes": list(LANES), "steps": STEPS}
+        # to_chain kept (derived) so the legacy GUI's chip still works
+        return {**self.snapshot(), "to_chain": self.target not in (None, "master"),
+                "lanes": list(LANES), "steps": STEPS}
 
     def shutdown(self) -> None:
         self._quit.set()
@@ -139,13 +162,22 @@ class DrumMachine:
 
     def _fire(self, lane: str) -> None:
         try:
+            if self.target is None:
+                return  # output disconnected in the patch graph
             self._ensure_registered()
             out = 0
             action = AddAction.ADD_TO_TAIL
-            if self.to_chain and self.app.rack and self.app.rack.instances:
-                # write into the chain head bus (like the drone): FX apply
-                out = self.app.rack.instances[0].settings.get("out", 0)
-                action = AddAction.ADD_TO_HEAD
+            if self.target != "master" and self.app.rack is not None:
+                try:
+                    # resolve the target's input bus at spawn time: effects
+                    # take hits on their in_bus, sources sum on their out bus
+                    inst = self.app.rack.find(self.target)
+                    out = (int(inst.settings["in_bus"])
+                           if inst.module.kind == "effect"
+                           else int(inst.settings.get("out", 0)))
+                    action = AddAction.ADD_TO_HEAD
+                except KeyError:
+                    pass  # stale target after a patch switch → master
             self.app.engine.root_group.add_synth(
                 _DEFS[lane], add_action=action, out=out,
                 amp=self.levels[lane] * {"kick": 0.55, "snare": 0.42,

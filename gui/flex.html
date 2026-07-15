@@ -157,6 +157,16 @@
     background: color-mix(in srgb, var(--plane) 85%, transparent);
     border: 1px solid var(--hairline); border-radius: 8px; padding: 4px 12px;
     backdrop-filter: blur(6px); white-space: nowrap; }
+  #toast { position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
+    z-index: 60; font-size: 11px; color: var(--ink-1); background: #2c2c2a;
+    border: 1px solid var(--border); border-radius: 8px; padding: 5px 14px;
+    opacity: 0; transition: opacity 200ms; pointer-events: none; white-space: nowrap; }
+  #toast.show { opacity: 1; }
+  #ghost-card { position: fixed; z-index: 70; width: 170px; pointer-events: none;
+    background: var(--card); border: 1px solid var(--ink-2); border-radius: 9px;
+    opacity: 0.85; box-shadow: 0 10px 26px rgba(0,0,0,0.6); padding: 8px 10px;
+    display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 640; }
+  #ghost-card i { width: 4px; height: 22px; border-radius: 3px; flex: none; }
 </style>
 </head>
 <body>
@@ -202,7 +212,8 @@
   <svg id="wiretop"></svg>
 </div></div>
 <div class="hint">keys <b>A–;</b> play · <b>Z/X</b> octave · <b>caps</b> sustain · <b>space</b> loop-rec
-  · drag an LFO's ∿ port onto a param handle to assign · click a violet wire to cut</div>
+  · click any wire to cut · drag port→port to wire · drag from the palette to splice</div>
+<div id="toast"></div>
 
 <script>
 "use strict";
@@ -682,14 +693,49 @@ function routeWire(w, grid) {
   const tc = [Math.round(t[0] / CELL), Math.round(t[1] / CELL)];
   let pts = astar(sc[0], sc[1], tc[0], tc[1], grid);
   if (!pts && grid && grid !== obst) pts = astar(sc[0], sc[1], tc[0], tc[1], obst);
-  if (!pts)
-    pts = [[sc[0] * CELL, sc[1] * CELL], [tc[0] * CELL, sc[1] * CELL], [tc[0] * CELL, tc[1] * CELL]];
+  if (!pts) pts = fallbackRoute(sc, tc);
   const j1 = ny1 !== 0 ? [pts[0][0], s[1]] : [s[0], pts[0][1]];
   const j2 = ny2 !== 0 ? [pts[pts.length - 1][0], t[1]] : [t[0], pts[pts.length - 1][1]];
   pts = dedupe([[x1, y1], s, j1, ...pts, j2, t, [x2, y2]]);
   pts = alignPortRun(dejag(pts));
   w.pts = pts;
   w.o1 = o1; w.o2 = o2;
+}
+// sealed-route fallback: NEVER draw a blind L through cards. Try both Ls,
+// then detour via the nearest free column/row (checked against `core`, the
+// actual card bodies), so even desperation routes circumscribe every module.
+function segClearCore(x0, y0, x1, y1) {
+  if (x0 === x1) {
+    for (let y = Math.min(y0, y1); y <= Math.max(y0, y1); y++)
+      if (core[y * COLS + x0]) return false;
+  } else {
+    for (let x = Math.min(x0, x1); x <= Math.max(x0, x1); x++)
+      if (core[y0 * COLS + x]) return false;
+  }
+  return true;
+}
+function fallbackRoute(sc, tc) {
+  const [sx, sy] = sc, [tx, ty] = tc;
+  const P = (cells) => cells.map(([x, y]) => [x * CELL, y * CELL]);
+  if (segClearCore(sx, sy, tx, sy) && segClearCore(tx, sy, tx, ty))
+    return P([[sx, sy], [tx, sy], [tx, ty]]);
+  if (segClearCore(sx, sy, sx, ty) && segClearCore(sx, ty, tx, ty))
+    return P([[sx, sy], [sx, ty], [tx, ty]]);
+  const midX = Math.round((sx + tx) / 2), midY = Math.round((sy + ty) / 2);
+  for (let r = 0; r < COLS; r++) for (const x of (r ? [midX - r, midX + r] : [midX])) {
+    if (x < 0 || x >= COLS) continue;
+    if (segClearCore(sx, sy, x, sy) && segClearCore(x, sy, x, ty) &&
+        segClearCore(x, ty, tx, ty))
+      return P([[sx, sy], [x, sy], [x, ty], [tx, ty]]);
+  }
+  for (let r = 0; r < ROWS; r++) for (const y of (r ? [midY - r, midY + r] : [midY])) {
+    if (y < 0 || y >= ROWS) continue;
+    if (segClearCore(sx, sy, sx, y) && segClearCore(sx, y, tx, y) &&
+        segClearCore(tx, y, tx, ty))
+      return P([[sx, sy], [sx, y], [tx, y], [tx, ty]]);
+  }
+  // truly sealed (endpoint buried under an overlapping card): last-resort L
+  return P([[sx, sy], [tx, sy], [tx, ty]]);
 }
 function alignPortRun(pts) {
   const fix = (p) => {
@@ -807,12 +853,24 @@ function drawWire(w) {
 function labelGeom(w) {
   const dst = w.to.port.quiet
     ? `${w.to.node.short}.${w.to.port.param}` : w.to.node.short;
-  const txt = `${w.from.node.short} → ${dst}`;
-  return {txt, wpx: txt.length * 4.9 + 12};
+  // src/dst kept separate so applyLabel can compose the text to READ WITH the
+  // data flow of the segment it lands on (pts are ordered source → dest)
+  return {src: w.from.node.short, dst, wpx: (w.from.node.short + dst).length * 4.9 + 27};
 }
-function applyLabel(w, mx, my, horiz, txt, wpx) {
+function applyLabel(w, mx, my, dx, dy, src, dst, wpx) {
+  // (dx, dy) = the carrying segment's flow direction. Horizontal right-flow
+  // reads "Src → Dst"; left-flow flips to "Dst ← Src" so the arrow still
+  // points along the flow. Vertical rotates -90 for upward flow, +90 for
+  // downward, so the text is read in the direction the signal travels.
+  const horiz = dy === 0;
+  let transform = "", txt = `${src} → ${dst}`;
+  if (horiz) {
+    if (dx < 0) txt = `${dst} ← ${src}`;
+  } else {
+    transform = `rotate(${dy < 0 ? -90 : 90} ${mx} ${my})`;
+  }
   w.labelG.style.display = "";
-  w.labelG.setAttribute("transform", horiz ? "" : `rotate(-90 ${mx} ${my})`);
+  w.labelG.setAttribute("transform", transform);
   w.labelT.textContent = txt;
   w.labelR.setAttribute("x", mx - wpx / 2); w.labelR.setAttribute("width", wpx);
   w.labelR.setAttribute("y", my - 7);
@@ -838,7 +896,7 @@ function labelPass() {
                         a[1] < b[3] + PAD && b[1] < a[3] + PAD;
   for (const w of wires) {
     const pts = w.dpts || w.pts;
-    const {txt, wpx} = labelGeom(w);
+    const {src, dst, wpx} = labelGeom(w);
     const segs = [];
     for (let i = 0; i < pts.length - 1; i++)
       segs.push({i, len: Math.abs(pts[i + 1][0] - pts[i][0]) + Math.abs(pts[i + 1][1] - pts[i][1])});
@@ -848,13 +906,15 @@ function labelPass() {
       for (const sg of segs.slice(0, 4)) {
         if (sg.len < wpx + 14) break;
         const a = pts[sg.i], b = pts[sg.i + 1], horiz = a[1] === b[1];
+        // pts run source → dest, so the segment direction IS the flow direction
+        const dx = Math.sign(b[0] - a[0]), dy = Math.sign(b[1] - a[1]);
         for (const f of [0.5, 0.35, 0.65, 0.22, 0.78]) {
           const mx = a[0] + (b[0] - a[0]) * f, my = a[1] + (b[1] - a[1]) * f;
           const box = horiz ? [mx - wpx / 2, my - 8, mx + wpx / 2, my + 8]
                             : [mx - 8, my - wpx / 2, mx + 8, my + wpx / 2];
           if (placed.some(r => hit(r, box))) continue;
           if (strict && boxHitsWires(box, w)) continue;
-          applyLabel(w, mx, my, horiz, txt, wpx);
+          applyLabel(w, mx, my, dx, dy, src, dst, wpx);
           w.labelBox = box; placed.push(box);
           break outer;
         }
@@ -937,8 +997,10 @@ function dedupe(pts) {
 }
 
 // ---------- wires ----------
-// opts.cut: a callback makes the wire clickable (v1: only LFO wires — chain and
-// control wiring is server truth, cutting them here would just lie)
+// opts.cut: the click-to-cut callback. In v2 EVERY wire gets one: audio cuts
+// are real (graph_wire remove / set_drums target null), mod cuts unassign the
+// LFO, keys→arp disables the arp, and ctl cuts with no backend meaning are
+// applied visually with an honest "approximated" toast (see rebuildGraph).
 function addWire(from, to, opts = {}) {
   if (!from.port || !to.port) return null;
   if (wires.some(w => w.from.port === from.port && w.to.port === to.port)) return null;
@@ -1115,9 +1177,9 @@ function makeSpacePreview(node) {
   }
   drag.shifted = newShift;
 }
-// splice highlight is kept from the prototype but the ACTION is off in v1:
-// dropping a card on a chain wire can't reorder the server chain meaningfully
-// (edit_chain add only appends; move is index-relative) — so it only telegraphs.
+// splice targeting: while a card is dragged over an audio wire, that wire
+// highlights; dropping performs a LIVE splice via graph_wire (see
+// spliceExistingIntoWire — v1 only telegraphed, v2 acts).
 function updateSpliceTarget(node) {
   if (!drag) return;
   const R = cardRect(node);
@@ -1188,7 +1250,146 @@ function enforceSeparation(node) {
   node.x = ox; node.y = oy; place(node);
 }
 
-// ---------- card drag + LFO patching gesture ----------
+// ---------- rewiring: cut / connect semantics ----------
+const cutMem = new Set();    // ctl wires cut VISUALLY (no backend op) — survive rebuilds
+const extraCtl = new Set();  // user-drawn ctl wires with no backend meaning (approximated)
+let toastTimer = 0;
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 1800);
+}
+function audioKeyOut(n) { return n.gid === "drums" ? "drums" : (n.chainKey || null); }
+function wouldCycle(from, to) {
+  // audio graph is one-out-per-source, so following the single outgoing
+  // wire from `to` either reaches master or reveals a loop through `from`
+  const adj = new Map(((state && state.wires) || []).map(v => [v.from, v.to]));
+  let cur = to, hops = 0;
+  while (cur && cur !== "master" && hops++ < 128) {
+    if (cur === from) return true;
+    cur = adj.get(cur);
+  }
+  return false;
+}
+// what does connecting out-port → in-port MEAN? returns a sender fn or null.
+// audio: real graph rewiring. mod: LFO (re)assignment. ctl: the few edits the
+// backend can express are real (voice retarget, keys→arp enable); everything
+// else is applied visually with an honest "approximated" toast.
+function connectAction(out, inn) {
+  const po = out.port, pi = inn.port;
+  if (!po || !pi || po.sig !== pi.sig || out.node === inn.node) return null;
+  const sig = po.sig;
+  if (sig === "audio") {
+    const from = audioKeyOut(out.node);
+    const to = inn.node.gid === "master" ? "master" : inn.node.chainKey;
+    if (!from || !to || to === "drums") return null;
+    if (inn.node.mod && inn.node.mod.kind !== "effect") return null; // sources take no audio in
+    if (from === "drums")
+      return () => send({type: "set_drums", target: to});
+    if (to !== "master" && wouldCycle(from, to)) return null;
+    return () => send({type: "graph_wire", action: "add", from, to});
+  }
+  if (sig === "mod") {
+    if (!pi.quiet || !inn.node.chainKey) return null;
+    const src = out.node;
+    return () => {
+      // park the LFO card's position where it was drawn so the server-born
+      // card (id "<key>.<param>") appears in place
+      posMem["lfo:" + inn.node.chainKey + "." + pi.param] = [src.x, src.y];
+      if (src.armed) { removeNode(src); rerouteAll(); }
+      else if (src.gid.startsWith("lfo:"))
+        send({type: "lfo_unassign", id: src.gid.slice(4)});  // re-target a live LFO
+      send({type: "lfo_assign", key: inn.node.chainKey, name: pi.param});
+    };
+  }
+  // ---- ctl ----
+  if (out.node.gid === "voice" && inn.node.mod && inn.node.mod.kind === "source" &&
+      inn.node.mod.params && "freq" in inn.node.mod.params && "gate" in inn.node.mod.params)
+    return () => send({type: "set_voice_target", key: inn.node.chainKey});
+  if (out.node.gid === "keys" && inn.node.gid === "arp")
+    return () => send({type: "set_arp", enabled: true});
+  const id = `${out.node.gid}>${inn.node.gid}`;
+  if (cutMem.has(id))          // re-connecting a visually-cut derived wire
+    return () => { cutMem.delete(id); rebuildGraph(); };
+  return () => {
+    extraCtl.add(id);          // no backend semantics — draw it, but say so
+    toast("control plumbing: approximated");
+    rebuildGraph();
+  };
+}
+function compatEnds(a, b) {
+  if (!a.port || !b.port || a.port.dir === b.port.dir) return false;
+  const [out, inn] = a.port.dir === "out" ? [a, b] : [b, a];
+  return !!connectAction(out, inn);
+}
+function distToSeg(x, y, a, b) {
+  const x0 = Math.min(a[0], b[0]), x1 = Math.max(a[0], b[0]);
+  const y0 = Math.min(a[1], b[1]), y1 = Math.max(a[1], b[1]);
+  const cx = Math.max(x0, Math.min(x1, x)), cy = Math.max(y0, Math.min(y1, y));
+  return Math.hypot(x - cx, y - cy);
+}
+function wireNearPoint(x, y, maxD = 18) {
+  let best = null, bestD = maxD;
+  for (const w of wires) {
+    if (w.sig !== "audio") continue;
+    const pts = w.dpts || w.pts;
+    if (!pts) continue;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const d = distToSeg(x, y, pts[i], pts[i + 1]);
+      if (d < bestD) { bestD = d; best = w; }
+    }
+  }
+  return best;
+}
+// splice a FRESHLY SPAWNED module into wire w. spawn_module snapshots the
+// wiring server-side BEFORE the linear append (so nothing else re-routes),
+// then two targeted graph_wire adds re-aim the wire through the newcomer.
+function spliceNewIntoWire(w, key, kind, wx, wy) {
+  const A = w.from.node, B = w.to.node;
+  const fromKey = audioKeyOut(A);
+  const toKey = B.gid === "master" ? "master" : B.chainKey;
+  if (!toKey) return;
+  posMem["m:" + key] = [snap(Math.max(MIN_X, wx - CARD_W / 2)),
+                        snap(Math.max(MIN_Y, wy - GRID))];
+  send({type: "spawn_module", key});
+  if (kind === "effect" && fromKey) {
+    if (fromKey === "drums") send({type: "set_drums", target: key});
+    else send({type: "graph_wire", action: "add", from: fromKey, to: key});
+  }
+  // sources can't take input — they simply fan into the wire's destination
+  send({type: "graph_wire", action: "add", from: key, to: toKey});
+}
+// splice an EXISTING card into wire w (drop a card on a highlighted wire).
+// Order is chosen so every intermediate step stays acyclic: first aim the
+// card at the wire's destination (clearing its old outgoing), then feed it,
+// then bridge its old feeders to its old destination.
+function spliceExistingIntoWire(w, node) {
+  const A = w.from.node, B = w.to.node;
+  if (A === node || B === node) return;
+  const myKey = audioKeyOut(node);
+  const toKey = B.gid === "master" ? "master" : B.chainKey;
+  const fromKey = audioKeyOut(A);
+  if (!myKey || !toKey) return;
+  if (myKey === "drums") { send({type: "set_drums", target: toKey}); return; }
+  const wiresNow = (state && state.wires || []).map(v => ({...v}));
+  const oldOut = wiresNow.find(v => v.from === myKey);
+  send({type: "graph_wire", action: "add", from: myKey, to: toKey});
+  if (node.mod && node.mod.kind === "effect" && fromKey) {
+    if (fromKey === "drums") send({type: "set_drums", target: myKey});
+    else send({type: "graph_wire", action: "add", from: fromKey, to: myKey});
+    if (oldOut) {  // heal the gap the card left behind
+      for (const v of wiresNow)
+        if (v.to === myKey && v.from !== fromKey)
+          send({type: "graph_wire", action: "add", from: v.from, to: oldOut.to});
+      if (state.drums && state.drums.target === myKey && fromKey !== "drums")
+        send({type: "set_drums", target: oldOut.to});
+    }
+  }
+}
+
+// ---------- card drag + port-to-port patching gesture ----------
 let drag = null, patchDrag = null, dragRaf = 0;
 function bindNode(node) {
   const head = node.el.querySelector(".head");
@@ -1215,24 +1416,27 @@ function bindNode(node) {
   head.addEventListener("pointerup", () => {
     if (!drag || drag.node !== node) return;
     node.el.classList.remove("dragging");
-    if (drag.spliceTarget) drag.spliceTarget.el.classList.remove("splice-hi");
+    const spliced = drag.spliceTarget;
+    if (spliced) spliced.el.classList.remove("splice-hi");
     for (const n of drag.shifted?.keys() || []) n.el.classList.remove("shifting"); // BAKE
     drag = null;
     enforceSeparation(node);
     layoutPorts(node);
     rerouteAll();
     saveLayout();
+    if (spliced) spliceExistingIntoWire(spliced, node);  // live server rewire
     flushRebuild();
   });
-  // patch gesture: only mod OUT ports start a drag (LFO → param assignment);
-  // audio/ctl wiring is derived from server state and not hand-editable in v1
+  // patch gesture: EVERY port can start a wire drag. Targets are filtered by
+  // signal type + direction (in↔out only) via connectAction(); the drop end
+  // decides what actually gets sent (graph_wire / set_drums / lfo_assign /
+  // set_voice_target / set_arp / visual ctl plumbing).
   for (const port of node.ports) {
-    if (!(port.sig === "mod" && port.dir === "out")) continue;
     port.el.addEventListener("pointerdown", (e) => {
       e.stopPropagation();
       patchDrag = {node, port};
       wireLive.style.display = "";
-      wireLive.setAttribute("stroke", SIG_CSS.mod);
+      wireLive.setAttribute("stroke", SIG_CSS[port.sig] || SIG_CSS.mod);
       port.el.classList.add("hot");
     });
   }
@@ -1248,7 +1452,9 @@ document.addEventListener("pointermove", (e) => {
     : [[x1, y1], [(x1 + x2) / 2, y1], [(x1 + x2) / 2, y2], [x2, y2]];
   wireLive.setAttribute("d", roundedPath(dedupe(mid)));
   for (const n of nodes.values()) for (const p of n.ports) {
-    const ok = p.quiet && n.chainKey;   // valid targets: any real param handle
+    // highlight every COMPATIBLE landing spot: opposite direction, same
+    // signal, and a connection the system can actually (or honestly) make
+    const ok = compatEnds(patchDrag, {node: n, port: p});
     p.el.classList.toggle("hot", ok || p === patchDrag.port);
   }
 });
@@ -1261,14 +1467,13 @@ document.addEventListener("pointerup", (e) => {
   const t = document.elementFromPoint(e.clientX, e.clientY);
   if (t && t.classList.contains("port")) {
     outer: for (const n of nodes.values()) for (const p of n.ports) {
-      if (p.el === t && p.quiet && n.chainKey) {
-        // the real LFO id will be "<key>.<param>" — park the source card's
-        // position there so the server-born card appears where it was drawn
-        posMem["lfo:" + n.chainKey + "." + p.param] = [src.node.x, src.node.y];
-        if (src.node.armed) removeNode(src.node);
-        send({type: "lfo_assign", key: n.chainKey, name: p.param});
-        break outer;
+      if (p.el !== t) continue;
+      const cand = {node: n, port: p};
+      if (compatEnds(src, cand)) {
+        const [out, inn] = src.port.dir === "out" ? [src, cand] : [cand, src];
+        connectAction(out, inn)();
       }
+      break outer;
     }
   }
   flushRebuild();
@@ -1285,6 +1490,16 @@ function flushRebuild() {
   }
 }
 function busy() { return !!(drag || patchDrag || sliderDrag); }
+
+// fallback for servers that predate state.wires: the old linear derivation
+function deriveLinearWires() {
+  const live = (state && state.chain || [])
+    .filter(c => !c.service && c.enabled).map(c => c.key);
+  const out = [];
+  for (let i = 0; i + 1 < live.length; i++) out.push({from: live[i], to: live[i + 1]});
+  if (live.length) out.push({from: live[live.length - 1], to: "master"});
+  return out;
+}
 
 const KILL_PARAMS = new Set(["amp", "level", "volume", "cutoff", "gain"]);
 
@@ -1529,14 +1744,8 @@ function buildDrumsCard() {
       },
     }));
   }
-  rows.push(rowChip({gid}, "to_chain", {
-    text: d.to_chain ? "→ fx chain" : "→ master",
-    onClick: (chip) => {
-      const on = chip.textContent !== "→ fx chain";
-      chip.textContent = on ? "→ fx chain" : "→ master";
-      send({type: "set_drums", to_chain: on});
-    },
-  }));
+  // routing chip gone: the drums OUT port is now a standard audio out —
+  // drag its wire wherever the hits should land (set_drums {target})
   let viz = "";
   for (const lane of d.lanes) {
     viz += `<div class="dlane">${esc(lane)}</div><div class="dgrid" data-lane="${esc(lane)}">`;
@@ -1764,21 +1973,59 @@ function rebuildGraph() {
   const W = (a, asig, b, bsig, opts) => a && b && addWire(
     {node: a, port: port(a, "out", asig)},
     {node: b, port: port(b, "in", bsig, opts && opts.param)}, opts || {});
-  // control: keys → arp → (deck, voice) → target source; arp → drone.listen
-  const hub = arp || keys;
-  if (arp) W(keys, "ctl", arp, "ctl");
-  W(hub, "ctl", deck, "ctl");
-  W(hub, "ctl", voice, "ctl");
+  // ctl wires whose cut has NO backend meaning are still cuttable: the cut is
+  // remembered client-side (cutMem) and honestly labelled as approximated
+  const Wc = (a, asig, b, bsig) => {
+    if (!a || !b) return null;
+    const id = `${a.gid}>${b.gid}`;
+    if (cutMem.has(id)) return null;
+    return W(a, asig, b, bsig, {cut: () => {
+      cutMem.add(id);
+      toast("control plumbing: approximated");
+      rebuildGraph();
+    }});
+  };
+  // control: keys → arp (only while the arp is ON — cutting this wire IS
+  // set_arp enabled:false, and notes then run keys → voice direct; dragging
+  // keys.out back onto arp.in re-enables) → (deck, voice) → target source
+  const arpOn = !!(state.arp && state.arp.enabled);
+  const hub = (arp && arpOn) ? arp : keys;
+  if (arp && arpOn)
+    W(keys, "ctl", arp, "ctl", {cut: () => send({type: "set_arp", enabled: false})});
+  Wc(hub, "ctl", deck, "ctl");        // looper feed — cut is visual-only
+  Wc(hub, "ctl", voice, "ctl");
   const target = nodes.get("m:" + state.voice_target) ||
                  chainNodes.find(n => n.mod && n.mod.kind === "source") || null;
-  W(voice, "ctl", target, "ctl");
-  for (const s of services) W(hub, "ctl", s, "ctl");
-  // audio: consecutive ENABLED chain stages, last → master
-  const live = chainNodes.filter(n => n.mod.enabled);
-  for (let i = 0; i + 1 < live.length; i++) W(live[i], "audio", live[i + 1], "audio");
-  if (live.length) W(live[live.length - 1], "audio", master, "audio");
-  // drums ride to master when enabled (server mixes them behind the scenes)
-  if (state.drums && state.drums.enabled) W(drums, "audio", master, "audio");
+  Wc(voice, "ctl", target, "ctl");    // re-drag voice.out → source = set_voice_target
+  for (const s of services) Wc(hub, "ctl", s, "ctl");
+  // user-drawn ctl wires with no backend semantics (kept honest via toast)
+  for (const id of [...extraCtl]) {
+    const [ga, gb] = id.split(">");
+    const a = nodes.get(ga), b = nodes.get(gb);
+    if (a && b) W(a, "ctl", b, "ctl",
+      {cut: () => { extraCtl.delete(id); rebuildGraph(); }});
+  }
+  // audio: SERVER TRUTH — state.wires is derived from the actual bus routing,
+  // so multiple cascades / fan-in render exactly as they sound. Every audio
+  // wire cuts with graph_wire remove; master's in port takes any fan-in.
+  const audioNode = (k) => k === "master" ? master : nodes.get("m:" + k);
+  const audioWires = state.wires || deriveLinearWires();
+  for (const wr of audioWires) {
+    const a = audioNode(wr.from), b = audioNode(wr.to);
+    if (a && b) W(a, "audio", b, "audio",
+      {cut: () => send({type: "graph_wire", action: "remove", from: wr.from})});
+  }
+  // drums audio out: a standard flexible output. target = key | "master" |
+  // null (disconnected). Cut sends target null; re-drag sends a new target.
+  const dTarget = state.drums
+    ? (state.drums.target !== undefined ? state.drums.target
+       : (state.drums.to_chain ? (state.chain.find(c => !c.service) || {}).key : "master"))
+    : null;
+  // stale target key (module left with a patch switch) → the backend falls
+  // back to master at fire time, so the wire honestly points there too
+  const dNode = dTarget != null ? (audioNode(dTarget) || master) : null;
+  if (dNode) W(drums, "audio", dNode, "audio",
+    {cut: () => send({type: "set_drums", target: null})});
   // mod: one wire per LFO assignment → the target param's quiet handle
   for (let i = 0; i < lfoNodes.length; i++) {
     const l = state.lfos[i];
@@ -1819,9 +2066,12 @@ function renderPalette() {
   const avail = (state && state.available || []).filter(a => !inChain.has(a.key));
   for (const [label, kind] of [["sources", "source"], ["effects", "effect"]]) {
     h3(label);
-    for (const a of avail.filter(x => x.kind === kind))
-      btn(a.name, FAMILY[a.family] || "#888",
-          () => send({type: "edit_chain", action: "add", key: a.key}));
+    for (const a of avail.filter(x => x.kind === kind)) {
+      const b = document.createElement("button");
+      b.innerHTML = `<i style="background:${FAMILY[a.family] || "#888"}"></i>${esc(a.name)}`;
+      b.addEventListener("pointerdown", (e) => startPaletteDrag(e, b, a));
+      pal.appendChild(b);
+    }
   }
   h3("monitors");
   btn("Oscilloscope", FAMILY.io, () => { buildMonitor("scope"); afterMonitor(); });
@@ -1833,6 +2083,66 @@ function afterMonitor() {
     for (const n of nodes.values()) layoutPorts(n);
     rebuildObstacles(); rerouteAll(); saveLayout();
   });
+}
+
+// palette CLICK-vs-DRAG: a plain click spawns the module UNCONNECTED at a
+// free spot; a drag (>6px) grows a ghost card that follows the cursor —
+// dropping it on a highlighted audio wire splices into that wire, dropping
+// on empty canvas spawns unconnected right there.
+let paletteDrag = null;
+function overBoard(ev) {
+  const b = $("board").getBoundingClientRect(), p = $("palette").getBoundingClientRect();
+  return ev.clientX > p.right && ev.clientY > b.top &&
+         ev.clientX < b.right && ev.clientY < b.bottom;
+}
+function startPaletteDrag(e, btn, a) {
+  e.preventDefault();
+  try { btn.setPointerCapture(e.pointerId); } catch (_) {}
+  paletteDrag = {a, x0: e.clientX, y0: e.clientY, moved: false, ghost: null, hover: null};
+  const move = (ev) => {
+    const pd = paletteDrag;
+    if (!pd) return;
+    if (!pd.moved && Math.hypot(ev.clientX - pd.x0, ev.clientY - pd.y0) < 6) return;
+    if (!pd.moved) {
+      pd.moved = true;
+      const g = document.createElement("div");
+      g.id = "ghost-card";
+      g.innerHTML = `<i style="background:${FAMILY[a.family] || "#888"}"></i>${esc(a.name)}`;
+      document.body.appendChild(g);
+      pd.ghost = g;
+    }
+    pd.ghost.style.left = (ev.clientX - 60) + "px";
+    pd.ghost.style.top = (ev.clientY - 16) + "px";
+    const r = world.getBoundingClientRect();
+    const hit = overBoard(ev)
+      ? wireNearPoint(ev.clientX - r.left, ev.clientY - r.top, 18) : null;
+    if (pd.hover && pd.hover !== hit) pd.hover.el.classList.remove("splice-hi");
+    pd.hover = hit;
+    if (hit) hit.el.classList.add("splice-hi");
+  };
+  const finish = (ev, cancelled) => {
+    btn.removeEventListener("pointermove", move);
+    const pd = paletteDrag;
+    paletteDrag = null;
+    if (!pd) return;
+    if (pd.ghost) pd.ghost.remove();
+    if (pd.hover) pd.hover.el.classList.remove("splice-hi");
+    if (cancelled) return;
+    const r = world.getBoundingClientRect();
+    const wx = ev.clientX - r.left, wy = ev.clientY - r.top;
+    if (!pd.moved) {
+      send({type: "spawn_module", key: a.key});           // click → unconnected
+    } else if (pd.hover) {
+      spliceNewIntoWire(pd.hover, a.key, a.kind, wx, wy); // drop on wire → splice
+    } else if (overBoard(ev)) {
+      posMem["m:" + a.key] = [snap(Math.max(MIN_X, wx - CARD_W / 2)),
+                              snap(Math.max(MIN_Y, wy))];
+      send({type: "spawn_module", key: a.key});           // empty drop → unconnected here
+    }
+  };
+  btn.addEventListener("pointermove", move);
+  btn.addEventListener("pointerup", (ev) => finish(ev, false), {once: true});
+  btn.addEventListener("pointercancel", (ev) => finish(ev, true), {once: true});
 }
 
 // ---------- state → toolbar ----------
@@ -2245,6 +2555,16 @@ function fitHeader() {
 window.addEventListener("resize", fitHeader);
 fitHeader();
 setTimeout(fitHeader, 50);
+
+// circumscribe audit: web fonts land after first paint and can change card
+// heights → the obstacle map would be stale and wires could slip under cards
+if (document.fonts && document.fonts.ready)
+  document.fonts.ready.then(() => requestAnimationFrame(() => {
+    if (busy()) return;
+    for (const n of nodes.values()) layoutPorts(n);
+    rebuildObstacles();
+    rerouteAll();
+  }));
 
 renderPalette();
 connect();

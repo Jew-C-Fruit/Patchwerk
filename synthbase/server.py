@@ -14,6 +14,10 @@ Protocol (JSON messages):
     {"type": "set_arp", "enabled": true, "division": "1/8", "gate": 0.6, "octaves": 2, "pattern": "updown"}
     {"type": "set_transport", "bpm": 110, "beats_per_bar": 4, "click": true}
     {"type": "set_drone", "enabled": true, "every": "1 bar", "octave": 2}
+    {"type": "graph_wire", "action": "add"|"remove", "from": "pluck", "to": "echo"|"master"}
+    {"type": "spawn_module", "key": "reverb"}      (add to rack, audio out unconnected)
+    {"type": "set_voice_target", "key": "pluck"}   (re-aim the mono voice)
+    {"type": "set_drums", "target": "echo"|"master"|null}  (drums audio out routing)
 
   server -> client:
     {"type": "state", ...full snapshot...}       (on connect and after changes)
@@ -51,10 +55,8 @@ class GuiServer:
     # -- http ----------------------------------------------------------------
 
     async def _index(self, request: web.Request) -> web.FileResponse:
-        # the flex patch-canvas gui is the front door; the classic form gui
-        # stays reachable at /legacy
         return web.FileResponse(
-            GUI_DIR / "flex.html", headers={"Cache-Control": "no-store"},
+            GUI_DIR / "index.html", headers={"Cache-Control": "no-store"},
         )
 
     async def _legacy(self, request: web.Request) -> web.FileResponse:
@@ -114,8 +116,23 @@ class GuiServer:
             self.synth.set_transpose(m.get("semitones", 0))
             await self._broadcast_state(exclude=sender)
         elif t == "set_drums":
-            self.synth.set_drums(enabled=m.get("enabled"), patterns=m.get("patterns"),
-                                 levels=m.get("levels"), to_chain=m.get("to_chain"))
+            kw = dict(enabled=m.get("enabled"), patterns=m.get("patterns"),
+                      levels=m.get("levels"), to_chain=m.get("to_chain"))
+            if "target" in m:   # null is meaningful (= disconnected) — only
+                kw["target"] = m["target"]   # forward when explicitly present
+            self.synth.set_drums(**kw)
+            await self._broadcast_state()
+        elif t == "graph_wire":
+            await loop.run_in_executor(
+                None, lambda: self.synth.graph_wire(
+                    m.get("action", "add"), m.get("from"), m.get("to")))
+            await self._broadcast_state()
+        elif t == "spawn_module":
+            await loop.run_in_executor(
+                None, lambda: self.synth.spawn_unconnected(m["key"]))
+            await self._broadcast_state()
+        elif t == "set_voice_target":
+            self.synth.set_voice_target(m["key"])
             await self._broadcast_state()
         elif t == "set_looper":
             self.synth.set_looper(action=m.get("action"), bars=m.get("bars"),

@@ -87,6 +87,11 @@ class SynthApp:
         self.on_midi_event = None  # set by GuiServer; called from MIDI thread
         self.patch_name: str | None = None
         self.patch: dict | None = None
+        # graph overlay over the linear chain: None = pure linear derivation;
+        # a list of {"from": key, "to": key|"master"|None} = user rewires,
+        # re-applied after every rebuild for keys that still exist.
+        self.graph_wires: list[dict] | None = None
+        self._voice_target_override: str | None = None  # set_voice_target survivor
         self.registry: dict = {}
         self.module_errors: dict = {}
         self._lock = threading.RLock()  # GUI thread + MIDI thread both call in
@@ -139,6 +144,13 @@ class SynthApp:
 
         bindings = patch.get("bindings", {})
         target = bindings.get("notes_to") or self._guess_voice_target()
+        if self._voice_target_override:
+            try:
+                inst = self.rack.find(self._voice_target_override)
+                if inst.module.kind == "source" and "gate" in inst.settings:
+                    target = self._voice_target_override
+            except KeyError:
+                pass  # override's module left the chain — fall back
         self.voice = MonoVoice(self.rack, target) if target else None
         if self.voice:
             self.arp = Arpeggiator(self.voice, self.transport)
@@ -155,7 +167,29 @@ class SynthApp:
         self.lfos.assignments.clear()  # old rack's nodes are gone with it
         self.rack.mapped.clear()
         self.drone.spawn()  # re-add the drone to the fresh rack if enabled
+        self._reapply_graph_wires()
         self._restart_midi()
+
+    def _reapply_graph_wires(self) -> None:
+        """After ANY rebuild the rack comes up linear; re-impose the user's
+        stored graph wires for whichever keys still exist."""
+        if self.graph_wires is None or not self.rack:
+            return
+        existing = {i.key for i in self.rack.instances if not i.service}
+        for w in self.graph_wires:
+            if w["from"] not in existing:
+                continue
+            try:
+                if w["to"] is None:
+                    self.rack.audio_disconnect(w["from"])
+                elif w["to"] == "master" or w["to"] in existing:
+                    self.rack.audio_rewire(w["from"], w["to"])
+            except Exception:  # noqa: BLE001 — one bad wire must not stop the rest
+                pass
+        try:
+            self.rack.reorder_for_wires(self.graph_wires)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _on_node_replaced(self, key: str) -> None:
         self.lfos.on_node_replaced(key)
@@ -212,6 +246,17 @@ class SynthApp:
                 stages.append((key, {}, True))
             elif action == "remove":
                 stages = [s for s in stages if s[0] != key]
+                if self.graph_wires is not None:
+                    # splice-out healing: bridge everything that fed the
+                    # removed module to the removed module's own destination
+                    dst = next((w["to"] for w in self.graph_wires
+                                if w["from"] == key), None)
+                    self.graph_wires = [
+                        {**w, "to": dst} if w["to"] == key else w
+                        for w in self.graph_wires if w["from"] != key
+                    ]
+                    if self.drums.target == key:
+                        self.drums.target = dst
             elif action == "move":
                 i = keys.index(key)
                 j = max(0, min(len(stages) - 1, i + (index or 0)))
@@ -238,6 +283,63 @@ class SynthApp:
                     pass
             self.lfos.restore({aid: cfg for aid, cfg in lfo_snap.items()
                                if aid.split(".")[0] in [k for k, _, _ in stages]})
+
+    def graph_wire(self, action: str, src: str, dst: str | None = None) -> None:
+        """Live audio rewiring: add (src → dst|"master") or remove (park src on
+        the null bus). One outgoing audio wire per source; fan-in is free
+        (buses sum). Stored so rebuilds re-apply it."""
+        with self._lock:
+            if not self.rack:
+                raise RuntimeError("no rack running")
+            self.rack.find(src)  # raises a helpful KeyError for the GUI
+            if self.graph_wires is None:
+                self.graph_wires = self.rack.audio_wires()
+            wires = [w for w in self.graph_wires if w["from"] != src]
+            if action == "add":
+                if not dst:
+                    raise ValueError("graph_wire add needs a destination")
+                if dst != "master":
+                    self.rack.find(dst)
+                    adj = {w["from"]: w["to"] for w in wires}
+                    cur, hops = dst, 0
+                    while cur not in (None, "master") and hops < 64:
+                        if cur == src:
+                            raise ValueError(f"{src} → {dst} would create an audio cycle")
+                        cur = adj.get(cur)
+                        hops += 1
+                wires.append({"from": src, "to": dst})
+                self.graph_wires = wires
+                self.rack.audio_rewire(src, dst)
+            elif action == "remove":
+                wires.append({"from": src, "to": None})
+                self.graph_wires = wires
+                self.rack.audio_disconnect(src)
+            else:
+                raise ValueError(f"unknown graph_wire action {action!r}")
+            self.rack.reorder_for_wires(self.graph_wires)
+
+    def spawn_unconnected(self, key: str) -> None:
+        """Add a module to the rack with its audio out parked on the null bus
+        (palette click / empty-canvas drop). Snapshot the current wiring FIRST
+        so the linear rebuild's re-tailing doesn't reroute existing modules."""
+        with self._lock:
+            if self.graph_wires is None and self.rack:
+                self.graph_wires = self.rack.audio_wires()
+            self.edit_chain("add", key)
+            self.graph_wire("remove", key)
+
+    def set_voice_target(self, key: str) -> None:
+        """Re-aim the mono voice at another playable source (GUI wire re-drag)."""
+        with self._lock:
+            if not (self.rack and self.voice):
+                raise RuntimeError("no voice to retarget")
+            inst = self.rack.find(key)
+            if inst.module.kind != "source" or "gate" not in inst.settings \
+                    or "freq" not in inst.settings:
+                raise ValueError(f"{key} is not a note-playable source")
+            self.voice.all_off()  # silence the old target before switching
+            self.voice.target_key = key
+            self._voice_target_override = key
 
     def _guess_voice_target(self) -> str | None:
         """First source in the chain that looks note-playable (freq + gate)."""
@@ -492,6 +594,8 @@ class SynthApp:
                 "midi_inputs": _list_midi_inputs(),
                 "midi_port": self.router.active_port if self.router else None,
                 "midi_enabled": self.midi_enabled,
+                "wires": self.rack.audio_wires() if self.rack else [],
+                "drums_target": self.drums.target,
                 "arp": self.arp.settings() if self.arp else None,
                 "transport": self.transport.settings(),
                 "drone": self.drone.settings(),
