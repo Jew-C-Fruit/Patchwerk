@@ -7,9 +7,56 @@ broken Python can never glitch running audio.
 ## Architecture in one breath
 
 `modules/*.py` (DSP recipes) → loaded by `synthbase/module.py` → instantiated
-in order by `synthbase/rack.py` (buses between stages) → running on scsynth →
-controlled live by `synthbase/midi.py` (notes/CCs) → hot-swapped on file save
-by `synthbase/watcher.py`.
+by `synthbase/rack.py` as a rewireable AUDIO GRAPH on scsynth (stereo buses
+between stages) → note flow defined by a wire-based CONTROL PLANE in
+`synthbase/app.py` → performed from the flex GUI (`synthbase/server.py`,
+browser at `/`) and MIDI (`synthbase/midi.py`) → hot-swapped on file save by
+`synthbase/watcher.py`.
+
+## The graph world (v5+): ids, audio wires, control wires
+
+**Instance ids.** Every module is spawnable MULTIPLE times. An instance id
+is `"lowpass"`, `"lowpass.2"`, ... (`alloc_id` reuses freed suffixes); the
+TYPE is `type_of(id)` = the part before the dot = the registry/synthdef key.
+ALL protocol messages are keyed by instance id; a bare type key resolves to
+the FIRST instance (legacy clients). Never treat an id as a type — derive it.
+
+**Audio graph.** `app.graph_wires` overlays the linear chain: one outgoing
+wire per source (rewiring = point its `out` at the destination's in-bus),
+fan-in is free (buses SUM — extra sources sum into the running bus, never a
+fresh orphaned one), disconnected outputs park on a persistent silent null
+bus, and `reorder_for_wires` topo-sorts nodes so every wire's src executes
+before its dst. Wires survive rebuilds; removal splice-heals A→X→B to A→B.
+
+**Control plane.** `app.ctl_wires` is the note router — the graph IS the
+routing. Node vocabulary: `keys` (all controllers enter here; never a
+destination), `arp`, `deck` (the MIDI looper: keys→deck records raw,
+arp→deck records voiced, deck→X replays), mono voices (`voice`,
+`voice.2`, ...; each drives one target source), tonic derivers (`tonic.N`:
+notes in → ctl THRU out + amber TONIC out; tonic outs land only on drone
+instances' tonic-ins), and key shifters (`keyshift.N` with four isolated
+LANES — endpoint grammar `"keyshift.2:3"` = lane 3; lane k in → shift →
+lane k out only). Unwired events dead-end silently — honest patching.
+EVERY silencing path must emit its note-offs (taps included): an unpaired
+on is a stuck note and a stuck monitor bar.
+
+**Global-vs-wired doctrine.** Transport/clock, panic + sustain, master
+volume + IO config, pitch reference (transpose/bend), and persistence stay
+GLOBAL. Everything else — who hears whom — is wire-defined.
+
+## GUIs
+
+The flex patch canvas is the front door (`/`): cards + subway-routed wires
+derived from every `state` message, positions persisted per patch in
+localStorage. The legacy panel lives at `/legacy` — when changing protocol
+semantics, check BOTH pages (v8's "vanishing palette" bug lived only in the
+legacy page's stale already-placed filter). The full websocket protocol is
+documented in `synthbase/server.py`'s docstring.
+
+**Monitors: local vs global.** Note/Waveform monitors and the scope are
+LOCAL when wired/riding a wire (they show that path's traffic) and GLOBAL
+when unwired (master feed / all taps). Source-fires emit ONE tagged tap
+(`{"kind": "tap", "src": <node id>}`) per fire, not per edge.
 
 ## Writing a new module (the main vibecoding activity)
 
@@ -82,12 +129,47 @@ python -m synthbase play patches/demo.py
 Hot reload is on by default under `play`: edit any file in `modules/`, save,
 hear the change without stopping.
 
+## Running the GUI
+
+```bash
+./run.sh                          # relaunch cleanly (pidfile-managed)
+python -m synthbase gui pad_space # or directly; GUI at http://127.0.0.1:8765
+```
+
 ## Testing changes
 
-There's no audio in CI/cloud contexts. `python -m pytest tests/` (or
-`tests/smoke.py`) exercises module loading and synthdef compilation without
-booting a server; use it before claiming a module works. On the Mac,
-`python -m synthbase test` is the real proof.
+There's no audio in CI/cloud contexts. Before claiming anything works, run:
+
+- `python3 tests/smoke.py` — every module loads, synthdefs compile, patches
+  parse, keyshift math sane.
+- `python3 tests/test_graph.py` — audio-wire derivation, graph/ctl wire
+  bookkeeping, instance ids, multi-voice, tonic→drone, key-shifter lanes and
+  progression, tap-closure and snip-heal invariants (no server needed).
+- `python3 tests/test_looper.py` — deck record/replay/overdub timing and
+  take pairing.
+- `python3 tests/gui_check*.py` — headless Playwright checks of flex.html
+  against mock state/events (cards, wires, monitors, splices, key shifter,
+  closure regressions). Write NEW checks failing-first against the broken
+  behavior.
+
+On the Mac, `python -m synthbase test` is the real proof.
+
+## Landmines (learned the hard way)
+
+- scsynth crashers: `.clip()`, scaled `RecordBuf` sources, EnvGen-driven
+  `record_level`; `In.ar(0)` at the root's tail reads junk.
+- Playable sources must spawn `gate=0` (the synthdef default of 1 leaves
+  idle voices droning after every rebuild).
+- Extra sources SUM into the running bus — a fresh bus orphans everything
+  upstream ("generators go dead").
+- Sort looper events by beat with a STABLE key-only sort — tuple sort puts
+  offs before ons at equal beats and scrambles pairing.
+- Every all-off/silencing path must close its open notes AND their viz taps
+  (panic, arp stop, deck stop, rebuilds, record-window exits).
+- `system_profiler` (device lists) takes seconds — cache it; never call it
+  per state snapshot.
+- GUI sends during a websocket reconnect gap must queue, not drop (note-offs
+  especially); macOS swallows letter keyups while ⌘ is held.
 
 ## Don'ts
 
