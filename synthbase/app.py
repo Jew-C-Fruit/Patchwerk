@@ -19,6 +19,7 @@ from .arp import Arpeggiator
 from .drone import EVERY as TONIC_EVERY
 from .drone import NOTE_NAMES, TonicDeriver, midi_to_freq
 from .drums import DrumMachine
+from .keyshift import KeyShifter
 from .lfo import LFOManager
 from .scope import Scope
 from .looper import Looper
@@ -79,14 +80,27 @@ class _DeckRecordTap(_NullSink):
     def __init__(self, looper, voiced: bool) -> None:
         self.looper = looper
         self.voiced = voiced
+        self._open: set[int] = set()  # notes on'd while a record pass is live
+
+    def _rec(self, note: int, on: bool) -> None:
+        (self.looper.record_voiced if self.voiced
+         else self.looper.record_raw)(note, on)
 
     def note_on(self, note: int, velocity: int = 100) -> None:
-        (self.looper.record_voiced if self.voiced
-         else self.looper.record_raw)(note, True)
+        self._rec(note, True)
+        if self.looper.state in ("armed", "recording", "overdubbing"):
+            self._open.add(int(note))
 
     def note_off(self, note: int) -> None:
-        (self.looper.record_voiced if self.voiced
-         else self.looper.record_raw)(note, False)
+        self._rec(note, False)
+        self._open.discard(int(note))
+
+    def all_off(self) -> None:
+        # panic/arp-stop while recording: close every open note in the take,
+        # else the phrase keeps unmatched ons (full-width deck bars + rings)
+        for n in list(self._open):
+            self._rec(n, False)
+        self._open.clear()
 
 
 class _FanOut(_NullSink):
@@ -96,6 +110,7 @@ class _FanOut(_NullSink):
     def __init__(self, app, src: str) -> None:
         self.app = app
         self.src = src
+        self._open: set[int] = set()  # notes on'd but not yet off'd
 
     def _each(self, fn) -> None:
         for s in self.app._ctl_sinks(self.src):
@@ -111,15 +126,25 @@ class _FanOut(_NullSink):
         self.app._emit_midi_event(
             {"kind": "tap", "src": self.src, "note": int(note), "on": bool(on)})
 
+    def _close_taps(self) -> None:
+        """Every silencing path must CLOSE its open taps — an on with no off
+        pins a full-width bar on every note monitor forever."""
+        for n in list(self._open):
+            self._tap(n, False)
+        self._open.clear()
+
     def note_on(self, note: int, velocity: int = 100) -> None:
+        self._open.add(int(note))
         self._tap(note, True)
         self._each(lambda s: s.note_on(note, velocity))
 
     def note_off(self, note: int) -> None:
+        self._open.discard(int(note))
         self._tap(note, False)
         self._each(lambda s: s.note_off(note))
 
     def all_off(self) -> None:
+        self._close_taps()
         self._each(lambda s: s.all_off())
 
     def set_sustain(self, on: bool) -> None:
@@ -149,9 +174,12 @@ class _KeysNode(_FanOut):
                 pass
 
     def all_off(self) -> None:
-        # panic is global too: silence the arp pool AND every voice directly,
-        # whatever the wiring says
-        for s in (self.app.arp, *self.app.voices.values()):
+        # panic is global too: silence the arp pool AND every voice/tonic/
+        # keyshift directly, whatever the wiring says — and close this
+        # node's own open taps so monitors don't pin stuck bars
+        self._close_taps()
+        for s in (self.app.arp, *self.app.voices.values(),
+                  *self.app.tonics.values(), *self.app.keyshifts.values()):
             if s is None:
                 continue
             try:
@@ -205,6 +233,8 @@ class SynthApp:
         self.transport = Transport()
         # v5: tonic derivers (spawnable ctl nodes) replace the DroneBrain.
         self.tonics: dict[str, TonicDeriver] = {}
+        # v6: key shifters (spawnable 4-lane ctl modifiers)
+        self.keyshifts: dict[str, KeyShifter] = {}
         self.drone_follow: dict[str, bool] = {}  # drone instance id -> follow tonic
         self._legacy_drone = False               # set_drone compat pair active
         self._legacy_drone_id: str | None = None
@@ -317,6 +347,11 @@ class SynthApp:
         bindings = patch.get("bindings", {})
         if "voice" not in self._voice_targets:
             self._voice_targets["voice"] = None
+        for v in self.voices.values():
+            # a rebuild silences the old rack — close each old voice's open
+            # "voiced" segment so note rolls don't pin a stuck bar
+            if getattr(v, "_sounding", None) is not None:
+                self._emit_voiced(v._sounding, False)
         self.voices = {}
         guess = self._guess_voice_target()
         for vid, override in self._voice_targets.items():
@@ -377,24 +412,47 @@ class SynthApp:
         return any(i.key == nid and i.type == "drone"
                    for i in self.rack.instances)
 
+    @staticmethod
+    def _split_ep(ep) -> tuple[str, int | None]:
+        """Ctl endpoint grammar: "keyshift.2:3" = node "keyshift.2", lane 3.
+        Nodes without lanes are plain ids ("arp" → ("arp", None))."""
+        s = str(ep)
+        if ":" not in s:
+            return s, None
+        base, _, lane = s.partition(":")
+        try:
+            return base, int(lane)
+        except ValueError:
+            return base, -1  # malformed lane — never validates
+
     def _ctl_src_ok(self, src) -> bool:
-        return src in CTL_SOURCES or src in self.tonics
+        base, lane = self._split_ep(src)
+        if base in self.keyshifts:
+            return lane is not None and 1 <= lane <= 4
+        return lane is None and (base in CTL_SOURCES or base in self.tonics)
 
     def _ctl_dst_ok(self, dst) -> bool:
-        return (dst in CTL_TARGETS or dst == "voice"  # primary id is reserved
-                or dst in self.voices or dst in self.tonics
-                or self._is_drone_id(dst))
+        base, lane = self._split_ep(dst)
+        if base in self.keyshifts:
+            return lane is not None and 1 <= lane <= 4
+        return lane is None and (
+            base in CTL_TARGETS or base == "voice"  # primary id is reserved
+            or base in self.voices or base in self.tonics
+            or self._is_drone_id(base))
 
     def _ctl_sinks(self, src: str) -> list:
         """Resolve a node's outgoing wires to note-sink objects, live.
         (Deck REPLAY resolution lives in looper._sink(), which reads the same
-        ctl_wires — this handles keys/arp/tonic dispatch. Wires INTO drone
-        instances are tonic wires: root updates, not note events — skipped.)"""
+        ctl_wires — this handles keys/arp/tonic/keyshift dispatch. Wires INTO
+        drone instances are tonic wires: root updates, not note events —
+        skipped. Keyshift lanes are addressed "id:lane": lane k in → lane k
+        out only, so multiple signals ride one shifter without merging.)"""
         sinks = []
         for w in self.ctl_wires:
             if w["from"] != src:
                 continue
             t = w["to"]
+            base, lane = self._split_ep(t)
             if t == "arp" and self.arp is not None:
                 sinks.append(self.arp)
             elif t in self.voices:
@@ -405,6 +463,11 @@ class SynthApp:
                              else self._deck_raw_tap)
             elif t in self.tonics:
                 sinks.append(self.tonics[t])
+            elif base in self.keyshifts and lane is not None:
+                try:
+                    sinks.append(self.keyshifts[base].lane_in(lane))
+                except ValueError:
+                    pass  # stale wire with a bad lane — skip
         return sinks
 
     def set_ctl_wire(self, action: str, src: str, dst: str | None = None) -> None:
@@ -420,7 +483,10 @@ class SynthApp:
             if action == "add":
                 if not self._ctl_dst_ok(dst):
                     raise ValueError(f"cannot wire control into {dst!r}")
-                if src == dst:
+                # self-wires are forbidden at the NODE level: for lane nodes
+                # (keyshift) even cross-lane self-wires would recurse
+                # synchronously through the shifter
+                if self._split_ep(src)[0] == self._split_ep(dst)[0]:
                     raise ValueError(f"{src} → {dst} would loop on itself")
                 if self._is_drone_id(dst) and src not in self.tonics:
                     raise ValueError(
@@ -697,6 +763,37 @@ class SynthApp:
                 raise KeyError(f"no tonic deriver {tid!r}")
             d.configure(**settings)
 
+    # -- key shifters -----------------------------------------------------------
+
+    def spawn_keyshift(self, want_id: str | None = None) -> str:
+        with self._lock:
+            kid = want_id or alloc_id("keyshift", self.keyshifts.keys())
+            if kid not in self.keyshifts:
+                self.keyshifts[kid] = KeyShifter(self, kid)
+            return kid
+
+    def remove_keyshift(self, kid: str) -> None:
+        with self._lock:
+            ks = self.keyshifts.pop(kid, None)
+            if ks is None:
+                raise KeyError(f"no key shifter {kid!r}")
+            try:
+                ks.shutdown()  # closes open notes downstream + their taps
+            except Exception:  # noqa: BLE001
+                pass
+            # its control-plane presence goes with it (lane endpoints too)
+            self.ctl_wires = [
+                w for w in self.ctl_wires
+                if kid not in (self._split_ep(w.get("from"))[0],
+                               self._split_ep(w.get("to"))[0])]
+
+    def set_keyshift(self, kid: str, **settings) -> None:
+        with self._lock:
+            ks = self.keyshifts.get(kid)
+            if ks is None:
+                raise KeyError(f"no key shifter {kid!r}")
+            ks.configure(**settings)
+
     def set_drone_follow(self, iid: str, on: bool) -> None:
         """The drone card's tonic toggle: root updates drive freq or don't."""
         with self._lock:
@@ -727,6 +824,12 @@ class SynthApp:
                     freq=2000 if hi else 1400,   # high tick on the 1 (toggleable)
                     amp=0.3 if hi else 0.18,
                 )
+            except Exception:  # noqa: BLE001
+                pass
+        # key shifters ride the transport: progression steps land on beat 0
+        for ks in list(self.keyshifts.values()):
+            try:
+                ks.on_beat(bar, beat)
             except Exception:  # noqa: BLE001
                 pass
         callback = self.on_beat_event
@@ -867,6 +970,11 @@ class SynthApp:
             self.lfos.clear()
             for d in self.tonics.values():
                 d.shutdown()
+            for ks in self.keyshifts.values():
+                try:
+                    ks.shutdown()
+                except Exception:  # noqa: BLE001
+                    pass
             self.transport.shutdown()
             if self.reloader:
                 self.reloader.stop()
@@ -1021,6 +1129,7 @@ class SynthApp:
                 "voices": [{"id": vid, "target": v.target_key}
                            for vid, v in self.voices.items()],
                 "tonics": [d.settings() for d in self.tonics.values()],
+                "keyshifts": [k.settings() for k in self.keyshifts.values()],
                 "transpose": self._transpose,
                 "midi_inputs": _list_midi_inputs(),
                 "midi_port": self.router.active_port if self.router else None,

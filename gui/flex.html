@@ -133,6 +133,23 @@
   .expander { cursor: pointer; color: var(--ink-2); font-size: 10px; padding: 0 3px;
     margin-left: 2px; }
   .expander:hover { color: var(--ink-1); }
+  /* key shifter: progression step strip + the pop-out key palette */
+  .ksgrid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; margin: 2px 0; }
+  .ksstep { aspect-ratio: 1; border: 0; padding: 0; border-radius: 2px;
+    background: var(--hairline); cursor: pointer; color: var(--ink-2);
+    font-size: 8px; font-family: inherit; line-height: 1; }
+  .ksstep.on { background: var(--ctl); color: #0d0d0d; font-weight: 700; }
+  .ksstep.sel { outline: 1.5px solid #fff; }
+  .ksstep.ph { box-shadow: 0 0 0 1.5px rgba(255,255,255,0.75); }
+  #keypop { position: fixed; z-index: 80; background: var(--card);
+    border: 1px solid var(--ink-2); border-radius: 9px; padding: 6px;
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px;
+    box-shadow: 0 10px 26px rgba(0,0,0,0.6); }
+  #keypop button { background: var(--hairline); color: var(--ink-1); border: 0;
+    border-radius: 5px; font-size: 10px; padding: 5px 7px; cursor: pointer;
+    font-family: inherit; white-space: nowrap; }
+  #keypop button:hover { background: #3a3a38; }
+  #keypop button.sel { background: var(--ctl); color: #0d0d0d; font-weight: 700; }
 
   .port { position: absolute; width: 12px; height: 12px; border-radius: 50%;
     border: 2px solid var(--plane); cursor: crosshair; z-index: 5; }
@@ -1300,14 +1317,36 @@ function voiceIds() {
 function tonicIds() {
   return new Set(((state && state.tonics) || []).map(t => t.id));
 }
+function keyshiftIds() {
+  return new Set(((state && state.keyshifts) || []).map(k => k.id));
+}
+// ctl endpoint grammar: "keyshift.2:3" = node "keyshift.2", lane 3. Nodes
+// without lanes are plain ids (unchanged).
+function splitEp(s) {
+  const i = String(s).indexOf(":");
+  return i < 0 ? [String(s), undefined]
+               : [String(s).slice(0, i), parseInt(String(s).slice(i + 1), 10)];
+}
+function laneOk(l) { return Number.isInteger(l) && l >= 1 && l <= 4; }
 function ctlSrcOk(s) {
-  return s === "keys" || s === "arp" || s === "deck" || tonicIds().has(s);
+  const [b, l] = splitEp(s);
+  if (keyshiftIds().has(b)) return laneOk(l);
+  return l === undefined &&
+    (b === "keys" || b === "arp" || b === "deck" || tonicIds().has(b));
 }
 function ctlDstOk(d) {
-  return d === "arp" || d === "deck" || voiceIds().has(d) || tonicIds().has(d);
+  const [b, l] = splitEp(d);
+  if (keyshiftIds().has(b)) return laneOk(l);
+  return l === undefined &&
+    (b === "arp" || b === "deck" || voiceIds().has(b) || tonicIds().has(b));
 }
 // backend node id for a canvas node (module cards carry their instance id)
 function ctlId(n) { return n.chainKey || n.gid; }
+// full ctl ENDPOINT for a node+port (lane ports carry their ":<lane>" suffix)
+function ctlEp(n, p) {
+  const id = ctlId(n);
+  return p && p.lane ? `${id}:${p.lane}` : id;
+}
 function connectAction(out, inn) {
   const po = out.port, pi = inn.port;
   if (!po || !pi || po.sig !== pi.sig || out.node === inn.node) return null;
@@ -1347,8 +1386,10 @@ function connectAction(out, inn) {
       inn.node.mod.params && "freq" in inn.node.mod.params && "gate" in inn.node.mod.params)
     return () => send({type: "set_voice_target", key: inn.node.chainKey,
                        voice: out.node.gid});
-  const from = ctlId(out.node), to = ctlId(inn.node);
-  if (ctlSrcOk(from) && ctlDstOk(to) && from !== to)
+  const from = ctlEp(out.node, out.port), to = ctlEp(inn.node, inn.port);
+  // no self-wires — for lane nodes that's a BASE-id rule (keyshift:1 →
+  // keyshift:2 would recurse synchronously through the shifter)
+  if (ctlSrcOk(from) && ctlDstOk(to) && splitEp(from)[0] !== splitEp(to)[0])
     return () => send({type: "ctl_wire", action: "add", from, to});
   return null;
 }
@@ -1437,7 +1478,7 @@ function spliceExistingIntoWire(w, node) {
 // unchanged — (re)send its ctl_wire add (a dedup no-op if already present)
 // and remember the monitor rides it; rebuildGraph then draws A→mon→B.
 function spliceMonitorIntoCtl(w, node) {
-  const from = ctlId(w.from.node), to = ctlId(w.to.node);
+  const from = ctlEp(w.from.node, w.from.port), to = ctlEp(w.to.node, w.to.port);
   if (!ctlSrcOk(from) || !ctlDstOk(to)) return;  // half a ride / voice→target
   const set = monRide.get(node.gid) || new Set();
   set.add(`${from}>${to}`);       // fan-in: ride several wires = union of sources
@@ -1453,7 +1494,7 @@ function spliceWaveIntoAudio(w, node) {
   const to = w.to.node.gid === "master" ? "master" : w.to.node.chainKey;
   if (!from || !to || from === "drums") return;
   waveRide.set(node.gid, `${from}>${to}`);
-  node.waveHist = [];             // fresh history for the new feed
+  node.waveHist = blankWaveHist();   // fresh FIXED-length window for the new feed
   rebuildGraph();
 }
 
@@ -1629,7 +1670,11 @@ function buildChainCard(mod) {
     rows.push(row);
     quietRows.push({pname, rowEl: row});
   }
-  const mtype = mod.type || mod.key;   // LIB/type lookups; key is the instance id
+  // LIB/type lookups; key is the instance id — when a chain entry lacks the
+  // explicit type field, derive it from the id ("scope_tap.2" → "scope_tap"),
+  // NEVER use the raw instance id as a type (v5 regression: broke scope/drone
+  // card detection for suffixed instances)
+  const mtype = mod.type || String(mod.key).split(".")[0];
   const isDrone = mtype === "drone";
   if (isDrone) {
     // the drone's ctl-plane presence: a follow toggle for its tonic-in
@@ -1795,6 +1840,138 @@ function buildTonicCard(t) {
                   kill: () => send({type: "remove_tonic", id: gid}),
                   ports: [["in", "ctl", "notes"], ["out", "ctl", "thru"],
                           ["out", "tonic", "tonic"]]});
+}
+
+// ---- key shifter: Grasshopper-ish key popover + progression step strip ----
+// 12 pitch classes labeled from A (values = semitone distance from C, the
+// home key — the backend maps that distance to the NEAREST shift, ±6 st).
+const KEY_LABELS = [["A", 9], ["A#/Bb", 10], ["B", 11], ["C", 0], ["C#/Db", 1],
+                    ["D", 2], ["D#/Eb", 3], ["E", 4], ["F", 5], ["F#/Gb", 6],
+                    ["G", 7], ["G#/Ab", 8]];
+const KEY_SHORT = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
+let keyPop = null;
+function closeKeyPop() { if (keyPop) { keyPop.remove(); keyPop = null; } }
+function openKeyPop(anchorEl, current, onPick) {
+  closeKeyPop();
+  const el = document.createElement("div");
+  el.id = "keypop";
+  for (const [label, pc] of KEY_LABELS) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    if (pc === current) b.classList.add("sel");
+    b.addEventListener("pointerdown", (e) => e.stopPropagation());
+    b.addEventListener("click", (e) => { e.stopPropagation(); onPick(pc); });
+    el.appendChild(b);
+  }
+  document.body.appendChild(el);
+  const r = anchorEl.getBoundingClientRect();
+  el.style.left = Math.max(8, Math.min(window.innerWidth - el.offsetWidth - 8,
+                                       r.right + 8)) + "px";
+  el.style.top = Math.max(8, Math.min(window.innerHeight - el.offsetHeight - 8,
+                                      r.top - 8)) + "px";
+  keyPop = el;
+}
+// click-away closes (capture phase: runs before whatever was clicked)
+document.addEventListener("pointerdown", (e) => {
+  if (keyPop && !keyPop.contains(e.target)) closeKeyPop();
+}, true);
+
+const KS_LENGTHS = [1, 2, 4, 8, 12, 16, 24, 32];
+function buildKeyshiftCard(k) {
+  const gid = k.id;
+  const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
+  const sendKS = () => send({type: "set_keyshift", id: gid, key: k.key,
+                             length: k.length, steps: k.steps});
+  let selStep = null;
+  const rows = [
+    rowChip({gid}, "key", {
+      text: KEY_SHORT[k.active ?? k.key] ?? "C",
+      onClick: (chip) => {
+        openKeyPop(chip, k.key, (pc) => {
+          k.key = pc;
+          if (!k.steps.some(s => s !== null)) k.active = pc;  // static mode
+          chip.textContent = KEY_SHORT[k.active ?? pc];
+          sendKS();
+          closeKeyPop();
+        });
+      },
+    }),
+    rowChip({gid}, "length", {
+      text: k.length + (k.length === 1 ? " bar" : " bars"),
+      onClick: (chip) => {
+        const i = KS_LENGTHS.indexOf(k.length);
+        k.length = KS_LENGTHS[(i + 1) % KS_LENGTHS.length];
+        while (k.steps.length < k.length) k.steps.push(null);
+        k.steps.length = k.length;
+        chip.textContent = k.length + (k.length === 1 ? " bar" : " bars");
+        sendKS();
+        paintSteps(n, true);
+      },
+    }),
+  ];
+  const n = addCard({gid, name: "Key Shifter" + suffix, short: "Shift" + suffix,
+    sub: "key transpose · 4 lanes", fam: "ctl", rows,
+    expandable: true, expanded: !!expandMem[gid], wide: true,
+    vizHTML: `<div class="ksgrid"></div>`,
+    kill: () => send({type: "remove_keyshift", id: gid}),
+    ports: [["in", "ctl", "in.1"], ["in", "ctl", "in.2"],
+            ["in", "ctl", "in.3"], ["in", "ctl", "in.4"],
+            ["out", "ctl", "out.1"], ["out", "ctl", "out.2"],
+            ["out", "ctl", "out.3"], ["out", "ctl", "out.4"]]});
+  for (const p of n.ports) {           // lane handles: "in.3" → lane 3
+    const m2 = /^(?:in|out)\.(\d)$/.exec(p.label);
+    if (m2) p.lane = parseInt(m2[1], 10);
+  }
+  n.ks = k;
+  const paintSteps = (node, rebuild) => {
+    const grid = node.el.querySelector(".ksgrid");
+    if (!grid) return;
+    if (rebuild || grid.children.length !== k.length) {
+      grid.innerHTML = "";
+      grid.style.gridTemplateColumns =
+        `repeat(${Math.min(8, Math.max(4, k.length))}, 1fr)`;
+      for (let s = 0; s < k.length; s++) {
+        const b = document.createElement("button");
+        b.className = "ksstep";
+        b.dataset.s = s;
+        b.addEventListener("pointerdown", (e) => e.stopPropagation());
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const i = parseInt(b.dataset.s, 10);
+          if (selStep === i) {
+            // click the (selected) assigned step again = clear it
+            if (k.steps[i] !== null) { k.steps[i] = null; sendKS(); }
+            selStep = null;
+            closeKeyPop();
+          } else {
+            selStep = i;   // select, then pick a key in the pop-out to assign
+            openKeyPop(b, k.steps[i], (pc) => {
+              k.steps[i] = pc;
+              sendKS();
+              selStep = null;
+              closeKeyPop();
+              paintSteps(node);
+            });
+          }
+          paintSteps(node);
+        });
+        grid.appendChild(b);
+      }
+      requestAnimationFrame(() => {
+        layoutPorts(node); rebuildObstacles(); rerouteAll();
+      });
+    }
+    for (const b of grid.children) {
+      const i = parseInt(b.dataset.s, 10);
+      const v = k.steps[i];
+      b.textContent = v === null || v === undefined ? "·" : KEY_SHORT[v];
+      b.classList.toggle("on", v !== null && v !== undefined);
+      b.classList.toggle("sel", selStep === i);
+    }
+  };
+  n.paintKsSteps = paintSteps;
+  paintSteps(n, true);
+  return n;
 }
 
 function buildDeckCard() {
@@ -2019,6 +2196,7 @@ function rebuildGraph() {
     posMem[n.gid] = [n.x, n.y];
     if (n.gid === "deck") expandMem.deck = n.expanded;
     if (n.gid === "drums") expandMem.drums = n.expanded;
+    if (n.ks) expandMem[n.gid] = n.expanded;
   }
   for (const w of [...wires]) removeWire(w);
   lineCount.audio = 0; lineCount.ctl = 0; lineCount.mod = 0; lineCount.tonic = 0;
@@ -2034,6 +2212,7 @@ function rebuildGraph() {
     ? state.voices : [{id: "voice", target: state.voice_target}];
   const voiceNodes = voiceList.map(buildVoiceCard);
   const tonicNodes = (state.tonics || []).map(buildTonicCard);
+  const ksNodes = (state.keyshifts || []).map(buildKeyshiftCard);
   const services = [], chainNodes = [];
   for (const mod of state.chain) {
     const n = buildChainCard(mod);
@@ -2064,7 +2243,7 @@ function rebuildGraph() {
   // derivers + services sit left of the chain, below the controller cascade
   const svcY = Math.max(...[keys, arp, deck, ...voiceNodes].filter(Boolean)
     .map(n => n.y + (n.el.offsetHeight || 64))) + 2 * GRID;
-  placeCol([...tonicNodes, ...services], CTL_X, snap(svcY));
+  placeCol([...tonicNodes, ...ksNodes, ...services], CTL_X, snap(svcY));
   placeCol([drums], RIGHT_X, MIN_Y);
   // each LFO lands left of its target module
   for (let i = 0; i < lfoNodes.length; i++) {
@@ -2078,11 +2257,13 @@ function rebuildGraph() {
   }
 
   // ---- wires (derived, exactly mirroring server truth) ----
-  const port = (n, dir, sig, param) => n && n.ports.find(p =>
-    p.dir === dir && p.sig === sig && (!param || p.param === param) && (!!param === !!p.quiet));
+  const port = (n, dir, sig, param, lane) => n && n.ports.find(p =>
+    p.dir === dir && p.sig === sig && (!param || p.param === param) &&
+    (!!param === !!p.quiet) && (lane === undefined || p.lane === lane));
   const W = (a, asig, b, bsig, opts) => a && b && addWire(
-    {node: a, port: port(a, "out", asig)},
-    {node: b, port: port(b, "in", bsig, opts && opts.param)}, opts || {});
+    {node: a, port: port(a, "out", asig, null, opts && opts.fromLane)},
+    {node: b, port: port(b, "in", bsig, opts && opts.param, opts && opts.toLane)},
+    opts || {});
   // control: SERVER TRUTH — state.ctl_wires defines the note router among
   // keys/arp/deck/voice ids/tonic ids/drone instance ids. Cut = ctl_wire
   // remove; port drag ctl-out → ctl-in = ctl_wire add (connectAction). A
@@ -2090,11 +2271,14 @@ function rebuildGraph() {
   // drone tonic-in); everything else rides the green ctl family.
   const ctlNode = (k) => nodes.get(k) || nodes.get("m:" + k);
   for (const cw of (state.ctl_wires || [])) {
-    const a = ctlNode(cw.from), b = ctlNode(cw.to);
+    // lane endpoints ("keyshift.2:3") resolve to the base node's lane port
+    const [fromBase, fromLane] = splitEp(cw.from);
+    const [toBase, toLane] = splitEp(cw.to);
+    const a = ctlNode(fromBase), b = ctlNode(toBase);
     if (!a || !b) continue;   // e.g. a wired node whose card isn't spawned
     const cut = () => send({type: "ctl_wire", action: "remove",
                             from: cw.from, to: cw.to});
-    if (b.mod && (b.mod.type || b.mod.key) === "drone") {
+    if (b.mod && (b.mod.type || String(b.mod.key).split(".")[0]) === "drone") {
       W(a, "tonic", b, "tonic", {cut});   // its own color family + handles
       continue;
     }
@@ -2104,9 +2288,9 @@ function rebuildGraph() {
       set.has(`${cw.from}>${cw.to}`) && nodes.get(gid));
     if (ride) {
       const mon = nodes.get(ride[0]);
-      W(a, "ctl", mon, "ctl", {cut});
-      W(mon, "ctl", b, "ctl", {cut});
-    } else W(a, "ctl", b, "ctl", {cut});
+      W(a, "ctl", mon, "ctl", {cut, fromLane});
+      W(mon, "ctl", b, "ctl", {cut, toLane});
+    } else W(a, "ctl", b, "ctl", {cut, fromLane, toLane});
   }
   // each voice → its target source stays derived (re-drag/chip-click =
   // set_voice_target; a mono voice always drives exactly one target, so
@@ -2183,6 +2367,7 @@ function renderPalette() {
   h3("control");
   btn("LFO ∿", FAMILY.service, () => buildArmedLfo());
   btn("Tonic Deriver", "#d9a521", () => send({type: "spawn_tonic"}));
+  btn("Key Shifter", FAMILY.ctl, () => send({type: "spawn_keyshift"}));
   // the palette NEVER removes placed modules: any entry can be spawned
   // again — every click/drag makes a fresh instance ("lowpass.2", ...)
   const avail = (state && state.available) || [];
@@ -2325,15 +2510,29 @@ function onBeat(m) {
   beatAnchor = {time: performance.now(), downbeat: m.beat === 0};
   deckAnchor = (m.loop === null || m.loop === undefined)
     ? null : {time: performance.now(), phase: m.loop};
+  // key shifter progression: highlight the playing step (bar % length)
+  for (const n of nodes.values()) {
+    if (!n.ks) continue;
+    const idx = ((m.bar % n.ks.length) + n.ks.length) % n.ks.length;
+    for (const b of n.el.querySelectorAll(".ksstep"))
+      b.classList.toggle("ph", parseInt(b.dataset.s, 10) === idx);
+  }
 }
 
 const rollNotes = [];   // {note, t0, t1, deck} from "voiced" (wire pulses)
 const tapNotes = [];    // {note, t0, t1, src} from "tap" — note monitor feed
 function onMidi(e) {
   if (e.kind === "tap") {
-    // one tap per source-fire (keys/arp/deck) — monitors filter by src
-    if (e.on) tapNotes.push({note: e.note, t0: performance.now(), t1: null, src: e.src});
-    else for (let i = tapNotes.length - 1; i >= 0; i--)
+    // one tap per source-fire (keys/arp/deck/tonic*/keyshift*) — monitors
+    // filter by src
+    if (e.on) {
+      // a re-fired note that is still open closes its old segment first —
+      // otherwise duplicate opens pile up and pin full-width bars forever
+      for (let i = tapNotes.length - 1; i >= 0; i--)
+        if (tapNotes[i].note === e.note && tapNotes[i].t1 === null &&
+            tapNotes[i].src === e.src) { tapNotes[i].t1 = performance.now(); break; }
+      tapNotes.push({note: e.note, t0: performance.now(), t1: null, src: e.src});
+    } else for (let i = tapNotes.length - 1; i >= 0; i--)
       if (tapNotes[i].note === e.note && tapNotes[i].t1 === null &&
           tapNotes[i].src === e.src) { tapNotes[i].t1 = performance.now(); break; }
     while (tapNotes.length > 400) tapNotes.shift();
@@ -2360,6 +2559,12 @@ function onMidi(e) {
       state.looper = {...state.looper, ...rest};
       updateDeckCard(nodes.get("deck"));
     }
+  } else if (e.kind === "keyshift") {
+    // a shifter's active key moved (progression step landed) — update chip
+    const k = (state && state.keyshifts || []).find(x => x.id === e.id);
+    if (k) k.active = e.active;
+    const setter = uiParam[`${e.id}.key`];
+    if (setter) setter(0, KEY_SHORT[e.active] ?? "C");
   } else if (e.kind === "tonic_out") {
     // a deriver's root changed — update its card's readout in place
     const id = `${e.id}.root`;
@@ -2450,6 +2655,11 @@ function waveSrcKey(gid) {
   return ((state && state.wires) || []).some(w => w.from === a && w.to === b)
     ? a : null;   // ridden wire gone → back to global
 }
+// FIXED-length rolling window (v5 regression fix): the history is seeded
+// full and shifted on EVERY push, so the strip rolls right-to-left at a
+// constant bar width instead of packing ever-thinner blocks as it grows.
+const WAVE_HIST_N = 100;
+function blankWaveHist() { return new Array(WAVE_HIST_N).fill(0); }
 setInterval(() => {
   if (document.hidden) return;
   for (const n of nodes.values()) {
@@ -2460,8 +2670,9 @@ setInterval(() => {
     if (s && s.length) {   // envelope: peak of |samples| from the last reply
       let pk = 0;
       for (let i = 0; i < s.length; i++) pk = Math.max(pk, Math.abs(s[i]));
-      (n.waveHist = n.waveHist || []).push(pk);
-      if (n.waveHist.length > 200) n.waveHist.shift();
+      const hist = (n.waveHist = n.waveHist || blankWaveHist());
+      hist.push(pk);
+      while (hist.length > WAVE_HIST_N) hist.shift();
     }
     send({type: "scope", key: src});
   }
@@ -2481,7 +2692,9 @@ function monSources(gid) {
   const live = new Set(((state && state.ctl_wires) || [])
     .map(w => `${w.from}>${w.to}`));
   const srcs = new Set();
-  for (const wid of rides) if (live.has(wid)) srcs.add(wid.split(">")[0]);
+  // lane endpoints ("keyshift:2") tap with their BASE id — filter on that
+  for (const wid of rides) if (live.has(wid))
+    srcs.add(wid.split(">")[0].split(":")[0]);
   return srcs.size ? srcs : null;
 }
 
@@ -2497,10 +2710,12 @@ function drawVizLoop(now) {
     if (cv.width !== cv.clientWidth) cv.width = cv.clientWidth;
     const ctx = cv.getContext("2d"), W = cv.width, H = cv.height;
     ctx.clearRect(0, 0, W, H);
-    if (viz === "deck") drawDeckViz(ctx, W, H, now, style);
-    else if (viz === "scope") drawScopeViz(n, ctx, W, H, style);
-    else if (viz === "wave") drawWaveViz(n, ctx, W, H, style);
-    else if (viz === "notes") drawNotesViz(n, ctx, W, H, now, style);
+    try {   // one bad card must never kill the shared rAF loop (all viz dies)
+      if (viz === "deck") drawDeckViz(ctx, W, H, now, style);
+      else if (viz === "scope") drawScopeViz(n, ctx, W, H, style);
+      else if (viz === "wave") drawWaveViz(n, ctx, W, H, style);
+      else if (viz === "notes") drawNotesViz(n, ctx, W, H, now, style);
+    } catch (err) { console.warn("viz", viz, err); }
   }
   requestAnimationFrame(drawVizLoop);
 }
@@ -2597,7 +2812,8 @@ function drawWaveViz(n, ctx, W, H, style) {
 const TAP_COLORS = {keys: "#1baf7a", arp: "#e8c832", deck: "#e34948"};
 function tapColor(src, style) {
   if (TAP_COLORS[src]) return TAP_COLORS[src];
-  if (String(src).startsWith("tonic")) return "#d9a521";  // deriver thru taps
+  if (String(src).startsWith("tonic")) return "#d9a521";    // deriver thru taps
+  if (String(src).startsWith("keyshift")) return "#4fd08c"; // shifter out fires
   return style.getPropertyValue("--ctl");
 }
 function drawNotesViz(n, ctx, W, H, now, style) {

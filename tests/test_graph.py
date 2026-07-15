@@ -21,6 +21,7 @@ sys.path.insert(0, str(REPO))
 from synthbase.rack import Rack, alloc_id, type_of  # noqa: E402
 from synthbase.drums import DrumMachine  # noqa: E402
 from synthbase.app import SynthApp, default_ctl_wires  # noqa: E402
+from synthbase.keyshift import KeyShifter, nearest_offset  # noqa: E402
 from synthbase.looper import _FanSink  # noqa: E402
 from synthbase.midi import MonoVoice  # noqa: E402
 
@@ -334,6 +335,245 @@ def test_tap_emission():
           tap == [{"kind": "tap", "src": "arp", "note": 64, "on": True}])
 
 
+# ---- v6 regression: every silencing path CLOSES its open taps ----------------------
+# (an "on" tap with no "off" pins a full-width bar on the note monitor and,
+# recorded, a full-width smear on the deck — the reported v5 rendering bugs)
+
+def test_alloff_closes_taps():
+    app = SynthApp(use_midi=False, use_reload=False)
+    app.arp = FakeNoteSink()
+    app.voice = FakeNoteSink()
+    taps = []
+    app.on_midi_event = lambda e: taps.append(dict(e))
+
+    # keys panic: held notes must close their taps
+    app.note_on(60)
+    app.note_on(64)
+    taps.clear()
+    app.all_notes_off()
+    offs = sorted(e["note"] for e in taps
+                  if e.get("kind") == "tap" and e.get("src") == "keys"
+                  and e.get("on") is False)
+    check("panic closes every open keys tap", offs == [60, 64])
+    taps.clear()
+    app.all_notes_off()
+    check("panic is idempotent (no duplicate offs)",
+          not [e for e in taps if e.get("kind") == "tap"])
+
+    # arp output stop (pool empty / arp disable / patch switch → sink.all_off)
+    app._arp_out.note_on(72)
+    taps.clear()
+    app._arp_out.all_off()
+    check("arp all_off closes its open arp taps",
+          {"kind": "tap", "src": "arp", "note": 72, "on": False} in taps)
+
+    # deriver thru: all_off closes its open thru taps
+    tid = app.spawn_tonic()
+    d = app.tonics[tid]
+    d.note_on(55)
+    taps.clear()
+    d.all_off()
+    check("tonic deriver all_off closes its open thru taps",
+          {"kind": "tap", "src": "tonic", "note": 55, "on": False} in taps)
+    d.shutdown()
+
+    # deck replay release: _release_all emits src=deck off taps
+    app2 = SynthApp(use_midi=False, use_reload=False)
+    app2.arp = FakeNoteSink()
+    taps2 = []
+    app2.on_midi_event = lambda e: taps2.append(dict(e))
+    app2.ctl_wires = [{"from": "deck", "to": "arp"}]
+    app2.looper._sounding = {67}
+    app2.looper._release_all()
+    check("deck release closes its replay taps",
+          {"kind": "tap", "src": "deck", "note": 67, "on": False} in taps2)
+    check("deck release also released downstream", app2.arp.offs == [67])
+
+    # deck RECORD tap: panic while recording closes the take's open notes
+    app3 = SynthApp(use_midi=False, use_reload=False)
+    rec = []
+    app3.looper.record_raw = lambda note, on: rec.append((note, on))
+    app3.looper.state = "recording"
+    app3._deck_raw_tap.note_on(60)
+    app3._deck_raw_tap.all_off()
+    check("deck record tap closes open notes in the take",
+          rec == [(60, True), (60, False)])
+
+
+# ---- v6: key shifter ------------------------------------------------------------
+
+def test_keyshift_offsets():
+    # semitone distance from C, mapped NEAREST (>6 wraps down an octave)
+    check("offset C = 0", nearest_offset(0) == 0)
+    check("offset F# = +6", nearest_offset(6) == 6)
+    check("offset G = -5 (nearest, not +7)", nearest_offset(7) == -5)
+    check("offset A = -3", nearest_offset(9) == -3)
+    check("offset B = -1", nearest_offset(11) == -1)
+    check("offset E = +4", nearest_offset(4) == 4)
+    check("offsets all within ±6",
+          all(abs(nearest_offset(k)) <= 6 for k in range(12)))
+
+
+def test_keyshift_lanes_no_merge():
+    app = SynthApp(use_midi=False, use_reload=False)
+    kid = app.spawn_keyshift()
+    check("first shifter id is keyshift", kid == "keyshift")
+    check("second shifter suffixes", app.spawn_keyshift() == "keyshift.2")
+    app.remove_keyshift("keyshift.2")
+
+    v1, v2 = FakeNoteSink(), FakeNoteSink()
+    app.voices["voice"] = v1
+    app.voices["voice.2"] = v2
+    app.ctl_wires = []
+    app.set_ctl_wire("add", "keys", "keyshift:1")
+    app.set_ctl_wire("add", "keys", "keyshift:2")
+    app.set_ctl_wire("add", "keyshift:1", "voice")
+    app.set_ctl_wire("add", "keyshift:2", "voice.2")
+    app.set_keyshift(kid, key=7)   # G → -5
+
+    ks = app.keyshifts[kid]
+    ks.lane_note_on(1, 60)
+    check("lane 1 in → lane 1 out ONLY (no merge)",
+          v1.ons == [55] and v2.ons == [])
+    ks.lane_note_on(2, 62)
+    check("lane 2 in → lane 2 out ONLY", v2.ons == [57] and v1.ons == [55])
+    ks.lane_note_off(1, 60)
+    check("lane 1 off stays on lane 1", v1.offs == [55] and v2.offs == [])
+
+    # full dispatch through the wires: keys fans into both lanes
+    v1.ons.clear(); v2.ons.clear()
+    app.note_on(64)
+    check("keys → both lanes shift and fan to their own outs",
+          v1.ons == [59] and v2.ons == [59])
+    app.note_off(64)
+
+    # validation: lanes 1..4 only; bare/self wiring rejected
+    for src, dst in (("keys", "keyshift:5"), ("keys", "keyshift:0"),
+                     ("keys", "keyshift"), ("keyshift:1", "keyshift:2"),
+                     ("keyshift", "voice"), ("keys", "keyshift.9:1")):
+        try:
+            app.set_ctl_wire("add", src, dst)
+            check(f"reject {src}→{dst}", False)
+        except (ValueError, KeyError):
+            check(f"reject {src}→{dst}", True)
+
+    # taps: output fires are tagged with the shifter's id
+    taps = []
+    app.on_midi_event = lambda e: taps.append(dict(e))
+    ks.lane_note_on(3, 60)
+    ks.lane_note_off(3, 60)
+    check("shifter taps its output fires",
+          [(e["note"], e["on"]) for e in taps
+           if e.get("kind") == "tap" and e.get("src") == kid] ==
+          [(55, True), (55, False)])
+
+    # removal drops the shifter AND its lane wires
+    app.remove_keyshift(kid)
+    check("remove_keyshift drops shifter + lane wires",
+          kid not in app.keyshifts and app.ctl_wires == [])
+
+
+def test_keyshift_off_uses_ons_offset():
+    app = SynthApp(use_midi=False, use_reload=False)
+    kid = app.spawn_keyshift()
+    v = FakeNoteSink()
+    app.voices["voice"] = v
+    app.ctl_wires = [{"from": "keyshift:1", "to": "voice"}]
+    ks = app.keyshifts[kid]
+
+    ks.configure(key=0)          # C: no shift
+    ks.lane_note_on(1, 60)       # sounds 60
+    ks.configure(key=2)          # D: +2 — mid-note key change
+    ks.lane_note_off(1, 60)
+    check("off uses the ON's offset across a key change (no stuck note)",
+          v.ons == [60] and v.offs == [60])
+
+    ks.lane_note_on(1, 60)       # now shifts to 62
+    check("next on uses the new key", v.ons[-1] == 62)
+    ks.lane_note_off(1, 60)
+    check("and its off matches", v.offs[-1] == 62)
+
+    # all_off releases at the SHIFTED pitches
+    ks.configure(key=9)          # A → -3
+    ks.lane_note_on(1, 70)       # sounds 67
+    ks.configure(key=0)
+    ks.lane_all_off(1)
+    check("lane all_off releases at the shifted pitch", v.all_offs >= 1)
+    app.remove_keyshift(kid)
+
+
+def test_keyshift_progression():
+    app = SynthApp(use_midi=False, use_reload=False)
+    kid = app.spawn_keyshift()
+    ks = app.keyshifts[kid]
+    events = []
+    app.on_midi_event = lambda e: events.append(dict(e))
+
+    ks.configure(key=5, length=4, steps=[None, None, None, None])
+    check("empty track = static key", ks.active == 5)
+    check("settings shape", set(ks.settings()) ==
+          {"id", "key", "length", "steps", "active"})
+
+    ks.configure(steps=[0, None, 7, None])
+    # fake transport: drive on_beat directly, beat 0 of each bar steps
+    ks.on_beat(0, 0)
+    check("bar 0 lands step 0 (C)", ks.active == 0)
+    ks.on_beat(0, 1)
+    ks.on_beat(0, 2)
+    check("mid-bar beats do not step", ks.active == 0)
+    ks.on_beat(1, 0)
+    check("null step holds the previous key", ks.active == 0)
+    ks.on_beat(2, 0)
+    check("bar 2 lands step 2 (G)", ks.active == 7)
+    ks.on_beat(3, 0)
+    check("bar 3 holds", ks.active == 7)
+    ks.on_beat(6, 0)   # 6 % 4 = 2 → G again (no event: unchanged)
+    check("track wraps with bar % length", ks.active == 7)
+    ks.on_beat(8, 0)   # 8 % 4 = 0 → C
+    check("wrap back to step 0", ks.active == 0)
+    check("keyshift events emitted on active changes",
+          [e["active"] for e in events if e.get("kind") == "keyshift"] == [0, 7, 0])
+
+    # app's beat handler drives it (through the real hook)
+    ks.configure(steps=[3, None, None, None])
+    app._handle_beat(4, 0)
+    check("app._handle_beat rides the progression", ks.active == 3)
+
+    # length clamps + steps resize; state exposes the shifter
+    ks.configure(length=99)
+    check("length clamps to 32", ks.length == 32 and len(ks.steps) == 32)
+    ks.configure(length=2)
+    check("shrinking keeps prefix", ks.length == 2 and ks.steps == [3, None])
+    app.voices.clear()
+    st_keyshifts = [k.settings() for k in app.keyshifts.values()]
+    check("keyshifts exposed like voices/tonics",
+          st_keyshifts and st_keyshifts[0]["id"] == kid)
+    app.remove_keyshift(kid)
+
+
+def test_keyshift_persistence_shape():
+    """ctl_wires with lane endpoints survive like any other wire — the app
+    stores them verbatim and _ctl_sinks re-resolves live after rebuilds."""
+    app = SynthApp(use_midi=False, use_reload=False)
+    kid = app.spawn_keyshift()
+    app.ctl_wires = []
+    app.set_ctl_wire("add", "keys", f"{kid}:1")
+    app.set_ctl_wire("add", f"{kid}:1", "arp")
+    wires_before = [dict(w) for w in app.ctl_wires]
+    # a rebuild recreates arp/voices but never touches ctl_wires/keyshifts
+    app.arp = FakeNoteSink()
+    check("lane wires stored verbatim", app.ctl_wires == wires_before)
+    check("lane sinks re-resolve live",
+          app.keyshifts[kid].lane_in(1) is not None and
+          app.arp in [s for s in app._ctl_sinks(f"{kid}:1")])
+    # deck replay resolves lane endpoints too
+    app.ctl_wires = [{"from": "deck", "to": f"{kid}:3"}]
+    sink = app.looper._sink()
+    check("deck replay resolves a keyshift lane",
+          sink is app.keyshifts[kid].lane_in(3))
+    app.remove_keyshift(kid)
+
+
 # ---- drums target / to_chain compat --------------------------------------------
 
 def test_drums_target():
@@ -574,6 +814,12 @@ def main():
     test_spawn_unconnected()
     test_ctl_wires()
     test_tap_emission()
+    test_alloff_closes_taps()
+    test_keyshift_offsets()
+    test_keyshift_lanes_no_merge()
+    test_keyshift_off_uses_ons_offset()
+    test_keyshift_progression()
+    test_keyshift_persistence_shape()
     test_drums_target()
     test_instance_ids()
     test_multi_voice()

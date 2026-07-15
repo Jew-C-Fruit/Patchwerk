@@ -28,6 +28,10 @@ Protocol (JSON messages):
     {"type": "spawn_voice"} / {"type": "remove_voice", "id": "voice.2"}
     {"type": "spawn_tonic"} / {"type": "remove_tonic", "id": "tonic.2"}
     {"type": "set_tonic", "id": "tonic", "every": "1 bar", "octave": 2}
+    {"type": "spawn_keyshift"} / {"type": "remove_keyshift", "id": "keyshift.2"}
+    {"type": "set_keyshift", "id": "keyshift", "key": 7, "length": 8,
+     "steps": [0, null, 7, ...]}   (key/steps = pitch-class distance from C;
+        lanes wire via ctl_wire endpoints "keyshift:1".."keyshift:4")
     {"type": "drone_follow", "id": "drone", "on": true}  (tonic-in toggle)
     {"type": "set_voice_target", "key": "pluck", "voice": "voice.2"}
         (re-aim a mono voice; "voice" when omitted)
@@ -162,6 +166,17 @@ class GuiServer:
             self.synth.set_tonic(m["id"], every=m.get("every"),
                                  octave=m.get("octave"))
             await self._broadcast_state()
+        elif t == "spawn_keyshift":
+            self.synth.spawn_keyshift()
+            await self._broadcast_state()
+        elif t == "remove_keyshift":
+            self.synth.remove_keyshift(m["id"])
+            await self._broadcast_state()
+        elif t == "set_keyshift":
+            self.synth.set_keyshift(m["id"], key=m.get("key"),
+                                    length=m.get("length"), steps=m.get("steps"))
+            # clicking client already painted its card — update the others
+            await self._broadcast_state(exclude=sender)
         elif t == "drone_follow":
             self.synth.set_drone_follow(m["id"], m.get("on", True))
             await self._broadcast_state()

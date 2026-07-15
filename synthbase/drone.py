@@ -102,6 +102,7 @@ class TonicDeriver:
         self.octave = 2               # root lands at C{octave}..B{octave}
         self.root: int | None = None  # pitch class 0-11
         self.est = RootEstimator()
+        self._open: set[int] = set()  # thru notes on'd but not yet off'd
 
         self._thread: threading.Thread | None = None
         self._quit = threading.Event()
@@ -125,14 +126,20 @@ class TonicDeriver:
 
     def note_on(self, note: int, velocity: int = 100) -> None:
         self.est.observe(note)
+        self._open.add(int(note))
         self._tap(note, True)
         self._thru(lambda s: s.note_on(note, velocity))
 
     def note_off(self, note: int) -> None:
+        self._open.discard(int(note))
         self._tap(note, False)
         self._thru(lambda s: s.note_off(note))
 
     def all_off(self) -> None:
+        # close open thru taps — silencing paths must never strand an "on"
+        for n in list(self._open):
+            self._tap(n, False)
+        self._open.clear()
         self._thru(lambda s: s.all_off())
 
     def set_sustain(self, on: bool) -> None:

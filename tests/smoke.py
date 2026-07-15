@@ -57,6 +57,12 @@ def main() -> int:
     assert abs(midi_to_freq(60) - 261.6255653) < 1e-3
     print("ok    midi_to_freq")
 
+    # v6: the key shifter imports and its nearest-key mapping is sane
+    from synthbase.keyshift import KeyShifter, nearest_offset  # noqa: F401
+    assert nearest_offset(0) == 0 and nearest_offset(7) == -5
+    assert all(abs(nearest_offset(k)) <= 6 for k in range(12))
+    print("ok    synthbase.keyshift")
+
     print(f"\n{'PASS' if not failures else 'FAIL'} — {len(registry)} modules, {failures} failures")
     return 1 if failures else 0
 

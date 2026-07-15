@@ -61,6 +61,9 @@ def snapshot(app) -> dict:
         "tonics": [{k: v for k, v in d.settings().items()
                     if k in ("id", "every", "octave")}
                    for d in app.tonics.values()],
+        "keyshifts": [{k: v for k, v in ks.settings().items()
+                       if k in ("id", "key", "length", "steps")}
+                      for ks in getattr(app, "keyshifts", {}).values()],
     }
     if getattr(app, "drums", None):
         data["drums"] = app.drums.snapshot()
@@ -107,6 +110,11 @@ def load_preset(app, name: str) -> None:
             app.set_tonic(tid, every=t.get("every"), octave=t.get("octave"))
         if "drone" in data:
             app.set_drone(**data["drone"])
+        for k in data.get("keyshifts", []):
+            kid = k.get("id") or "keyshift"
+            app.spawn_keyshift(want_id=kid)
+            app.set_keyshift(kid, key=k.get("key"), length=k.get("length"),
+                             steps=k.get("steps"))
 
         # 4. Arp
         if app.arp and "arp" in data:

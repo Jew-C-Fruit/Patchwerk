@@ -182,6 +182,7 @@ class Looper:
             return self._deck_voice()
         voices = getattr(self.app, "voices", {}) or {}
         tonics = getattr(self.app, "tonics", {}) or {}
+        keyshifts = getattr(self.app, "keyshifts", {}) or {}
         sinks = []
         for w in wires:
             if w.get("from") != "deck":
@@ -197,6 +198,14 @@ class Looper:
                 sinks.append(voices[t])
             elif t in tonics:
                 sinks.append(tonics[t])
+            else:
+                # deck→keyshift.N:k = replay into that shifter lane
+                base, _, lane = str(t).partition(":")
+                if base in keyshifts and lane:
+                    try:
+                        sinks.append(keyshifts[base].lane_in(int(lane)))
+                    except (TypeError, ValueError):
+                        pass  # malformed/stale lane endpoint
         if not sinks:
             return None
         return sinks[0] if len(sinks) == 1 else _FanSink(sinks)
@@ -285,15 +294,16 @@ class Looper:
         self._deck_key = None
 
     def _release_all(self) -> None:
+        emit = getattr(self.app, "_emit_midi_event", None)
         sink = self._sink()
-        if sink is None:
-            self._sounding.clear()
-            return
         for n in list(self._sounding):
-            try:
-                sink.note_off(n)
-            except Exception:  # noqa: BLE001
-                pass
+            if sink is not None:
+                try:
+                    sink.note_off(n)
+                except Exception:  # noqa: BLE001
+                    pass
+            if emit:  # close the replay's viz taps too (no stuck bars)
+                emit({"kind": "tap", "src": "deck", "note": int(n), "on": False})
         self._sounding.clear()
 
     def _arm(self) -> None:
