@@ -42,7 +42,7 @@ PATCH = {
     # Wired to `morph`, the waveform slowly breathes between triangle and saw.
     "living": [
         {"key": "artifix_gen", "param": "morph",
-         "life": 0.35, "wander": 0.30, "depth": 0.40},
+         "life": 0.50, "wander": 0.30, "depth": 0.40},
     ],
 
     # The Allocation Intent: one conserved "intensity" split across the six

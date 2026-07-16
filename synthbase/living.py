@@ -14,9 +14,11 @@ work exactly like the LFO's: where in the target's range it orbits and how
 much of the range it covers. Range and curve are baked in at assign time,
 so depth/center stay normalized 0..1.
 
-Each assignment also publishes its raw (x, y, r²) trajectory on a 3-channel
-control bus so the Sphere visualizer can draw it — the ``r² = x²+y²`` term is
-the conserved-radius invariant the Artifix sphere illustrates.
+Each assignment also publishes a point ON the unit sphere — the direction of
+the 3-D attractor state, ``(x, y, z) / |(x, y, z)|`` — on a 3-channel control
+bus so the Sphere visualizer can draw it. Radius = 1 is the conserved
+invariant the Artifix sphere illustrates; as the attractor roams the octants
+that vector sweeps the whole surface.
 
 Mirrors LFOManager (assign/unassign/configure/on_node_replaced/snapshot/
 restore/state) so it plugs into the same app + server + GUI seams.
@@ -42,16 +44,20 @@ def _living(life=0.35, wander=0.3, depth=0.25, center=0.5,
     x, y, z = st[0], st[1], st[2]
     b = 0.19 - 0.12 * wander                      # lower b = more chaotic
     s = (1.0 + 2.4 * wander) * spd
-    # Impulse.kr(frequency=0) fires once at t=0 — kick off the attractor's
-    # unstable origin fixed point (same trick as golden_phaser).
-    kick = Impulse.kr(frequency=0)
-    nx = (x + (y.sin() - b * x) * s * dt + kick).clip(-3.2, 3.2)
-    ny = (y + (z.sin() - b * y) * s * dt).clip(-3.2, 3.2)
-    nz = (z + (x.sin() - b * z) * s * dt).clip(-3.2, 3.2)
+    # Impulse.kr(frequency=0) fires once at t=0 — a SMALL seed nudges the
+    # attractor off its unstable origin fixed point. The old kick of 1.0
+    # slammed x into the +wall and it never crossed zero again (the trajectory
+    # pinned in one octant — the Sphere dot stuck in a corner); 0.1 lets it
+    # roam symmetrically. The natural span is ~±5, so clip at ±8 as a safety
+    # rail it can't reach rather than a wall it lives against.
+    kick = 0.1 * Impulse.kr(frequency=0)
+    nx = (x + (y.sin() - b * x) * s * dt + kick).clip(-8.0, 8.0)
+    ny = (y + (z.sin() - b * y) * s * dt).clip(-8.0, 8.0)
+    nz = (z + (x.sin() - b * z) * s * dt).clip(-8.0, 8.0)
     LocalOut.kr(source=[nx, ny, nz])
 
     quasi = 0.5 + 0.5 * SinOsc.kr(frequency=0.031 * spd)   # incommensurate drift
-    chaos = 0.5 + 0.5 * (x * (1.0 / 3.2))
+    chaos = (0.5 + 0.5 * (x * (1.0 / 5.0))).clip(0.0, 1.0)  # x now centred on 0
     base = quasi * (1.0 - wander) + chaos * wander
     unit = (center + (base - 0.5) * 2.0 * depth).clip(0.0, 1.0)
     linear = lo + unit * (hi - lo)
@@ -59,8 +65,12 @@ def _living(life=0.35, wander=0.3, depth=0.25, center=0.5,
                      output_minimum=lo.clip(1e-4, 1e9), output_maximum=hi)
     Out.kr(bus=kout, source=linear * (1 - is_exp) + expo * is_exp)
 
-    xn, yn = x * (1.0 / 3.2), y * (1.0 / 3.2)
-    Out.kr(bus=traj_bus, source=[xn, yn, xn * xn + yn * yn])
+    # publish a point ON the unit sphere — the direction of the 3-D state.
+    # radius = 1 is the conserved invariant the Sphere viz draws, and as the
+    # attractor roams the octants this vector sweeps the whole surface, so the
+    # dot rides the sphere instead of clustering in one screen-corner.
+    mag = (x * x + y * y + z * z + 1e-6).sqrt()
+    Out.kr(bus=traj_bus, source=[x / mag, y / mag, z / mag])
 
 
 CONFIG_KEYS = ("life", "wander", "depth", "center")

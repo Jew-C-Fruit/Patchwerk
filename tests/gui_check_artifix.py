@@ -60,7 +60,8 @@ def main():
           const N = 2048, s = [];
           for (let i = 0; i < N; i++) s.push(Math.sin(2*Math.PI*i*20/N) * 0.5);
           __msg({type: 'scope_data', key: 'artifix_gen', sr: 44100, samples: s});
-          __msg({type: 'trajectory', traj: {'artifix_gen.morph': [0.3, -0.2, 0.13]}});
+          // a point ON the unit sphere (front hemisphere, uz>0)
+          __msg({type: 'trajectory', traj: {'artifix_gen.morph': [0.6, -0.4, 0.69]}});
         }""")
         page.wait_for_timeout(400)
 
@@ -83,6 +84,13 @@ def main():
           });
         }""")
         check("sphere dot stays inside the circle (containment)", contained)
+        # a far-side point (uz<0) must still render without error
+        page.evaluate("""() => {
+          __msg({type: 'trajectory', traj: {'artifix_gen.morph': [-0.3, 0.2, -0.93]}});
+        }""")
+        page.wait_for_timeout(120)
+        check("sphere renders a far-side (uz<0) point without error", not errors,
+              "; ".join(errors[:2]))
         check("spectrum polls a scope source",
               any(m.get("type") == "scope" for m in sent))
 

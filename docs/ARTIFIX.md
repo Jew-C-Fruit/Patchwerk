@@ -72,6 +72,19 @@ wire**, not by port-to-port dragging:
 - **Note Monitor** rides a **ctl** wire (the note-routing plane).
 - **Sphere** isn't wired at all — it auto-binds to a Living Oscillator.
 
+## Recently fixed
+
+- **Living attractor pinned in one octant → Sphere dot stuck in a corner.**
+  The old code kicked the Thomas attractor with an impulse of 1.0 and clipped
+  at ±3.2. The natural span is ~±5, so it slammed into the +x wall and never
+  crossed zero — the trajectory lived in a single octant and the Sphere dot
+  huddled top-right (and it skewed `morph` too). Fixed: seed of 0.1, clip rail
+  at ±8, chaos term re-centred on 0. The Living now roams all 8 octants.
+- **Sphere mapping.** `_living` now publishes a point ON the unit sphere
+  (`(x,y,z)/|v|`), so the dot rides the surface with real depth (front/back
+  shading) and sweeps the whole sphere. Radius = 1 is finally the literal
+  conserved invariant. Preset `life` bumped 0.35 → 0.50 for livelier drift.
+
 ## Open items
 
 - **Allocation card label legibility.** The six dim out-ports overlap the

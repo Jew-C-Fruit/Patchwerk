@@ -76,7 +76,7 @@ def main():
         check("living targets artifix_gen.morph",
               key == "artifix_gen" and pname == "morph", f"{key}.{pname}")
         check("living cfg passes life/wander/depth",
-              cfg.get("life") == 0.35 and cfg.get("wander") == 0.30
+              cfg.get("life") == 0.50 and cfg.get("wander") == 0.30
               and cfg.get("depth") == 0.40, str(cfg))
         check("living cfg has no key/param leakage",
               "key" not in cfg and "param" not in cfg, str(cfg))
