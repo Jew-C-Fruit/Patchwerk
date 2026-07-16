@@ -305,7 +305,49 @@ class SynthApp:
     def _build_patch(self, patch_name: str) -> None:
         """(Re)build rack + master + MIDI for a patch. Engine must be booted."""
         path = PATCHES_DIR / f"{patch_name}.py"
-        self._build_from(_read_patch(path), patch_name)
+        patch = _read_patch(path)
+        self._build_from(patch, patch_name)
+        self._apply_patch_mods(patch)
+
+    def _apply_patch_mods(self, patch: dict) -> None:
+        """Apply a patch's optional Artifix modulation preset — Living
+        Oscillators, Allocation Intents, and LFOs — once, on a FRESH load.
+
+        Called only from _build_patch (start / patch-switch / preset restore),
+        never from _build_from, so edit_chain's own snapshot/restore of these
+        managers is not double-applied. Every entry is best-effort: a bad key
+        or param logs and is skipped so one typo can't abort the whole build.
+
+        Schema (all keys optional; plain chain/bindings patches ignore them):
+            "lfos":        [{"key","param", rate?, shape?, depth?, center?}, ...]
+            "living":      [{"key","param", life?, wander?, depth?, center?}, ...]
+            "allocations": [{r?, w?:[6] | w0..w5?,
+                             "targets":[{"slot","key","param", gain?}, ...]}, ...]
+        """
+        for spec in patch.get("lfos") or []:
+            try:
+                cfg = {k: v for k, v in spec.items() if k not in ("key", "param")}
+                self.lfos.assign(spec["key"], spec["param"], **cfg)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[patch] lfo {spec!r} skipped: {exc!r}")
+        for spec in patch.get("living") or []:
+            try:
+                cfg = {k: v for k, v in spec.items() if k not in ("key", "param")}
+                self.living.assign(spec["key"], spec["param"], **cfg)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[patch] living {spec!r} skipped: {exc!r}")
+        for spec in patch.get("allocations") or []:
+            try:
+                cfg = {k: v for k, v in spec.items()
+                       if k not in ("targets", "w")}
+                for i, wv in enumerate((spec.get("w") or [])[:6]):
+                    cfg[f"w{i}"] = wv
+                aid = self.allocation.spawn(**cfg)
+                for t in spec.get("targets") or []:
+                    self.allocation.wire(aid, int(t["slot"]), t["key"],
+                                         t["param"], float(t.get("gain", 1.0)))
+            except Exception as exc:  # noqa: BLE001
+                print(f"[patch] allocation {spec!r} skipped: {exc!r}")
 
     def _build_from(self, patch: dict, patch_name: str) -> None:
 
