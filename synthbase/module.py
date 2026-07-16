@@ -63,6 +63,7 @@ FAMILIES = {
     "phaser": "time", "golden_phaser": "time", "autopan": "time",
     # dirt & dynamics
     "drive": "dirt", "bitcrush": "dirt", "wavefolder": "dirt",
+    "bias_drift_fuzz": "dirt",
     "compressor": "dyn",
     # pitch / vox
     "pitchshift": "vox", "ringmod": "vox",
