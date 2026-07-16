@@ -61,11 +61,28 @@ def load_patch(name):
     return py.PATCH
 
 
+# A synthetic patch exercising ALL three loader sections. Kept independent of
+# patches/artifix.py (whose default no longer carries lfo/allocation) so this
+# still covers the full _apply_patch_mods path; smoke.py validates the real
+# artifix preset separately.
+SYNTH_PATCH = {
+    "chain": [("artifix_gen", {})],
+    "living": [{"key": "artifix_gen", "param": "morph",
+                "life": 0.50, "wander": 0.30, "depth": 0.40}],
+    "lfos": [{"key": "artifix_gen", "param": "detune",
+              "rate": 0.15, "shape": 0, "depth": 0.45}],
+    "allocations": [{"r": 1.0, "w": [0.50, 0.55, 0.50, 0.40, 0.45, 0.30],
+                     "targets": [
+                         {"slot": 1, "key": "artifix_gen", "param": "harm"},
+                         {"slot": 2, "key": "artifix_gen", "param": "bright"},
+                         {"slot": 4, "key": "artifix_gen", "param": "res"}]}],
+}
+
+
 def main():
     app = StubApp()
-    patch = load_patch("artifix")
     # call the real loader with our stub as `self`
-    SynthApp._apply_patch_mods(app, patch)
+    SynthApp._apply_patch_mods(app, SYNTH_PATCH)
 
     calls = app.calls
 

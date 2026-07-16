@@ -10,17 +10,22 @@ This doc is the working memory for the build — revise it as the design moves.
 
 | Piece | Kind | Lives in | What it is |
 |---|---|---|---|
-| **Artifix Gen** | source module | `modules/artifix_gen.py` | Continuous generative voice: 5-voice unison + sub through an RLPF. Six modulation targets exposed as params. Plays the moment it's in the chain — no note needed. |
+| **Artifix Gen** | source module | `modules/artifix_gen.py` | Continuous generative voice: 5-voice **near-unison** + sub through an RLPF, tanh-warmed, with a built-in gentle stereo chorus. The tuned-by-ear "glass" default (soft, dark, wide, no beat). Six modulation targets exposed as params. Plays the moment it's in the chain — no note needed. |
 | **Living Oscillator** | modulator | `synthbase/living.py` (+ GUI in `gui/flex.html`) | Bounded-aperiodic drift (Thomas attractor). Maps onto any one param via a control bus; never quite repeats. Emits a trajectory the Sphere draws. |
 | **Allocation Intent** | modulator | `synthbase/allocation.py` (+ GUI) | A conserved "intensity" budget split across six dims (Σ mᵢ² = r²). Wire dims to params: as one rises the others yield. A held balance, not movement. |
 | **Spectrum** | visualizer | `gui/flex.html` (`drawSpectrumViz`) | Client-side FFT bars. Reuses the scope capture — no new server data. Rides an audio wire, or watches the master feed when unwired. |
 | **Sphere** | visualizer | `gui/flex.html` (`drawSphereViz`) | Radius-conserving trajectory of a Living Oscillator. Auto-binds to the first living assignment present. |
 
-### Artifix Gen params (the six dims + pitch/amp)
+### Artifix Gen params (the six dims + pitch/phase/amp)
 
 `pitch` (40–440, exp) · `morph` (waveform triangle→saw) · `harm` (harmonic
 balance) · `bright` (filter movement) · `res` (resonance) · `detune` (unison
-shimmer) · `stereo` (width) · `amp`.
+spread — **kept tiny by default so it doesn't beat**) · `stereo` (width) ·
+`phase` (chorus depth/mix — the "gentle phase" movement) · `amp`. Internal
+constants: `DRIVE=3.0` (tanh warmth + makeup gain), `SUB=0.24`.
+
+Glass defaults: `morph 0.30, harm 0.10, bright 0.36, res 0.13, detune 0.03,
+stereo 0.55, phase 0.60, amp 0.40`.
 
 Allocation dim slots map to these: `0 wave→morph`, `1 harm→harm`,
 `2 filt→bright`, `3 stereo→stereo`, `4 res→res`, `5 det→detune`.
@@ -36,10 +41,12 @@ python -m synthbase gui artifix        # then open http://127.0.0.1:8765
 python -m synthbase play patches/artifix.py
 ```
 
-It loads: Gen → master; a Living Oscillator on `morph`; an Allocation Intent
-holding a conserved balance across `harm`/`bright`/`res`; and a slow LFO on
-`detune`. The Living and Allocation **cards are already on the canvas,
-running** — then click **Spectrum** and **Sphere** in the palette to watch.
+It loads the tuned default: glass Gen → **reverb** → master, with a slow
+Living Oscillator breathing on `morph` (which also drives the Sphere). The
+reverb is a normal chain effect — pull it for the dry voice. The Allocation
+Intent and extra LFOs are **not** in the default (they pushed the voice off
+its calm glass character); they're one palette click away. Click **Spectrum**
+and **Sphere** to watch.
 
 **Note Monitor stays empty on this patch** — Artifix Gen is continuous and
 fires no note events. That monitor is for note-played chains
@@ -71,6 +78,21 @@ wire**, not by port-to-port dragging:
   master feed (global) — so they show output immediately.
 - **Note Monitor** rides a **ctl** wire (the note-routing plane).
 - **Sphere** isn't wired at all — it auto-binds to a Living Oscillator.
+
+## Tuning the sound (offline render)
+
+There's no audio in the sandbox, but scsynth can render **offline**: install
+`supercollider-server`, set `SUPRIYA_SERVER_EXECUTABLE=/usr/bin/scsynth`, and
+use `supriya.render(Score(...))` to bounce a synthdef (with buses + `.map`
+for live modulators) to an AIFF, then `soundfile` to read/analyse/convert to
+WAV. That loop — render, measure (peak/RMS, envelope-modulation for
+roughness), listen — is how the glass default was dialed in.
+
+The **glass default** came out of that: the old build was ~15 dB too quiet
+(fixed with internal `DRIVE`), and a wide even detune beat into a harsh warble
+at low pitch (fixed by dropping detune to near-unison and moving the phase
+with a gentle built-in chorus instead). Direction the owner set: **the voice
+is sacred — add dimension around it (space, phase), never edit the core.**
 
 ## Recently fixed
 
