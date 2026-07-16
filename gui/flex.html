@@ -423,6 +423,15 @@ function place(node) {
   node.y = Math.min(WORLD_H - h - GRID, Math.max(MIN_Y, node.y));
   node.el.style.left = node.x + "px"; node.el.style.top = node.y + "px";
 }
+// bring a freshly spawned card into the middle of the view so it can never
+// appear off-screen (behind the palette, or below the fold on a busy canvas)
+function revealCard(node) {
+  if (!node) return;
+  const b = $("board");
+  if (!b) return;
+  b.scrollLeft = Math.max(0, node.x - b.clientWidth / 2 + (node.w || CARD_W) / 2);
+  b.scrollTop = Math.max(0, node.y - b.clientHeight / 2);
+}
 function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
 
 // live param widgets, keyed "<gid>.<pname>" — `param` echoes land here
@@ -2248,6 +2257,7 @@ function buildLfoCard(l) {
 }
 
 let armN = 1;
+let revealNextAlloc = false;   // scroll to a server-spawned Allocation card once
 function buildArmedLfo() {
   const gid = "lfoarm:" + armN++;
   const n = addCard({gid, name: "LFO ∿", short: "LFO", sub: "drag ∿ port onto a param",
@@ -2260,6 +2270,7 @@ function buildArmedLfo() {
   place(n);
   requestAnimationFrame(() => {
     enforceSeparation(n); layoutPorts(n); rebuildObstacles(); rerouteAll();
+    revealCard(n);
   });
   return n;
 }
@@ -2298,6 +2309,7 @@ function buildArmedLiving() {
   place(n);
   requestAnimationFrame(() => {
     enforceSeparation(n); layoutPorts(n); rebuildObstacles(); rerouteAll();
+    revealCard(n);
   });
   return n;
 }
@@ -2490,6 +2502,10 @@ function rebuildGraph() {
     place(n);
     enforceSeparation(n);
   }
+  if (revealNextAlloc && allocNodes.length) {   // jump to a just-spawned Allocation
+    revealCard(allocNodes[allocNodes.length - 1]);
+    revealNextAlloc = false;
+  }
 
   // ---- wires (derived, exactly mirroring server truth) ----
   const port = (n, dir, sig, param, lane) => n && n.ports.find(p =>
@@ -2624,9 +2640,9 @@ function renderPalette() {
   h3("voices");
   btn("Mono Voice", FAMILY.ctl, () => send({type: "spawn_voice"}));
   h3("control");
-  btn("LFO ∿", FAMILY.service, () => buildArmedLfo());
-  btn("Living ∿", FAMILY.mod, () => buildArmedLiving());
-  btn("Allocation ⊕", FAMILY.mod, () => send({type: "alloc_spawn"}));
+  btn("LFO ∿", FAMILY.service, () => revealCard(buildArmedLfo()));
+  btn("Living ∿", FAMILY.mod, () => revealCard(buildArmedLiving()));
+  btn("Allocation ⊕", FAMILY.mod, () => { revealNextAlloc = true; send({type: "alloc_spawn"}); });
   btn("Tonic Deriver", "#d9a521", () => send({type: "spawn_tonic"}));
   btn("Key Shifter", FAMILY.ctl, () => send({type: "spawn_keyshift"}));
   // the palette NEVER removes placed modules: any entry can be spawned
@@ -2643,10 +2659,10 @@ function renderPalette() {
   }
   h3("monitors");
   // the oscilloscope lives under effects now (Scope Tap — a real module)
-  btn("Waveform", FAMILY.io, () => { buildMonitor("wave"); afterMonitor(); });
-  btn("Spectrum", FAMILY.io, () => { buildMonitor("spectrum"); afterMonitor(); });
-  btn("Note Monitor", FAMILY.io, () => { buildMonitor("notes"); afterMonitor(); });
-  btn("Sphere", FAMILY.mod, () => { buildMonitor("sphere"); afterMonitor(); });
+  btn("Waveform", FAMILY.io, () => { revealCard(buildMonitor("wave")); afterMonitor(); });
+  btn("Spectrum", FAMILY.io, () => { revealCard(buildMonitor("spectrum")); afterMonitor(); });
+  btn("Note Monitor", FAMILY.io, () => { revealCard(buildMonitor("notes")); afterMonitor(); });
+  btn("Sphere", FAMILY.mod, () => { revealCard(buildMonitor("sphere")); afterMonitor(); });
 }
 function afterMonitor() {
   requestAnimationFrame(() => {
