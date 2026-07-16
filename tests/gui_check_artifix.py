@@ -68,6 +68,31 @@ def main():
         check("sphere monitor spawned", sphs >= 1, str(sphs))
         check("spectrum polls a scope source",
               any(m.get("type") == "scope" for m in sent))
+
+        # the Living Oscillator card renders from state.living, and its palette
+        # entry exists
+        living_card = page.evaluate(
+            "!!document.getElementById('card-living:artifix_gen.morph') "
+            "|| [...document.querySelectorAll('.mod .title')]"
+            ".some(t => /Living/.test(t.textContent))")
+        pal_living = page.evaluate(
+            "[...document.querySelectorAll('#palette button')]"
+            ".some(b => b.textContent.trim().startsWith('Living'))")
+        check("Living Oscillator card renders from state.living", living_card)
+        check("palette offers a Living Oscillator", pal_living)
+
+        # arming a Living Oscillator and dropping it on a knob sends living_assign
+        page.evaluate("""() => {
+          const n = buildArmedLiving();
+          window.__armGid = n.gid;
+        }""")
+        page.wait_for_timeout(150)
+        armed_kind = page.evaluate(
+            "(() => { for (const [g, n] of nodes) if (g === window.__armGid) "
+            "return n.modKind; return null; })()")
+        check("armed Living card is tagged modKind=living", armed_kind == "living",
+              str(armed_kind))
+
         check("flex+artifix: no page errors", not errors, "; ".join(errors[:3]))
         browser.close()
 

@@ -1408,14 +1408,19 @@ function connectAction(out, inn) {
   if (sig === "mod") {
     if (!pi.quiet || !inn.node.chainKey) return null;
     const src = out.node;
+    // which modulator family is being dragged: LFO or Living Oscillator
+    const kind = src.modKind || "lfo";
+    const pfx = kind === "living" ? "living:" : "lfo:";
+    const A = kind === "living" ? "living_assign" : "lfo_assign";
+    const U = kind === "living" ? "living_unassign" : "lfo_unassign";
     return () => {
-      // park the LFO card's position where it was drawn so the server-born
+      // park the mod card's position where it was drawn so the server-born
       // card (id "<key>.<param>") appears in place
-      posMem["lfo:" + inn.node.chainKey + "." + pi.param] = [src.x, src.y];
+      posMem[pfx + inn.node.chainKey + "." + pi.param] = [src.x, src.y];
       if (src.armed) { removeNode(src); rerouteAll(); }
-      else if (src.gid.startsWith("lfo:"))
-        send({type: "lfo_unassign", id: src.gid.slice(4)});  // re-target a live LFO
-      send({type: "lfo_assign", key: inn.node.chainKey, name: pi.param});
+      else if (src.gid.startsWith(pfx))
+        send({type: U, id: src.gid.slice(pfx.length)});  // re-target a live mod
+      send({type: A, key: inn.node.chainKey, name: pi.param});
     };
   }
   if (sig === "tonic") {
@@ -2249,6 +2254,44 @@ function buildArmedLfo() {
   return n;
 }
 
+// Artifix: Living Oscillator — a modulator card, same wiring UX as the LFO
+// (drag its ∿ port onto any knob) but bounded-aperiodic motion.
+function buildLivingCard(l) {
+  const gid = "living:" + l.id;
+  const u01 = (k) => rowSlider({gid}, k, {
+    unit: l[k], text: ((l[k] * 100) | 0) + "%",
+    valText: (u) => ((u * 100) | 0) + "%",
+    onUnit: (u) => {
+      l[k] = u;
+      throttled("living" + l.id + k,
+        () => send({type: "living_set", id: l.id, [k]: u}));
+    },
+  });
+  const rows = [u01("life"), u01("wander"), u01("depth"), u01("center")];
+  const n = addCard({gid, name: "Living ∿", short: "Living",
+    sub: `→ ${l.key}.${l.param}`, fam: "mod", rows,
+    ports: [["out", "mod", "mod"]],
+    kill: () => send({type: "living_unassign", id: l.id})});
+  n.modKind = "living";
+  return n;
+}
+function buildArmedLiving() {
+  const gid = "livingarm:" + armN++;
+  const n = addCard({gid, name: "Living ∿", short: "Living",
+    sub: "drag ∿ port onto a param", fam: "mod", rows: [],
+    ports: [["out", "mod", "mod"]], persistent: true,
+    kill: (nd) => { removeNode(nd); rerouteAll(); }});
+  n.armed = true; n.modKind = "living";
+  const board = $("board");
+  n.x = snap(board.scrollLeft + 300 + Math.random() * 120);
+  n.y = snap(board.scrollTop + 160 + Math.random() * 160);
+  place(n);
+  requestAnimationFrame(() => {
+    enforceSeparation(n); layoutPorts(n); rebuildObstacles(); rerouteAll();
+  });
+  return n;
+}
+
 // -- monitors (client-side, not in server state) --------------------------------
 // The old target-chip Oscilloscope monitor is GONE: the scope is the
 // scope_tap module now (a real effect card — see buildChainCard).
@@ -2349,6 +2392,7 @@ function rebuildGraph() {
   const master = buildMasterCard();
   const drums = buildDrumsCard();
   const lfoNodes = (state.lfos || []).map(buildLfoCard);
+  const livingNodes = (state.living || []).map(buildLivingCard);
 
   // ---- placement: stored position wins; new nodes flow into columns ----
   const CTL_X = MIN_X + GRID;               // controllers cascade on the left
@@ -2380,6 +2424,16 @@ function rebuildGraph() {
     const tgt = nodes.get("m:" + l.key);
     n.x = tgt ? tgt.x - CARD_W - 3 * GRID : CTL_X;
     n.y = tgt ? tgt.y : MIN_Y;
+    place(n);
+    enforceSeparation(n);
+  }
+  // each Living Oscillator lands left of its target, just below any LFO there
+  for (let i = 0; i < livingNodes.length; i++) {
+    const n = livingNodes[i], l = state.living[i];
+    if (posMem[n.gid]) { n.x = posMem[n.gid][0]; n.y = posMem[n.gid][1]; place(n); continue; }
+    const tgt = nodes.get("m:" + l.key);
+    n.x = tgt ? tgt.x - CARD_W - 3 * GRID : CTL_X;
+    n.y = tgt ? tgt.y + 3 * GRID : MIN_Y;
     place(n);
     enforceSeparation(n);
   }
@@ -2467,6 +2521,15 @@ function rebuildGraph() {
             {node: tgt, port: tgt.ports.find(p => p.quiet && p.param === l.param)},
             {lfoId: l.id, cut: () => send({type: "lfo_unassign", id: l.id})});
   }
+  // mod: one wire per Living Oscillator assignment → the target param handle
+  for (let i = 0; i < livingNodes.length; i++) {
+    const l = state.living[i];
+    const tgt = nodes.get("m:" + l.key);
+    if (!tgt) continue;
+    addWire({node: livingNodes[i], port: port(livingNodes[i], "out", "mod")},
+            {node: tgt, port: tgt.ports.find(p => p.quiet && p.param === l.param)},
+            {cut: () => send({type: "living_unassign", id: l.id})});
+  }
 
   requestAnimationFrame(() => {
     for (const n of nodes.values()) layoutPorts(n);
@@ -2494,6 +2557,7 @@ function renderPalette() {
   btn("Mono Voice", FAMILY.ctl, () => send({type: "spawn_voice"}));
   h3("control");
   btn("LFO ∿", FAMILY.service, () => buildArmedLfo());
+  btn("Living ∿", FAMILY.mod, () => buildArmedLiving());
   btn("Tonic Deriver", "#d9a521", () => send({type: "spawn_tonic"}));
   btn("Key Shifter", FAMILY.ctl, () => send({type: "spawn_keyshift"}));
   // the palette NEVER removes placed modules: any entry can be spawned
