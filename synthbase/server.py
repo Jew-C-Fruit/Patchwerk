@@ -356,6 +356,10 @@ class GuiServer:
                 if tick % 4 == 0:  # tonic strip ~5 Hz
                     tonic = await loop.run_in_executor(None, self.synth.tonic_state)
                     await self._broadcast({"type": "tonic", **tonic})
+                if tick % 2 == 0 and self.synth.living.assignments:  # Sphere ~10 Hz
+                    traj = await loop.run_in_executor(None, self.synth.living_trajectories)
+                    if traj:
+                        await self._broadcast({"type": "trajectory", "traj": traj})
             await asyncio.sleep(METER_INTERVAL)
 
     # -- run -------------------------------------------------------------------

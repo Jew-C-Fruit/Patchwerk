@@ -322,6 +322,7 @@ function connect() {
     else if (m.type === "beat") onBeat(m);
     else if (m.type === "tonic") $("tonic-root").textContent = m.root || "—";
     else if (m.type === "scope_data") onScopeData(m);
+    else if (m.type === "trajectory") onTrajectory(m);
     else if (m.type === "error") console.warn("server:", m.message);
   };
 }
@@ -2262,6 +2263,23 @@ function buildMonitor(type, gid, x, y, expanded) {
       ports: [["in", "audio", "thru"], ["out", "audio", "thru"]],
       vizHTML: `<canvas class="vz" data-viz="wave" height="34"></canvas>`,
       kill: (nd) => { waveRide.delete(nd.gid); removeNode(nd); rerouteAll(); saveLayout(); }});
+  } else if (type === "spectrum") {
+    // Artifix: FFT bars. Same audio ride as Waveform; reuses the scope
+    // capture (the browser runs the FFT — no new server data).
+    n = addCard({gid, name: "Spectrum", short: "Spec", sub: "global",
+      fam: "io", rows: [], persistent: true, montype: type,
+      ports: [["in", "audio", "thru"], ["out", "audio", "thru"]],
+      vizHTML: `<canvas class="vz" data-viz="spectrum" height="44"></canvas>`,
+      kill: (nd) => { waveRide.delete(nd.gid); removeNode(nd); rerouteAll(); saveLayout(); }});
+  } else if (type === "sphere") {
+    // Artifix: radius-conserving trajectory of a Living Oscillator. Bound to
+    // one living-osc assignment id (chosen from those present), not an audio
+    // wire — its "source" is a modulator, so no thru ports.
+    n = addCard({gid, name: "Sphere", short: "Sphere", sub: "pick a Living Osc",
+      fam: "mod", rows: [], persistent: true, montype: type,
+      ports: [],
+      vizHTML: `<canvas class="vz" data-viz="sphere" height="120"></canvas>`,
+      kill: (nd) => { removeNode(nd); rerouteAll(); saveLayout(); }});
   } else {  // notes
     // ctl thru ports let the monitor sit INLINE on a ctl wire (visual ride —
     // drop the card on a ctl wire; the backend wire stays untouched)
@@ -2493,7 +2511,9 @@ function renderPalette() {
   h3("monitors");
   // the oscilloscope lives under effects now (Scope Tap — a real module)
   btn("Waveform", FAMILY.io, () => { buildMonitor("wave"); afterMonitor(); });
+  btn("Spectrum", FAMILY.io, () => { buildMonitor("spectrum"); afterMonitor(); });
   btn("Note Monitor", FAMILY.io, () => { buildMonitor("notes"); afterMonitor(); });
+  btn("Sphere", FAMILY.mod, () => { buildMonitor("sphere"); afterMonitor(); });
 }
 function afterMonitor() {
   requestAnimationFrame(() => {
@@ -2745,6 +2765,12 @@ function scopePollKey(n) {
   const m = aw.find(w => w.to === "master" && w.from !== n.scopeKey);
   return m ? m.from : null;
 }
+// whatever module feeds master — the global fallback source for a Spectrum
+// monitor that isn't riding a wire
+function masterFeedKey() {
+  const m = ((state && state.wires) || []).find(w => w.to === "master");
+  return m ? m.from : null;
+}
 setInterval(() => {
   if (document.hidden) return;   // poll only while the canvas is visible
   const asked = new Set();
@@ -2773,16 +2799,21 @@ function blankWaveHist() { return new Array(WAVE_HIST_N).fill(0); }
 setInterval(() => {
   if (document.hidden) return;
   for (const n of nodes.values()) {
-    if (n.montype !== "wave") continue;
-    const src = waveSrcKey(n.gid);
+    if (n.montype !== "wave" && n.montype !== "spectrum") continue;
+    // Spectrum falls back to the master-feeding module when unwired (global),
+    // like the scope card; Waveform's global mode uses the master meters.
+    let src = waveSrcKey(n.gid);
+    if (!src && n.montype === "spectrum") src = masterFeedKey();
     if (!src) continue;
-    const s = scopeData[src];
-    if (s && s.length) {   // envelope: peak of |samples| from the last reply
-      let pk = 0;
-      for (let i = 0; i < s.length; i++) pk = Math.max(pk, Math.abs(s[i]));
-      const hist = (n.waveHist = n.waveHist || blankWaveHist());
-      hist.push(pk);
-      while (hist.length > WAVE_HIST_N) hist.shift();
+    if (n.montype === "wave") {
+      const s = scopeData[src];
+      if (s && s.length) {   // envelope: peak of |samples| from the last reply
+        let pk = 0;
+        for (let i = 0; i < s.length; i++) pk = Math.max(pk, Math.abs(s[i]));
+        const hist = (n.waveHist = n.waveHist || blankWaveHist());
+        hist.push(pk);
+        while (hist.length > WAVE_HIST_N) hist.shift();
+      }
     }
     send({type: "scope", key: src});
   }
@@ -2824,6 +2855,8 @@ function drawVizLoop(now) {
       if (viz === "deck") drawDeckViz(ctx, W, H, now, style);
       else if (viz === "scope") drawScopeViz(n, ctx, W, H, style);
       else if (viz === "wave") drawWaveViz(n, ctx, W, H, style);
+      else if (viz === "spectrum") drawSpectrumViz(n, ctx, W, H, style);
+      else if (viz === "sphere") drawSphereViz(n, ctx, W, H, style);
       else if (viz === "notes") drawNotesViz(n, ctx, W, H, now, style);
     } catch (err) { console.warn("viz", viz, err); }
   }
@@ -2933,6 +2966,99 @@ function drawWaveViz(n, ctx, W, H, style) {
     const a = Math.min(1, Math.pow(hist[i], 0.5));
     const h = Math.max(1, a * (H - 4));
     ctx.fillRect((i / nsmp) * W, (H - h) / 2, Math.max(1, W / nsmp - 0.5), h);
+  }
+}
+
+// -- Artifix: Spectrum monitor (client-side FFT of the scope capture) ----------
+// Small iterative radix-2 FFT — the scope already ships a 2048-sample window,
+// so the browser transforms it. No new server data (see build memory doc).
+function fftMag(re) {
+  const N = re.length, im = new Float32Array(N);
+  for (let i = 1, j = 0; i < N; i++) {   // bit-reversal permutation
+    let bit = N >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { const t = re[i]; re[i] = re[j]; re[j] = t; }
+  }
+  for (let len = 2; len <= N; len <<= 1) {
+    const ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < N; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const a = i + k, b = i + k + len / 2;
+        const tr = re[b] * cr - im[b] * ci, ti = re[b] * ci + im[b] * cr;
+        re[b] = re[a] - tr; im[b] = im[a] - ti;
+        re[a] += tr; im[a] += ti;
+        const ncr = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = ncr;
+      }
+    }
+  }
+  const mag = new Float32Array(N / 2);
+  for (let i = 0; i < N / 2; i++) mag[i] = Math.hypot(re[i], im[i]);
+  return mag;
+}
+function drawSpectrumViz(n, ctx, W, H, style) {
+  let src = waveSrcKey(n.gid);
+  if (!src) src = masterFeedKey();
+  updateMonSub(n, waveSrcKey(n.gid) ? "local: " + src : (src ? "global" : "no source"));
+  const s = src && scopeData[src];
+  if (!s || s.length < 4) return;
+  // nearest power of two <= length, Hann-windowed
+  let N = 1; while (N * 2 <= s.length) N *= 2;
+  const re = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const w = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (N - 1));
+    re[i] = s[i] * w;
+  }
+  const mag = fftMag(re);
+  const bins = mag.length;
+  ctx.fillStyle = style.getPropertyValue("--mod") || "#9085e9";
+  const bars = Math.min(96, W);
+  for (let x = 0; x < bars; x++) {
+    // log-frequency bucket
+    const f0 = Math.pow(bins, x / bars), f1 = Math.pow(bins, (x + 1) / bars);
+    let m = 0;
+    for (let i = Math.floor(f0); i < Math.max(Math.floor(f0) + 1, f1) && i < bins; i++)
+      m = Math.max(m, mag[i]);
+    const db = 20 * Math.log10(m + 1e-6);
+    const a = Math.max(0, Math.min(1, (db + 48) / 48));   // -48..0 dB → 0..1
+    const h = Math.max(1, a * (H - 3));
+    ctx.fillRect((x / bars) * W, H - h, Math.max(1, W / bars - 0.6), h);
+  }
+}
+
+// -- Artifix: Sphere monitor (radius-conserving Living Oscillator trajectory) --
+let trajCache = {};   // living id -> [x, y, r²]
+function onTrajectory(m) { trajCache = m.traj || {}; }
+function sphereLivingId(n) {
+  const live = (state && state.living) || [];
+  if (n.livingId && live.some(l => l.id === n.livingId)) return n.livingId;
+  return live.length ? (n.livingId = live[0].id) : null;
+}
+function drawSphereViz(n, ctx, W, H, style) {
+  const id = sphereLivingId(n);
+  updateMonSub(n, id ? "living: " + id : "no Living Osc");
+  const cx = W / 2, cy = H / 2, R = Math.min(W, H) * 0.4;
+  ctx.strokeStyle = style.getPropertyValue("--hairline") || "#2c2c2a";
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.ellipse(cx, cy, R, R, 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(cx, cy, R * 0.5, R, 0, 0, Math.PI * 2); ctx.stroke();
+  if (!id) return;
+  const t = trajCache[id];
+  const hist = (n.sphHist = n.sphHist || []);
+  if (t && t.length >= 2) { hist.push([t[0], t[1]]); while (hist.length > 64) hist.shift(); }
+  const mod = style.getPropertyValue("--mod") || "#9085e9";
+  ctx.strokeStyle = mod; ctx.lineWidth = 1.4; ctx.beginPath();
+  for (let i = 0; i < hist.length; i++) {
+    const px = cx + hist[i][0] * R, py = cy - hist[i][1] * R;
+    i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+  }
+  ctx.stroke();
+  if (t && t.length >= 2) {
+    const px = cx + t[0] * R, py = cy - t[1] * R;
+    ctx.fillStyle = mod; ctx.beginPath(); ctx.arc(px, py, 3.2, 0, Math.PI * 2); ctx.fill();
+    const r2 = t[2] != null ? t[2] : (t[0] * t[0] + t[1] * t[1]);
+    updateMonSub(n, "living: " + id + " · r²=" + r2.toFixed(2));
   }
 }
 // rolling REAL source taps on a beat grid, colored by src. UNWIRED = GLOBAL
