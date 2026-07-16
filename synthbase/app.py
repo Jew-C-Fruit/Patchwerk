@@ -21,6 +21,8 @@ from .drone import NOTE_NAMES, TonicDeriver, midi_to_freq
 from .drums import DrumMachine
 from .keyshift import KeyShifter
 from .lfo import LFOManager
+from .living import LivingManager
+from .allocation import AllocationManager
 from .scope import Scope
 from .looper import Looper
 from . import presets as presets_mod
@@ -240,6 +242,8 @@ class SynthApp:
         self._legacy_drone_id: str | None = None
         self.drums = DrumMachine(self)
         self.lfos = LFOManager(self)
+        self.living = LivingManager(self)          # Artifix: bounded-aperiodic modulator
+        self.allocation = AllocationManager(self)  # Artifix: conserved-budget modulator
         self.looper = Looper(self)
         self.scope = Scope(self)
         # control plane: wires among {keys, arp, deck, voice ids, tonic ids,
@@ -335,6 +339,8 @@ class SynthApp:
         self.patch = patch
         self.rack.on_node_replaced = self._on_node_replaced
         self.lfos.assignments.clear()  # old rack's nodes are gone with it
+        self.living.assignments.clear()
+        self.allocation.instances.clear()
         self.rack.mapped.clear()
         if self._legacy_drone:  # re-add the compat deriver+drone pair
             self._ensure_legacy_drone()
@@ -398,6 +404,8 @@ class SynthApp:
 
     def _on_node_replaced(self, key: str) -> None:
         self.lfos.on_node_replaced(key)
+        self.living.on_node_replaced(key)
+        self.allocation.on_node_replaced(key)
 
     def _emit_voiced(self, note: int, on: bool) -> None:
         # viz only — the deck records via its wires, not this tap
@@ -623,6 +631,8 @@ class SynthApp:
             if self.registry[type_of(stages[0][0])].kind != "source":
                 raise ValueError("chain needs at least one source")
             lfo_snap = self.lfos.snapshot()
+            living_snap = self.living.snapshot()
+            alloc_snap = self.allocation.snapshot()
             new_patch = dict(self.patch or {})
             new_patch["chain"] = [(k, {}) for k, _, _ in stages]
             self._build_from(new_patch, self.patch_name)
@@ -639,6 +649,17 @@ class SynthApp:
             live = [k for k, _, _ in stages]
             self.lfos.restore({aid: cfg for aid, cfg in lfo_snap.items()
                                if aid.rsplit(".", 1)[0] in live})
+            self.living.restore({aid: cfg for aid, cfg in living_snap.items()
+                                 if aid.rsplit(".", 1)[0] in live})
+            # allocation targets that still exist are re-wired; others drop
+            self.allocation.restore({
+                aid: {
+                    "settings": blob["settings"],
+                    "targets": {s: t for s, t in blob["targets"].items()
+                                if t["key"] in live},
+                }
+                for aid, blob in alloc_snap.items()
+            })
             return result
 
     def graph_wire(self, action: str, src: str, dst: str | None = None) -> None:
@@ -892,6 +913,45 @@ class SynthApp:
         with self._lock:
             self.lfos.configure(aid, **cfg)
 
+    # -- Artifix: Living Oscillator (bounded-aperiodic modulator) ------------
+
+    def living_assign(self, key: str, name: str, **cfg) -> None:
+        with self._lock:
+            self.living.assign(key, name, **cfg)
+
+    def living_unassign(self, aid: str) -> None:
+        with self._lock:
+            self.living.unassign(aid)
+
+    def living_set(self, aid: str, **cfg) -> None:
+        with self._lock:
+            self.living.configure(aid, **cfg)
+
+    def living_trajectories(self) -> dict:
+        return self.living.trajectories()
+
+    # -- Artifix: Allocation Intent (conserved-budget modulator) ------------
+
+    def alloc_spawn(self, **cfg) -> str:
+        with self._lock:
+            return self.allocation.spawn(**cfg)
+
+    def alloc_remove(self, aid: str) -> None:
+        with self._lock:
+            self.allocation.remove(aid)
+
+    def alloc_wire(self, aid: str, slot: int, key: str, name: str) -> None:
+        with self._lock:
+            self.allocation.wire(aid, slot, key, name)
+
+    def alloc_unwire(self, aid: str, slot: int) -> None:
+        with self._lock:
+            self.allocation.unwire(aid, slot)
+
+    def alloc_set(self, aid: str, **cfg) -> None:
+        with self._lock:
+            self.allocation.configure(aid, **cfg)
+
     def save_preset(self, name: str) -> str:
         return presets_mod.save_preset(self, name)
 
@@ -995,6 +1055,8 @@ class SynthApp:
             self.looper.shutdown()
             self.drums.shutdown()
             self.lfos.clear()
+            self.living.clear()
+            self.allocation.clear()
             for d in self.tonics.values():
                 d.shutdown()
             for ks in self.keyshifts.values():
@@ -1052,7 +1114,8 @@ class SynthApp:
             key = inst.key  # normalize a legacy type key to the instance id
             p = inst.module.params[name]
             value = p.from_unit(float(unit_value))
-            if self.lfos.set_center_unit(key, name, float(unit_value)):
+            if (self.lfos.set_center_unit(key, name, float(unit_value))
+                    or self.living.set_center_unit(key, name, float(unit_value))):
                 inst.settings[name] = value  # remembered for unassign-restore
                 return value
             self.rack.set_param(key, name, value)
@@ -1170,6 +1233,8 @@ class SynthApp:
                 "drums": self.drums.settings(),
                 "looper": self.looper.settings(),
                 "lfos": self.lfos.state(),
+                "living": self.living.state(),
+                "allocations": self.allocation.state(),
                 "presets": presets_mod.list_presets(),
                 "available": sorted(
                     ({"key": m.key, "name": m.name, "kind": m.kind,

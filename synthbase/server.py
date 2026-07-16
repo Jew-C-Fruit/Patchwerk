@@ -36,10 +36,23 @@ Protocol (JSON messages):
     {"type": "set_voice_target", "key": "pluck", "voice": "voice.2"}
         (re-aim a mono voice; "voice" when omitted)
     {"type": "set_drums", "target": "echo"|"master"|null}  (drums audio out routing)
+    {"type": "living_assign", "key": "artifix_gen", "name": "morph"}
+    {"type": "living_unassign", "id": "artifix_gen.morph"}
+    {"type": "living_set", "id": "artifix_gen.morph", "life": 0.5, "wander": 0.3,
+     "depth": 0.4, "center": 0.5}
+        (Artifix Living Oscillator: a bounded-aperiodic modulator, one per
+         (module, param) like the LFO; publishes an (x,y,r²) trajectory bus)
+    {"type": "alloc_spawn"} / {"type": "alloc_remove", "id": "alloc"}
+    {"type": "alloc_wire", "id": "alloc", "slot": 0, "key": "artifix_gen", "name": "morph"}
+    {"type": "alloc_unwire", "id": "alloc", "slot": 0}
+    {"type": "alloc_set", "id": "alloc", "r": 1.0, "w0": 0.5, ...}
+        (Artifix Allocation Intent: one conserved budget (Σmᵢ²=r²) driving up
+         to 6 params — a 1→N fan of mod wires)
 
   server -> client:
     {"type": "state", ...full snapshot...}       (on connect and after changes)
     {"type": "meters", "out": [l, r], "in": x}   (~15 Hz)
+    {"type": "trajectory", "traj": {"<living id>": [x, y, r²]}}  (Sphere feed)
     {"type": "error", "message": "..."}
 """
 
@@ -200,6 +213,32 @@ class GuiServer:
         elif t == "lfo_set":
             self.synth.lfo_set(m["id"], rate=m.get("rate"), depth=m.get("depth"),
                                center=m.get("center"), shape=m.get("shape"))
+        elif t == "living_assign":
+            await loop.run_in_executor(None, lambda: self.synth.living_assign(m["key"], m["name"]))
+            await self._broadcast_state()
+        elif t == "living_unassign":
+            await loop.run_in_executor(None, lambda: self.synth.living_unassign(m["id"]))
+            await self._broadcast_state()
+        elif t == "living_set":
+            self.synth.living_set(m["id"], life=m.get("life"), wander=m.get("wander"),
+                                  depth=m.get("depth"), center=m.get("center"))
+        elif t == "alloc_spawn":
+            await loop.run_in_executor(None, lambda: self.synth.alloc_spawn())
+            await self._broadcast_state()
+        elif t == "alloc_remove":
+            await loop.run_in_executor(None, lambda: self.synth.alloc_remove(m["id"]))
+            await self._broadcast_state()
+        elif t == "alloc_wire":
+            await loop.run_in_executor(
+                None, lambda: self.synth.alloc_wire(m["id"], m["slot"], m["key"], m["name"]))
+            await self._broadcast_state()
+        elif t == "alloc_unwire":
+            await loop.run_in_executor(
+                None, lambda: self.synth.alloc_unwire(m["id"], m["slot"]))
+            await self._broadcast_state()
+        elif t == "alloc_set":
+            cfg = {k: m.get(k) for k in ("r", "w0", "w1", "w2", "w3", "w4", "w5")}
+            self.synth.alloc_set(m["id"], **cfg)
         elif t == "save_preset":
             await loop.run_in_executor(None, self.synth.save_preset, m["name"])
             await self._broadcast_state()

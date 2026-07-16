@@ -63,6 +63,14 @@ def main() -> int:
     assert all(abs(nearest_offset(k)) <= 6 for k in range(12))
     print("ok    synthbase.keyshift")
 
+    # Artifix: the modulator synthdefs (not modules/, so checked explicitly)
+    from synthbase.lfo import _lfo  # noqa: F401
+    from synthbase.living import _living  # noqa: F401
+    from synthbase.allocation import _alloc, _alloc_tap  # noqa: F401
+    for sd in (_lfo, _living, _alloc, _alloc_tap):
+        assert sd.effective_name, "modulator synthdef failed to compile"
+    print("ok    modulator synthdefs (lfo, living, alloc)")
+
     print(f"\n{'PASS' if not failures else 'FAIL'} — {len(registry)} modules, {failures} failures")
     return 1 if failures else 0
 

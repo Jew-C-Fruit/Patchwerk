@@ -56,6 +56,7 @@ FAMILIES = {
     # voices
     "wobble_saw": "voice", "pulse_pad": "voice", "fm_bell": "voice",
     "pluck": "voice", "wind": "voice", "audio_in": "input", "drone": "service",
+    "artifix_gen": "voice",
     # filters / eq-ish
     "lowpass": "filter", "telephone": "filter",
     # time & space
