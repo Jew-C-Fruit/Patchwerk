@@ -635,8 +635,13 @@ function layoutPorts(node) {
       x = Math.min(cw - 10, Math.max(10, x));
       p.ox = x; p.oy = edge === "top" ? 0 : h;
     } else {
-      let y = h * (i + 1) / (list.length + 1);
-      y = Math.round((node.y + y) / CELL) * CELL - node.y;
+      let y;
+      if (p.rowEl) {   // a mod port bound to a specific slider row (Allocation)
+        y = p.rowEl.offsetTop + p.rowEl.offsetHeight / 2;
+      } else {
+        y = h * (i + 1) / (list.length + 1);
+        y = Math.round((node.y + y) / CELL) * CELL - node.y;   // snap to a lane
+      }
       y = Math.min(h - 8, Math.max(8, y));
       p.ox = edge === "left" ? 0 : (node.w || CARD_W); p.oy = y;
     }
@@ -2343,8 +2348,12 @@ function buildAllocCard(a) {
     rows: [rRow, ...wRows], ports: dims.map((d) => ["out", "mod", d]),
     kill: () => send({type: "alloc_remove", id: a.id})});
   n.modKind = "alloc";
-  let s = 0;   // tag each dim out-port with its slot index
-  for (const p of n.ports) if (p.dir === "out" && p.sig === "mod") p.slot = s++;
+  let s = 0;   // tag each dim out-port with its slot index + align it to its row
+  for (const p of n.ports) if (p.dir === "out" && p.sig === "mod") {
+    p.slot = s;
+    p.rowEl = wRows[s];   // port sits on its own weight-slider row (no overlap)
+    s++;
+  }
   return n;
 }
 
