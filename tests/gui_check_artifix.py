@@ -36,7 +36,12 @@ def main():
             living=[{"id": "artifix_gen.morph", "key": "artifix_gen",
                      "param": "morph", "life": 0.35, "wander": 0.3,
                      "depth": 0.4, "center": 0.5}],
-            allocations=[],
+            allocations=[{
+                "id": "alloc", "dims": ["wave", "harm", "filt", "stereo", "res", "det"],
+                "r": 1.0, "w0": 0.5, "w1": 0.35, "w2": 0.45, "w3": 0.4,
+                "w4": 0.25, "w5": 0.3,
+                "targets": {"1": {"key": "artifix_gen", "param": "harm"}},
+            }],
         )
         page.evaluate("(s) => __msg({type: 'state', ...s})", st)
         page.wait_for_timeout(200)
@@ -92,6 +97,50 @@ def main():
             "return n.modKind; return null; })()")
         check("armed Living card is tagged modKind=living", armed_kind == "living",
               str(armed_kind))
+
+        # Allocation card renders from state.allocations, its 6 dim out-ports are
+        # slot-tagged, the wired slot draws a mod wire, and the palette offers it
+        alloc = page.evaluate("""() => {
+          let card = null;
+          for (const [g, nd] of nodes) if (g === 'alloc:alloc') card = nd;
+          if (!card) return {ok: false};
+          const outs = card.ports.filter(p => p.dir === 'out' && p.sig === 'mod');
+          const slots = outs.map(p => p.slot).filter(s => s != null);
+          const pal = [...document.querySelectorAll('#palette button')]
+            .some(b => b.textContent.trim().startsWith('Allocation'));
+          return {ok: true, modKind: card.modKind, nOuts: outs.length,
+                  slots: slots.length, pal};
+        }""")
+        check("Allocation card renders from state.allocations", alloc.get("ok"))
+        check("Allocation has 6 slot-tagged dim out-ports",
+              alloc.get("nOuts") == 6 and alloc.get("slots") == 6, str(alloc))
+        check("Allocation card is tagged modKind=alloc",
+              alloc.get("modKind") == "alloc", str(alloc.get("modKind")))
+        check("palette offers an Allocation Intent", alloc.get("pal"))
+
+        # exercise connectAction directly: dropping dim slot 0 on the morph knob
+        # must emit alloc_wire(id, slot=0, key, name=morph) — verifies the new
+        # branch without simulating a full pointer drag
+        wired = page.evaluate("""() => {
+          let a = null, tgt = null;
+          for (const [g, nd] of nodes) {
+            if (g === 'alloc:alloc') a = nd;
+            if (g === 'm:artifix_gen') tgt = nd;
+          }
+          if (!a || !tgt) return {ok: false, why: 'no cards'};
+          const outP = a.ports.find(p => p.dir === 'out' && p.sig === 'mod' && p.slot === 0);
+          const inP = tgt.ports.find(p => p.quiet && p.param === 'morph');
+          if (!outP || !inP) return {ok: false, why: 'no ports', hasOut: !!outP, hasIn: !!inP};
+          const fn = connectAction({node: a, port: outP}, {node: tgt, port: inP});
+          if (!fn) return {ok: false, why: 'no action'};
+          window.__sent.length = 0; fn();
+          return {ok: true, sent: window.__sent};
+        }""")
+        ok = wired.get("ok") and any(
+            m.get("type") == "alloc_wire" and m.get("slot") == 0
+            and m.get("name") == "morph" and m.get("id") == "alloc"
+            for m in (wired.get("sent") or []))
+        check("dropping alloc dim 0 on a knob sends alloc_wire(slot=0)", ok, str(wired))
 
         check("flex+artifix: no page errors", not errors, "; ".join(errors[:3]))
         browser.close()

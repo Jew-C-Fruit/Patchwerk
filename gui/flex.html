@@ -1408,8 +1408,17 @@ function connectAction(out, inn) {
   if (sig === "mod") {
     if (!pi.quiet || !inn.node.chainKey) return null;
     const src = out.node;
-    // which modulator family is being dragged: LFO or Living Oscillator
+    // which modulator family is being dragged: LFO, Living Oscillator, or
+    // one dimension of an Allocation Intent
     const kind = src.modKind || "lfo";
+    if (kind === "alloc") {
+      // the dragged out-port carries its slot (0..5); wire that dim → knob
+      const id = src.gid.slice("alloc:".length);
+      const slot = po.slot;
+      if (slot == null) return null;
+      return () => send({type: "alloc_wire", id, slot,
+                         key: inn.node.chainKey, name: pi.param});
+    }
     const pfx = kind === "living" ? "living:" : "lfo:";
     const A = kind === "living" ? "living_assign" : "lfo_assign";
     const U = kind === "living" ? "living_unassign" : "lfo_unassign";
@@ -2292,6 +2301,40 @@ function buildArmedLiving() {
   return n;
 }
 
+// Artifix: Allocation Intent — one conserved budget (Σm²=r²) with SIX dim
+// out-ports. Drag any dim's ∿ port onto a knob to wire that slot; the six
+// magnitudes trade against each other. A server-side instance (spawned via
+// alloc_spawn), so it's rendered from state.allocations, not armed like the
+// LFO/Living cards.
+const ALLOC_DIMS = ["wave", "harm", "filt", "stereo", "res", "det"];
+function buildAllocCard(a) {
+  const gid = "alloc:" + a.id;
+  const dims = a.dims || ALLOC_DIMS;
+  const RMAX = 1.3;
+  const rRow = rowSlider({gid}, "budget r", {
+    unit: (a.r != null ? a.r : 1.0) / RMAX,
+    text: (a.r != null ? a.r : 1.0).toFixed(2),
+    valText: (u) => (u * RMAX).toFixed(2),
+    onUnit: (u) => throttled("alloc" + a.id + "r",
+      () => send({type: "alloc_set", id: a.id, r: u * RMAX})),
+  });
+  const wRows = dims.map((d, i) => rowSlider({gid}, d, {
+    unit: a["w" + i] != null ? a["w" + i] : 0.4,
+    text: (((a["w" + i] != null ? a["w" + i] : 0.4) * 100) | 0) + "%",
+    valText: (u) => ((u * 100) | 0) + "%",
+    onUnit: (u) => throttled("alloc" + a.id + "w" + i,
+      () => send({type: "alloc_set", id: a.id, ["w" + i]: u})),
+  }));
+  const n = addCard({gid, name: "Allocation ⊕", short: "Alloc",
+    sub: "Σm²=r² · drag a dim onto a knob", fam: "mod",
+    rows: [rRow, ...wRows], ports: dims.map((d) => ["out", "mod", d]),
+    kill: () => send({type: "alloc_remove", id: a.id})});
+  n.modKind = "alloc";
+  let s = 0;   // tag each dim out-port with its slot index
+  for (const p of n.ports) if (p.dir === "out" && p.sig === "mod") p.slot = s++;
+  return n;
+}
+
 // -- monitors (client-side, not in server state) --------------------------------
 // The old target-chip Oscilloscope monitor is GONE: the scope is the
 // scope_tap module now (a real effect card — see buildChainCard).
@@ -2393,6 +2436,7 @@ function rebuildGraph() {
   const drums = buildDrumsCard();
   const lfoNodes = (state.lfos || []).map(buildLfoCard);
   const livingNodes = (state.living || []).map(buildLivingCard);
+  const allocNodes = (state.allocations || []).map(buildAllocCard);
 
   // ---- placement: stored position wins; new nodes flow into columns ----
   const CTL_X = MIN_X + GRID;               // controllers cascade on the left
@@ -2434,6 +2478,14 @@ function rebuildGraph() {
     const tgt = nodes.get("m:" + l.key);
     n.x = tgt ? tgt.x - CARD_W - 3 * GRID : CTL_X;
     n.y = tgt ? tgt.y + 3 * GRID : MIN_Y;
+    place(n);
+    enforceSeparation(n);
+  }
+  // Allocation cards drive many targets — park them in the controller column
+  for (let i = 0; i < allocNodes.length; i++) {
+    const n = allocNodes[i];
+    if (posMem[n.gid]) { n.x = posMem[n.gid][0]; n.y = posMem[n.gid][1]; place(n); continue; }
+    n.x = CTL_X; n.y = MIN_Y + i * 8 * GRID;
     place(n);
     enforceSeparation(n);
   }
@@ -2530,6 +2582,21 @@ function rebuildGraph() {
             {node: tgt, port: tgt.ports.find(p => p.quiet && p.param === l.param)},
             {cut: () => send({type: "living_unassign", id: l.id})});
   }
+  // mod: Allocation Intent fans out — one wire per wired slot, from that dim's
+  // out-port to the target param handle
+  for (let i = 0; i < allocNodes.length; i++) {
+    const a = state.allocations[i], an = allocNodes[i];
+    for (const slotStr of Object.keys(a.targets || {})) {
+      const t = a.targets[slotStr], slot = Number(slotStr);
+      const tgt = nodes.get("m:" + t.key);
+      if (!tgt) continue;
+      const outPort = an.ports.find(p => p.dir === "out" && p.sig === "mod" && p.slot === slot);
+      const inPort = tgt.ports.find(p => p.quiet && p.param === t.param);
+      if (!outPort || !inPort) continue;
+      addWire({node: an, port: outPort}, {node: tgt, port: inPort},
+              {cut: () => send({type: "alloc_unwire", id: a.id, slot})});
+    }
+  }
 
   requestAnimationFrame(() => {
     for (const n of nodes.values()) layoutPorts(n);
@@ -2558,6 +2625,7 @@ function renderPalette() {
   h3("control");
   btn("LFO ∿", FAMILY.service, () => buildArmedLfo());
   btn("Living ∿", FAMILY.mod, () => buildArmedLiving());
+  btn("Allocation ⊕", FAMILY.mod, () => send({type: "alloc_spawn"}));
   btn("Tonic Deriver", "#d9a521", () => send({type: "spawn_tonic"}));
   btn("Key Shifter", FAMILY.ctl, () => send({type: "spawn_keyshift"}));
   // the palette NEVER removes placed modules: any entry can be spawned
