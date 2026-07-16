@@ -84,6 +84,12 @@ wire**, not by port-to-port dragging:
   (`(x,y,z)/|v|`), so the dot rides the surface with real depth (front/back
   shading) and sweeps the whole sphere. Radius = 1 is finally the literal
   conserved invariant. Preset `life` bumped 0.35 → 0.50 for livelier drift.
+- **Two-ball sphere (matches the demonstrator).** `drawSphereViz` now draws
+  TWO balls: ball 1 rides the Living trajectory, ball 2 holds a conserved
+  angular separation γ and orbits ball 1's axis at ψ, joined by a link line
+  (the conserved distance D). γ/ψ/view-spin advance client-side in the rAF
+  loop; ball 1 is lerped to smooth the ~10 Hz frames. Pure `flex.html` change
+  — a browser swap, no engine restart.
 
 ## Open items
 

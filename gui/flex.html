@@ -3208,47 +3208,74 @@ function sphereUnit(x, y) {
   if (rr > 1) { const inv = 1 / Math.sqrt(rr); ux *= inv; uy *= inv; }
   return [ux, uy];
 }
+// Radius-conserving TWO-BALL sphere (ported from the Artifix demonstrator):
+// ball 1 rides the Living trajectory; ball 2 holds a conserved angular
+// separation γ and orbits ball 1's axis at ψ; a link line shows the conserved
+// distance D. Both sit on ‖P‖ = 1 every frame. drawVizLoop runs ~60fps, so ψ,
+// the separation breath, and a slow view spin all advance client-side.
 function drawSphereViz(n, ctx, W, H, style) {
   const id = sphereLivingId(n);
-  updateMonSub(n, id ? "living: " + id : "no Living Osc");
   const cx = W / 2, cy = H / 2, R = Math.min(W, H) * 0.4;
-  ctx.strokeStyle = style.getPropertyValue("--hairline") || "#2c2c2a";
-  ctx.lineWidth = 1;
-  // sphere wireframe: silhouette + vertical meridian + horizontal equator
-  ctx.beginPath(); ctx.ellipse(cx, cy, R, R, 0, 0, Math.PI * 2); ctx.stroke();
-  ctx.beginPath(); ctx.ellipse(cx, cy, R * 0.5, R, 0, 0, Math.PI * 2); ctx.stroke();
-  ctx.beginPath(); ctx.ellipse(cx, cy, R, R * 0.5, 0, 0, Math.PI * 2); ctx.stroke();
-  if (!id) return;
-  // t = a point on the unit sphere [ux, uy, uz]: ux/uy place it in the disk,
-  // uz is depth (+1 toward the viewer, −1 away). Orthographic projection.
-  const scr = (p) => { const [ux, uy] = sphereUnit(p[0], p[1]);
-                       return [cx + ux * R, cy - uy * R]; };
-  const t = trajCache[id];
-  const hist = (n.sphHist = n.sphHist || []);
-  if (t && t.length >= 2) {
-    hist.push([t[0], t[1], t[2] != null ? t[2] : 0]);
-    while (hist.length > 96) hist.shift();
-  }
-  const mod = style.getPropertyValue("--mod") || "#9085e9";
-  // trail: older = fainter; segments that swing to the far side (uz<0) thin out
-  for (let i = 1; i < hist.length; i++) {
-    const a = scr(hist[i - 1]), b = scr(hist[i]);
-    const depth = (hist[i][2] + 1) / 2;               // 0 back .. 1 front
-    ctx.strokeStyle = mod;
-    ctx.globalAlpha = (i / hist.length) * (0.2 + 0.7 * depth);
-    ctx.lineWidth = 0.5 + 1.6 * depth;
-    ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
-  }
-  ctx.globalAlpha = 1;
-  if (t && t.length >= 2) {
-    const [px, py] = scr(t);
-    const uz = t[2] != null ? t[2] : 0, depth = (uz + 1) / 2;
-    ctx.fillStyle = mod;
-    ctx.globalAlpha = 0.5 + 0.5 * depth;              // dimmer on the far side
-    ctx.beginPath(); ctx.arc(px, py, 2.2 + 2.4 * depth, 0, Math.PI * 2); ctx.fill();
-    ctx.globalAlpha = 1;
-    updateMonSub(n, "living: " + id + (uz >= 0 ? " · front" : " · back"));
-  }
+  const hair = style.getPropertyValue("--hairline") || "#2c2c2a";
+
+  n.sphPsi  = (n.sphPsi  || 0) + 0.045;   // ball-2 orbit around ball-1's axis
+  n.sphView = (n.sphView || 0) + 0.004;   // slow whole-sphere turn (depth cue)
+  n.sphGP   = (n.sphGP   || 0) + 0.011;   // separation-angle breathing phase
+
+  // ball 1 rides the Living trajectory (a point on the unit sphere); smooth
+  // the ~10 Hz server frames into continuous motion
+  const t = id ? trajCache[id] : null;
+  if (t && t.length >= 3) n.sphTgt = [t[0], t[1], t[2]];
+  let P1 = n.sphP1 || n.sphTgt || [0, 0.25, 0.97];
+  if (n.sphTgt) P1 = [P1[0] + (n.sphTgt[0] - P1[0]) * 0.16,
+                      P1[1] + (n.sphTgt[1] - P1[1]) * 0.16,
+                      P1[2] + (n.sphTgt[2] - P1[2]) * 0.16];
+  let m = Math.hypot(P1[0], P1[1], P1[2]) || 1e-9;
+  P1 = [P1[0] / m, P1[1] / m, P1[2] / m];
+  n.sphP1 = P1;
+
+  // orthonormal basis ⟂ P1, then ball 2 at conserved separation γ, orbit ψ
+  const ref = Math.abs(P1[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+  let e1 = [P1[1]*ref[2]-P1[2]*ref[1], P1[2]*ref[0]-P1[0]*ref[2], P1[0]*ref[1]-P1[1]*ref[0]];
+  let e1n = Math.hypot(e1[0], e1[1], e1[2]) || 1e-9; e1 = [e1[0]/e1n, e1[1]/e1n, e1[2]/e1n];
+  const e2 = [P1[1]*e1[2]-P1[2]*e1[1], P1[2]*e1[0]-P1[0]*e1[2], P1[0]*e1[1]-P1[1]*e1[0]];
+  const g = 0.78 + 0.32 * Math.sin(n.sphGP);
+  const cg = Math.cos(g), sg = Math.sin(g), cp = Math.cos(n.sphPsi), sp = Math.sin(n.sphPsi);
+  const P2 = [cg*P1[0]+sg*(cp*e1[0]+sp*e2[0]),
+              cg*P1[1]+sg*(cp*e1[1]+sp*e2[1]),
+              cg*P1[2]+sg*(cp*e1[2]+sp*e2[2])];
+
+  // view rotation about the vertical axis; orthographic, z carries depth
+  const vc = Math.cos(n.sphView), vs = Math.sin(n.sphView);
+  const scr = (P) => [cx + (P[0]*vc + P[2]*vs) * R, cy - P[1] * R, -P[0]*vs + P[2]*vc];
+
+  // wire sphere + centre C
+  ctx.strokeStyle = hair; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.ellipse(cx, cy, R, R, 0, 0, Math.PI*2); ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(cx, cy, R*0.5, R, 0, 0, Math.PI*2); ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(cx, cy, R, R*0.42, 0, 0, Math.PI*2); ctx.stroke();
+  ctx.fillStyle = hair; ctx.beginPath(); ctx.arc(cx, cy, 2.2, 0, Math.PI*2); ctx.fill();
+  if (!id) { updateMonSub(n, "no Living Osc"); return; }
+  updateMonSub(n, "living: " + id + " · two-ball");
+
+  const s1 = scr(P1), s2 = scr(P2);
+  const T1 = (n.sphT1 = n.sphT1 || []), T2 = (n.sphT2 = n.sphT2 || []);
+  T1.push(s1); T2.push(s2); while (T1.length > 52) { T1.shift(); T2.shift(); }
+  const trail = (T, rgb) => { for (let i = 1; i < T.length; i++) {
+    ctx.strokeStyle = "rgba(" + rgb + "," + (i / T.length * 0.5).toFixed(2) + ")";
+    ctx.lineWidth = 1.3; ctx.beginPath();
+    ctx.moveTo(T[i-1][0], T[i-1][1]); ctx.lineTo(T[i][0], T[i][1]); ctx.stroke(); } };
+  trail(T1, "144,133,233");    // ball 1 — mod violet
+  trail(T2, "224,168,111");    // ball 2 — amber
+  // link line = the conserved separation D
+  ctx.strokeStyle = "rgba(150,150,170,0.4)"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(s1[0], s1[1]); ctx.lineTo(s2[0], s2[1]); ctx.stroke();
+  // balls, depth-shaded, far one painted first (painter's order by z)
+  const ball = (s, rgb) => { const d = (s[2] + 1) / 2, rad = 3 + 3.6 * d, k = 0.45 + 0.55 * d;
+    ctx.fillStyle = "rgb(" + rgb.split(",").map(v => Math.round(v * k)).join(",") + ")";
+    ctx.beginPath(); ctx.arc(s[0], s[1], rad, 0, Math.PI*2); ctx.fill(); };
+  const c1 = "144,133,233", c2 = "224,168,111";
+  if (s1[2] < s2[2]) { ball(s1, c1); ball(s2, c2); } else { ball(s2, c2); ball(s1, c1); }
 }
 // rolling REAL source taps on a beat grid, colored by src. UNWIRED = GLOBAL
 // (all taps); riding ctl wires = LOCAL (only its upstream sources).
