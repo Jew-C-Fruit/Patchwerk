@@ -71,6 +71,18 @@ def main():
         sent = page.evaluate("window.__sent")
         check("spectrum monitor spawned", specs >= 1, str(specs))
         check("sphere monitor spawned", sphs >= 1, str(sphs))
+        # Sphere containment: the raw trajectory (x,y) each in [-1,1] reaches
+        # radius √2 at the corners; sphereUnit must map EVERY point into the
+        # unit disk so the dot never escapes the drawn circle (the reported bug
+        # where "the indicator dot is not mapped to within the sphere").
+        contained = page.evaluate("""() => {
+          const pts = [[1,1],[-1,1],[1,-1],[-1,-1],[3.2,3.2],[0.3,-0.2],[0,0]];
+          return pts.every(([x,y]) => {
+            const [ux,uy] = sphereUnit(x,y);
+            return ux*ux + uy*uy <= 1.0000001;
+          });
+        }""")
+        check("sphere dot stays inside the circle (containment)", contained)
         check("spectrum polls a scope source",
               any(m.get("type") == "scope" for m in sent))
 
