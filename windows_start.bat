@@ -37,13 +37,31 @@ REM scsynth refuses to boot if its synthdef folder is missing (harmless if it ex
 mkdir "%LOCALAPPDATA%\SuperCollider\synthdefs" 2>nul
 
 REM --- Python environment (bootstraps itself on first run) --------------------
+REM supriya requires Python 3.10+. The Windows Store Python 3.9 is too old, so
+REM pick a 3.12/3.11/3.10 launcher explicitly (NOT "py -3", which could grab an
+REM installed 3.9) and verify the venv's version before a doomed pip install.
 if not exist ".venv\Scripts\python.exe" (
   echo First run: creating the Python environment...
-  py -3.12 -m venv .venv 2>nul || py -3.11 -m venv .venv 2>nul || py -3 -m venv .venv 2>nul || python -m venv .venv
+  py -3.12 -m venv .venv 2>nul || py -3.11 -m venv .venv 2>nul || py -3.10 -m venv .venv 2>nul
   if not exist ".venv\Scripts\python.exe" (
     echo.
-    echo Python 3.10+ not found. Install it from https://www.python.org/downloads/
-    echo ^(3.12 recommended; tick "Add python.exe to PATH" in the installer^)
+    echo No Python 3.10+ found. supriya needs 3.10 or newer - a 3.9 install is
+    echo too old, which is why "python -m synthbase" failed with no supriya.
+    echo   1. Install Python 3.12:  https://www.python.org/downloads/
+    echo      ^(tick "Add python.exe to PATH" in the installer^)
+    echo   2. Double-click this file again.
+    echo.
+    pause
+    exit /b 1
+  )
+  REM confirm the venv really is 3.10+ before installing
+  ".venv\Scripts\python.exe" -c "import sys; sys.exit(0 if sys.version_info>=(3,10) else 1)"
+  if errorlevel 1 (
+    echo.
+    echo The Python behind .venv is older than 3.10 and cannot run supriya.
+    echo Install Python 3.12 ^(https://www.python.org/downloads/^), then delete the
+    echo .venv folder next to this file and double-click this file again.
+    rmdir /s /q .venv 2>nul
     echo.
     pause
     exit /b 1
