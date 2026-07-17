@@ -79,6 +79,17 @@ wire**, not by port-to-port dragging:
 - **Note Monitor** rides a **ctl** wire (the note-routing plane).
 - **Sphere** isn't wired at all — it auto-binds to a Living Oscillator.
 
+## Playable Artifix — `artifix_voice` + `patches/artifix_play.py`
+
+`artifix_gen` is continuous (no note). Its playable twin `artifix_voice`
+(`modules/artifix_voice.py`) is the same glass DSP with `freq` + `gate` and a
+pad ADSR (`attack`/`release` params). `patches/artifix_play.py` wires the keys
+in by default (`bindings: notes_to = artifix_voice`), so keys → voice →
+artifix_voice on load: play it from the on-screen keys or MIDI, hold notes for
+a sustained pad, and the Note Monitor lights up. The Living breath rides along
+on `morph`. Silent until a key is pressed. The continuous drone stays in
+`patches/artifix.py` — the two are siblings, not replacements.
+
 ## Tuning the sound (offline render)
 
 There's no audio in the sandbox, but scsynth can render **offline**: install
