@@ -79,16 +79,26 @@ wire**, not by port-to-port dragging:
 - **Note Monitor** rides a **ctl** wire (the note-routing plane).
 - **Sphere** isn't wired at all — it auto-binds to a Living Oscillator.
 
-## Playable Artifix — `artifix_voice` + `patches/artifix_play.py`
+## Playable Artifix — three patches
 
 `artifix_gen` is continuous (no note). Its playable twin `artifix_voice`
 (`modules/artifix_voice.py`) is the same glass DSP with `freq` + `gate` and a
-pad ADSR (`attack`/`release` params). `patches/artifix_play.py` wires the keys
-in by default (`bindings: notes_to = artifix_voice`), so keys → voice →
-artifix_voice on load: play it from the on-screen keys or MIDI, hold notes for
-a sustained pad, and the Note Monitor lights up. The Living breath rides along
-on `morph`. Silent until a key is pressed. The continuous drone stays in
-`patches/artifix.py` — the two are siblings, not replacements.
+pad ADSR (`attack`/`release` params). Three patches use them:
+
+- **`patches/artifix.py`** — the continuous glass drone (hands-off).
+- **`patches/artifix_play.py`** — the playable voice; `notes_to = artifix_voice`
+  wires the keys in, silent until you press a key, Note Monitor lights up.
+- **`patches/artifix_live.py`** — the **layered/combined** mode: `artifix_gen`
+  (drone bed) **and** `artifix_voice` (played) both in the chain, summing into
+  the reverb. The drone always sounds; played notes bloom on top and relax back
+  into the bed. This is the "try it" patch — if it wins it can retire the other
+  two. (Possible refinement not yet built: have a played note momentarily *take
+  over* the drone's modulation and relax back, rather than pure summing.)
+
+**Default monitors.** A patch can declare `"monitors": ["wave","spectrum",
+"sphere","notes"]`; `app.state()` passes it through and `flex.html` spawns them
+the first time that patch is opened in a browser (a saved layout wins ever
+after). All three Artifix patches declare the four.
 
 ## Tuning the sound (offline render)
 

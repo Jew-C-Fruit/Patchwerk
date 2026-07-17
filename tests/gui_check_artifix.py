@@ -162,6 +162,24 @@ def main():
             for m in (wired.get("sent") or []))
         check("dropping alloc dim 0 on a knob sends alloc_wire(slot=0)", ok, str(wired))
 
+        # a patch that DECLARES default monitors spawns them the first time it
+        # is opened (a fresh patch name has no saved localStorage layout)
+        page.evaluate(
+            "(s) => __msg({type: 'state', ...s})",
+            base_state([gen], [{"from": "artifix_gen", "to": "master"}],
+                       patch="artifix_fresh", patches=["artifix_fresh", "mock"],
+                       monitors=["wave", "spectrum", "sphere", "notes"]))
+        page.wait_for_timeout(300)
+        mon_counts = page.evaluate("""() => ({
+          wave: document.querySelectorAll('canvas[data-viz=wave]').length,
+          spectrum: document.querySelectorAll('canvas[data-viz=spectrum]').length,
+          sphere: document.querySelectorAll('canvas[data-viz=sphere]').length,
+          notes: document.querySelectorAll('canvas[data-viz=notes]').length,
+        })""")
+        check("patch's declared monitors spawn on first load",
+              all(mon_counts[k] >= 1 for k in ("wave", "spectrum", "sphere", "notes")),
+              str(mon_counts))
+
         check("flex+artifix: no page errors", not errors, "; ".join(errors[:3]))
         browser.close()
 

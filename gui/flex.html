@@ -2424,8 +2424,21 @@ function rebuildGraph() {
   // patch switch → load that patch's remembered layout, respawn its monitors
   if (state.patch !== currentPatch) {
     for (const n of [...nodes.values()]) if (n.montype) removeNode(n);
+    const fresh = localStorage.getItem(storeKey(state.patch)) === null;
     currentPatch = state.patch;
-    const mons = loadLayout(currentPatch);
+    let mons = loadLayout(currentPatch);
+    // a patch may declare default monitors (state.monitors); spawn them the
+    // FIRST time it's opened in this browser, then persist. A saved layout
+    // wins ever after — so removing one makes it stay removed.
+    if (fresh && Array.isArray(state.monitors) && state.monitors.length) {
+      const POS = {wave: [680, 110], spectrum: [680, 300],
+                   sphere: [940, 300], notes: [680, 560]};
+      mons = state.monitors.map((type, i) => {
+        const p = POS[type] || [680 + (i % 2) * 260, 130 + (i >> 1) * 230];
+        return [`mon:${type}:${monN++}`, type, p[0], p[1], true];
+      });
+      setTimeout(saveLayout, 0);   // persist so these become the saved layout
+    }
     for (const [gid, type, x, y, exp] of mons) {
       if (type === "scope") continue;   // pre-v3 layout: scope is a module now
       posMem[gid] = [x, y];

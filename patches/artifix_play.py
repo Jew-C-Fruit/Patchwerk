@@ -24,6 +24,9 @@ PATCH = {
     # keys -> voice -> artifix_voice, wired on load (artifix_voice has a gate)
     "bindings": {"notes_to": "artifix_voice"},
 
+    # default monitors to spawn on first load (Waveform, Spectrum, Sphere, Notes)
+    "monitors": ["wave", "spectrum", "sphere", "notes"],
+
     # the slow morph breath rides along while you play (also drives the Sphere)
     "living": [
         {"key": "artifix_voice", "param": "morph",

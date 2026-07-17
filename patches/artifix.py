@@ -36,6 +36,9 @@ PATCH = {
     ],
     "bindings": {},
 
+    # default monitors to spawn on first load (Waveform, Spectrum, Sphere, Notes)
+    "monitors": ["wave", "spectrum", "sphere", "notes"],
+
     # slow, shallow breath on the waveform — the "alive" without the harshness.
     # Also the source the Sphere visualizer draws.
     "living": [

@@ -1248,6 +1248,9 @@ class SynthApp:
             return {
                 "patch": self.patch_name,
                 "patches": list_patches(),
+                # a patch may declare default monitors to spawn on first load
+                # (the GUI honours a saved layout over these once one exists)
+                "monitors": list((self.patch or {}).get("monitors") or []),
                 "chain": chain,
                 "volume": self.master.volume if self.master else 0.8,
                 "devices": list_audio_devices(),
