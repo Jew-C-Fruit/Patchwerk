@@ -134,6 +134,7 @@ def main():
         # 1 — LEGACY page: the add list must retain placed types (v5 ids)
         # ================================================================
         browser, page, errors = open_page(p, LEGACY.as_uri())
+        print(f"# chromium {browser.version}  ({CHROME})")
         sg = mod("signal_gen", "Signal Gen", "source", "voice",
                  {"freq": param(220, 20, 2000), "amp": param()})
         sg2 = mod("signal_gen.2", "Signal Gen 2", "source", "voice",
@@ -197,13 +198,22 @@ def main():
         page.wait_for_timeout(500)
 
         def label_center(from_gid):
-            return page.evaluate("""(fromGid) => {
-              const w = wires.find(v => v.from.node.gid === fromGid &&
-                                        v.labelG.style.display !== 'none');
-              if (!w) return null;
-              const r = w.labelR.getBoundingClientRect();
-              return [r.x + r.width / 2, r.y + r.height / 2];
-            }""", from_gid)
+            # Poll briefly: labelPass runs on rebuild, and on a slower CI runner
+            # than the dev sandbox the visible label may not be laid out the
+            # instant we look. (This test's Chromium — the one `playwright
+            # install` fetches — is newer than the sandbox's pinned build.)
+            for _ in range(24):
+                r = page.evaluate("""(fromGid) => {
+                  const w = wires.find(v => v.from.node.gid === fromGid &&
+                                            v.labelG.style.display !== 'none');
+                  if (!w) return null;
+                  const r = w.labelR.getBoundingClientRect();
+                  return [r.x + r.width / 2, r.y + r.height / 2];
+                }""", from_gid)
+                if r:
+                    return r
+                page.wait_for_timeout(50)
+            return None
 
         def card_center(gid):
             return page.evaluate("""(gid) => {
@@ -212,18 +222,45 @@ def main():
               return [r.x + r.width / 2, r.y + 10];
             }""", gid)
 
+        HAS_HI = ("(g) => !!nodes.get(g) && "
+                  "nodes.get(g).el.classList.contains('splice-target')")
+        NO_HI = ("(g) => !nodes.get(g) || "
+                 "!nodes.get(g).el.classList.contains('splice-target')")
+
+        def has_highlight(gid):
+            return page.evaluate(HAS_HI, gid)
+
+        def drag_label_onto(lb, tgt):
+            # Press the label and drag it onto the target card. Leaves the
+            # button DOWN (caller checks the highlight, then releases).
+            page.mouse.move(lb[0], lb[1])
+            page.mouse.down()
+            page.mouse.move(tgt[0], tgt[1], steps=24)
+            page.mouse.move(tgt[0], tgt[1])   # a final settled pointermove
+
+        def wait_highlight(gid, want=True, timeout=3000):
+            # Poll for the splice-target class instead of racing a fixed wait.
+            # The old hardcoded 80 ms wait was the CI flake: the runner +
+            # Chromium there are slower/newer than the sandbox this was written
+            # against, so the highlight sometimes lands after the check. Polling
+            # returns the instant it's (n)ready, so it never slows the fast
+            # local path and never force-passes a genuinely broken drag.
+            try:
+                page.wait_for_function(HAS_HI if want else NO_HI, gid,
+                                       timeout=timeout)
+            except Exception:
+                pass
+            return has_highlight(gid) if want else (not has_highlight(gid))
+
         lb = label_center("m:signal_gen")
         check("audio wire has a visible label", bool(lb), str(lb))
         if lb:
             tgt = card_center("m:chorus")
             page.evaluate("window.__sent.length = 0")
-            page.mouse.move(lb[0], lb[1])
-            page.mouse.down()
-            page.mouse.move(tgt[0], tgt[1], steps=10)
-            page.wait_for_timeout(80)
-            hi = page.evaluate(
-                "nodes.get('m:chorus').el.classList.contains('splice-target')")
-            check("compatible module highlights under a dragged label", hi)
+            drag_label_onto(lb, tgt)
+            hi = wait_highlight("m:chorus")
+            check("compatible module highlights under a dragged label", hi,
+                  "no splice-target after drag")
             page.mouse.up()
             sent = page.evaluate("window.__sent")
             ok = ({"type": "graph_wire", "action": "add", "from": "chorus",
@@ -232,8 +269,8 @@ def main():
                    "to": "chorus"} in sent)
             check("label drop splices the module into the wire (audio trio)",
                   ok, str(sent))
-            check("highlight cleared after drop", page.evaluate(
-                "!nodes.get('m:chorus').el.classList.contains('splice-target')"))
+            check("highlight cleared after drop",
+                  wait_highlight("m:chorus", want=False))
 
         # ctl wire keys→arp label onto the keyshift card = lane-1 ctl splice
         lb = label_center("keys")
@@ -241,13 +278,10 @@ def main():
         if lb:
             tgt = card_center("keyshift")
             page.evaluate("window.__sent.length = 0")
-            page.mouse.move(lb[0], lb[1])
-            page.mouse.down()
-            page.mouse.move(tgt[0], tgt[1], steps=10)
-            page.wait_for_timeout(80)
-            hi = page.evaluate(
-                "nodes.get('keyshift').el.classList.contains('splice-target')")
-            check("keyshift highlights under a dragged ctl label", hi)
+            drag_label_onto(lb, tgt)
+            hi = wait_highlight("keyshift")
+            check("keyshift highlights under a dragged ctl label", hi,
+                  "no splice-target after drag")
             page.mouse.up()
             sent = page.evaluate("window.__sent")
             ok = ({"type": "ctl_wire", "action": "remove", "from": "keys",
@@ -263,12 +297,9 @@ def main():
         lb = label_center("m:signal_gen")
         if lb:
             tgt = card_center("m:signal_gen")
-            page.mouse.move(lb[0], lb[1])
-            page.mouse.down()
-            page.mouse.move(tgt[0], tgt[1], steps=6)
-            page.wait_for_timeout(60)
-            hi = page.evaluate(
-                "nodes.get('m:signal_gen').el.classList.contains('splice-target')")
+            drag_label_onto(lb, tgt)
+            page.wait_for_timeout(250)   # allow any (wrong) highlight to appear
+            hi = has_highlight("m:signal_gen")
             page.mouse.up()
             check("wire endpoints / sources never highlight", hi is False)
 

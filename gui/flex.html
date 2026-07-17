@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SuperSynth — Flex</title>
+<title>Patchwerk — Flex ✦ Artifix build</title>
 <style>
   :root {
     --plane: #0d0d0d; --surface: #1a1a19; --card: #202020; --ink-1: #f2f1ea;
@@ -101,6 +101,7 @@
   .mod .onoff { margin-left: auto; width: 12px; height: 12px; accent-color: var(--ctl);
     cursor: pointer; flex: none; }
   .mod .body { padding: 1px 10px 8px 14px; }
+  .mod.alloc-card .body { padding-right: 22px; }  /* clear lane for the 6 dim ports */
   .mini { display: flex; align-items: center; gap: 6px; margin: 2.5px 0; height: 11px; }
   .mini label { font-size: 9px; color: var(--ink-2); width: 48px; flex: none;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -165,7 +166,7 @@
   .port.e-bottom::after { bottom: 14px; left: 50%; transform: translateX(-50%); }
   .port.e-left::after { left: 13px; top: 50%; transform: translateY(-50%); }
   .port.e-right::after { right: 13px; top: 50%; transform: translateY(-50%); }
-  .mod:hover .port::after, .port.hot::after { opacity: 1; }
+  .port:hover::after, .port.hot::after { opacity: 1; }
   .port[data-sig=audio] { background: var(--audio); }
   .port[data-sig=ctl]   { background: var(--ctl); }
   .port[data-sig=mod]   { background: var(--mod); }
@@ -197,7 +198,7 @@
 </head>
 <body>
 <header id="hdr">
-  <h1><span id="status"></span>SuperSynth · flex</h1>
+  <h1><span id="status"></span>Patchwerk · flex <span style="color:var(--mod);font-size:10px;font-weight:400">✦ Artifix</span></h1>
   <button id="reconnect-btn" title="force reconnect">⟳</button>
   <div class="grp"><span class="lb">patch</span><select id="patch-sel"></select></div>
   <div class="grp"><span class="lb">preset</span><select id="preset-sel"></select>
@@ -258,6 +259,7 @@ const FAMILY = {
   voice: "#3987e5", input: "#1baf7a", filter: "#eda100", time: "#199e70",
   dirt: "#eb6834", dyn: "#e87ba4", vox: "#e34948", service: "#9085e9",
   io: "#c3c2b7", ctl: "#1baf7a", source: "#3987e5", effect: "#199e70",
+  mod: "#9085e9",
 };
 // subway line palettes — audio owns the cools, notes/control green→yellow,
 // mod the warm+violet half (the population that grows), tonic amber/gold.
@@ -322,6 +324,7 @@ function connect() {
     else if (m.type === "beat") onBeat(m);
     else if (m.type === "tonic") $("tonic-root").textContent = m.root || "—";
     else if (m.type === "scope_data") onScopeData(m);
+    else if (m.type === "trajectory") onTrajectory(m);
     else if (m.type === "error") console.warn("server:", m.message);
   };
 }
@@ -420,6 +423,15 @@ function place(node) {
   node.x = Math.min(WORLD_W - (node.w || CARD_W) - GRID, Math.max(MIN_X, node.x));
   node.y = Math.min(WORLD_H - h - GRID, Math.max(MIN_Y, node.y));
   node.el.style.left = node.x + "px"; node.el.style.top = node.y + "px";
+}
+// bring a freshly spawned card into the middle of the view so it can never
+// appear off-screen (behind the palette, or below the fold on a busy canvas)
+function revealCard(node) {
+  if (!node) return;
+  const b = $("board");
+  if (!b) return;
+  b.scrollLeft = Math.max(0, node.x - b.clientWidth / 2 + (node.w || CARD_W) / 2);
+  b.scrollTop = Math.max(0, node.y - b.clientHeight / 2);
 }
 function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
 
@@ -624,8 +636,13 @@ function layoutPorts(node) {
       x = Math.min(cw - 10, Math.max(10, x));
       p.ox = x; p.oy = edge === "top" ? 0 : h;
     } else {
-      let y = h * (i + 1) / (list.length + 1);
-      y = Math.round((node.y + y) / CELL) * CELL - node.y;
+      let y;
+      if (p.rowEl) {   // a mod port bound to a specific slider row (Allocation)
+        y = p.rowEl.offsetTop + p.rowEl.offsetHeight / 2;
+      } else {
+        y = h * (i + 1) / (list.length + 1);
+        y = Math.round((node.y + y) / CELL) * CELL - node.y;   // snap to a lane
+      }
       y = Math.min(h - 8, Math.max(8, y));
       p.ox = edge === "left" ? 0 : (node.w || CARD_W); p.oy = y;
     }
@@ -1407,14 +1424,28 @@ function connectAction(out, inn) {
   if (sig === "mod") {
     if (!pi.quiet || !inn.node.chainKey) return null;
     const src = out.node;
+    // which modulator family is being dragged: LFO, Living Oscillator, or
+    // one dimension of an Allocation Intent
+    const kind = src.modKind || "lfo";
+    if (kind === "alloc") {
+      // the dragged out-port carries its slot (0..5); wire that dim → knob
+      const id = src.gid.slice("alloc:".length);
+      const slot = po.slot;
+      if (slot == null) return null;
+      return () => send({type: "alloc_wire", id, slot,
+                         key: inn.node.chainKey, name: pi.param});
+    }
+    const pfx = kind === "living" ? "living:" : "lfo:";
+    const A = kind === "living" ? "living_assign" : "lfo_assign";
+    const U = kind === "living" ? "living_unassign" : "lfo_unassign";
     return () => {
-      // park the LFO card's position where it was drawn so the server-born
+      // park the mod card's position where it was drawn so the server-born
       // card (id "<key>.<param>") appears in place
-      posMem["lfo:" + inn.node.chainKey + "." + pi.param] = [src.x, src.y];
+      posMem[pfx + inn.node.chainKey + "." + pi.param] = [src.x, src.y];
       if (src.armed) { removeNode(src); rerouteAll(); }
-      else if (src.gid.startsWith("lfo:"))
-        send({type: "lfo_unassign", id: src.gid.slice(4)});  // re-target a live LFO
-      send({type: "lfo_assign", key: inn.node.chainKey, name: pi.param});
+      else if (src.gid.startsWith(pfx))
+        send({type: U, id: src.gid.slice(pfx.length)});  // re-target a live mod
+      send({type: A, key: inn.node.chainKey, name: pi.param});
     };
   }
   if (sig === "tonic") {
@@ -2232,6 +2263,7 @@ function buildLfoCard(l) {
 }
 
 let armN = 1;
+let revealNextAlloc = false;   // scroll to a server-spawned Allocation card once
 function buildArmedLfo() {
   const gid = "lfoarm:" + armN++;
   const n = addCard({gid, name: "LFO ∿", short: "LFO", sub: "drag ∿ port onto a param",
@@ -2244,7 +2276,89 @@ function buildArmedLfo() {
   place(n);
   requestAnimationFrame(() => {
     enforceSeparation(n); layoutPorts(n); rebuildObstacles(); rerouteAll();
+    revealCard(n);
   });
+  return n;
+}
+
+// Artifix: Living Oscillator — a modulator card, same wiring UX as the LFO
+// (drag its ∿ port onto any knob) but bounded-aperiodic motion.
+function buildLivingCard(l) {
+  const gid = "living:" + l.id;
+  const u01 = (k) => rowSlider({gid}, k, {
+    unit: l[k], text: ((l[k] * 100) | 0) + "%",
+    valText: (u) => ((u * 100) | 0) + "%",
+    onUnit: (u) => {
+      l[k] = u;
+      throttled("living" + l.id + k,
+        () => send({type: "living_set", id: l.id, [k]: u}));
+    },
+  });
+  const rows = [u01("life"), u01("wander"), u01("depth"), u01("center")];
+  const n = addCard({gid, name: "Living ∿", short: "Living",
+    sub: `→ ${l.key}.${l.param}`, fam: "mod", rows,
+    ports: [["out", "mod", "mod"]],
+    kill: () => send({type: "living_unassign", id: l.id})});
+  n.modKind = "living";
+  return n;
+}
+function buildArmedLiving() {
+  const gid = "livingarm:" + armN++;
+  const n = addCard({gid, name: "Living ∿", short: "Living",
+    sub: "drag ∿ port onto a param", fam: "mod", rows: [],
+    ports: [["out", "mod", "mod"]], persistent: true,
+    kill: (nd) => { removeNode(nd); rerouteAll(); }});
+  n.armed = true; n.modKind = "living";
+  const board = $("board");
+  n.x = snap(board.scrollLeft + 300 + Math.random() * 120);
+  n.y = snap(board.scrollTop + 160 + Math.random() * 160);
+  place(n);
+  requestAnimationFrame(() => {
+    enforceSeparation(n); layoutPorts(n); rebuildObstacles(); rerouteAll();
+    revealCard(n);
+  });
+  return n;
+}
+
+// Artifix: Allocation Intent — one conserved budget (Σm²=r²) with SIX dim
+// out-ports. Drag any dim's ∿ port onto a knob to wire that slot; the six
+// magnitudes trade against each other. A server-side instance (spawned via
+// alloc_spawn), so it's rendered from state.allocations, not armed like the
+// LFO/Living cards.
+const ALLOC_DIMS = ["wave", "harm", "filt", "stereo", "res", "det"];
+function buildAllocCard(a) {
+  const gid = "alloc:" + a.id;
+  const dims = a.dims || ALLOC_DIMS;
+  const RMAX = 1.3;
+  const rRow = rowSlider({gid}, "budget r", {
+    unit: (a.r != null ? a.r : 1.0) / RMAX,
+    text: (a.r != null ? a.r : 1.0).toFixed(2),
+    valText: (u) => (u * RMAX).toFixed(2),
+    onUnit: (u) => throttled("alloc" + a.id + "r",
+      () => send({type: "alloc_set", id: a.id, r: u * RMAX})),
+  });
+  const wRows = dims.map((d, i) => rowSlider({gid}, d, {
+    unit: a["w" + i] != null ? a["w" + i] : 0.4,
+    text: (((a["w" + i] != null ? a["w" + i] : 0.4) * 100) | 0) + "%",
+    valText: (u) => ((u * 100) | 0) + "%",
+    onUnit: (u) => throttled("alloc" + a.id + "w" + i,
+      () => send({type: "alloc_set", id: a.id, ["w" + i]: u})),
+  }));
+  const n = addCard({gid, name: "Allocation ⊕", short: "Alloc",
+    sub: "Σm²=r² · drag a dim onto a knob", fam: "mod",
+    rows: [rRow, ...wRows], ports: dims.map((d) => ["out", "mod", d]),
+    kill: () => send({type: "alloc_remove", id: a.id})});
+  n.modKind = "alloc";
+  n.el.classList.add("alloc-card");   // dedicated right port-lane (see CSS)
+  let s = 0;   // tag each dim out-port with its slot index + align it to its row
+  for (const p of n.ports) if (p.dir === "out" && p.sig === "mod") {
+    p.slot = s;
+    p.rowEl = wRows[s];   // port sits on its own weight-slider row
+    // the row already names the dim on the left — drop the redundant ::after
+    // label (it was landing on the value %); keep it as a native tooltip
+    if (p.el) { p.el.dataset.label = ""; p.el.title = dims[s]; }
+    s++;
+  }
   return n;
 }
 
@@ -2262,6 +2376,23 @@ function buildMonitor(type, gid, x, y, expanded) {
       ports: [["in", "audio", "thru"], ["out", "audio", "thru"]],
       vizHTML: `<canvas class="vz" data-viz="wave" height="34"></canvas>`,
       kill: (nd) => { waveRide.delete(nd.gid); removeNode(nd); rerouteAll(); saveLayout(); }});
+  } else if (type === "spectrum") {
+    // Artifix: FFT bars. Same audio ride as Waveform; reuses the scope
+    // capture (the browser runs the FFT — no new server data).
+    n = addCard({gid, name: "Spectrum", short: "Spec", sub: "global",
+      fam: "io", rows: [], persistent: true, montype: type,
+      ports: [["in", "audio", "thru"], ["out", "audio", "thru"]],
+      vizHTML: `<canvas class="vz" data-viz="spectrum" height="44"></canvas>`,
+      kill: (nd) => { waveRide.delete(nd.gid); removeNode(nd); rerouteAll(); saveLayout(); }});
+  } else if (type === "sphere") {
+    // Artifix: radius-conserving trajectory of a Living Oscillator. Bound to
+    // one living-osc assignment id (chosen from those present), not an audio
+    // wire — its "source" is a modulator, so no thru ports.
+    n = addCard({gid, name: "Sphere", short: "Sphere", sub: "pick a Living Osc",
+      fam: "mod", rows: [], persistent: true, montype: type,
+      ports: [],
+      vizHTML: `<canvas class="vz" data-viz="sphere" height="120"></canvas>`,
+      kill: (nd) => { removeNode(nd); rerouteAll(); saveLayout(); }});
   } else {  // notes
     // ctl thru ports let the monitor sit INLINE on a ctl wire (visual ride —
     // drop the card on a ctl wire; the backend wire stays untouched)
@@ -2293,8 +2424,21 @@ function rebuildGraph() {
   // patch switch → load that patch's remembered layout, respawn its monitors
   if (state.patch !== currentPatch) {
     for (const n of [...nodes.values()]) if (n.montype) removeNode(n);
+    const fresh = localStorage.getItem(storeKey(state.patch)) === null;
     currentPatch = state.patch;
-    const mons = loadLayout(currentPatch);
+    let mons = loadLayout(currentPatch);
+    // a patch may declare default monitors (state.monitors); spawn them the
+    // FIRST time it's opened in this browser, then persist. A saved layout
+    // wins ever after — so removing one makes it stay removed.
+    if (fresh && Array.isArray(state.monitors) && state.monitors.length) {
+      const POS = {wave: [680, 110], spectrum: [680, 300],
+                   sphere: [940, 300], notes: [680, 560]};
+      mons = state.monitors.map((type, i) => {
+        const p = POS[type] || [680 + (i % 2) * 260, 130 + (i >> 1) * 230];
+        return [`mon:${type}:${monN++}`, type, p[0], p[1], true];
+      });
+      setTimeout(saveLayout, 0);   // persist so these become the saved layout
+    }
     for (const [gid, type, x, y, exp] of mons) {
       if (type === "scope") continue;   // pre-v3 layout: scope is a module now
       posMem[gid] = [x, y];
@@ -2331,6 +2475,8 @@ function rebuildGraph() {
   const master = buildMasterCard();
   const drums = buildDrumsCard();
   const lfoNodes = (state.lfos || []).map(buildLfoCard);
+  const livingNodes = (state.living || []).map(buildLivingCard);
+  const allocNodes = (state.allocations || []).map(buildAllocCard);
 
   // ---- placement: stored position wins; new nodes flow into columns ----
   const CTL_X = MIN_X + GRID;               // controllers cascade on the left
@@ -2364,6 +2510,28 @@ function rebuildGraph() {
     n.y = tgt ? tgt.y : MIN_Y;
     place(n);
     enforceSeparation(n);
+  }
+  // each Living Oscillator lands left of its target, just below any LFO there
+  for (let i = 0; i < livingNodes.length; i++) {
+    const n = livingNodes[i], l = state.living[i];
+    if (posMem[n.gid]) { n.x = posMem[n.gid][0]; n.y = posMem[n.gid][1]; place(n); continue; }
+    const tgt = nodes.get("m:" + l.key);
+    n.x = tgt ? tgt.x - CARD_W - 3 * GRID : CTL_X;
+    n.y = tgt ? tgt.y + 3 * GRID : MIN_Y;
+    place(n);
+    enforceSeparation(n);
+  }
+  // Allocation cards drive many targets — park them in the controller column
+  for (let i = 0; i < allocNodes.length; i++) {
+    const n = allocNodes[i];
+    if (posMem[n.gid]) { n.x = posMem[n.gid][0]; n.y = posMem[n.gid][1]; place(n); continue; }
+    n.x = CTL_X; n.y = MIN_Y + i * 8 * GRID;
+    place(n);
+    enforceSeparation(n);
+  }
+  if (revealNextAlloc && allocNodes.length) {   // jump to a just-spawned Allocation
+    revealCard(allocNodes[allocNodes.length - 1]);
+    revealNextAlloc = false;
   }
 
   // ---- wires (derived, exactly mirroring server truth) ----
@@ -2449,6 +2617,30 @@ function rebuildGraph() {
             {node: tgt, port: tgt.ports.find(p => p.quiet && p.param === l.param)},
             {lfoId: l.id, cut: () => send({type: "lfo_unassign", id: l.id})});
   }
+  // mod: one wire per Living Oscillator assignment → the target param handle
+  for (let i = 0; i < livingNodes.length; i++) {
+    const l = state.living[i];
+    const tgt = nodes.get("m:" + l.key);
+    if (!tgt) continue;
+    addWire({node: livingNodes[i], port: port(livingNodes[i], "out", "mod")},
+            {node: tgt, port: tgt.ports.find(p => p.quiet && p.param === l.param)},
+            {cut: () => send({type: "living_unassign", id: l.id})});
+  }
+  // mod: Allocation Intent fans out — one wire per wired slot, from that dim's
+  // out-port to the target param handle
+  for (let i = 0; i < allocNodes.length; i++) {
+    const a = state.allocations[i], an = allocNodes[i];
+    for (const slotStr of Object.keys(a.targets || {})) {
+      const t = a.targets[slotStr], slot = Number(slotStr);
+      const tgt = nodes.get("m:" + t.key);
+      if (!tgt) continue;
+      const outPort = an.ports.find(p => p.dir === "out" && p.sig === "mod" && p.slot === slot);
+      const inPort = tgt.ports.find(p => p.quiet && p.param === t.param);
+      if (!outPort || !inPort) continue;
+      addWire({node: an, port: outPort}, {node: tgt, port: inPort},
+              {cut: () => send({type: "alloc_unwire", id: a.id, slot})});
+    }
+  }
 
   requestAnimationFrame(() => {
     for (const n of nodes.values()) layoutPorts(n);
@@ -2475,7 +2667,9 @@ function renderPalette() {
   h3("voices");
   btn("Mono Voice", FAMILY.ctl, () => send({type: "spawn_voice"}));
   h3("control");
-  btn("LFO ∿", FAMILY.service, () => buildArmedLfo());
+  btn("LFO ∿", FAMILY.service, () => revealCard(buildArmedLfo()));
+  btn("Living ∿", FAMILY.mod, () => revealCard(buildArmedLiving()));
+  btn("Allocation ⊕", FAMILY.mod, () => { revealNextAlloc = true; send({type: "alloc_spawn"}); });
   btn("Tonic Deriver", "#d9a521", () => send({type: "spawn_tonic"}));
   btn("Key Shifter", FAMILY.ctl, () => send({type: "spawn_keyshift"}));
   // the palette NEVER removes placed modules: any entry can be spawned
@@ -2492,8 +2686,10 @@ function renderPalette() {
   }
   h3("monitors");
   // the oscilloscope lives under effects now (Scope Tap — a real module)
-  btn("Waveform", FAMILY.io, () => { buildMonitor("wave"); afterMonitor(); });
-  btn("Note Monitor", FAMILY.io, () => { buildMonitor("notes"); afterMonitor(); });
+  btn("Waveform", FAMILY.io, () => { revealCard(buildMonitor("wave")); afterMonitor(); });
+  btn("Spectrum", FAMILY.io, () => { revealCard(buildMonitor("spectrum")); afterMonitor(); });
+  btn("Note Monitor", FAMILY.io, () => { revealCard(buildMonitor("notes")); afterMonitor(); });
+  btn("Sphere", FAMILY.mod, () => { revealCard(buildMonitor("sphere")); afterMonitor(); });
 }
 function afterMonitor() {
   requestAnimationFrame(() => {
@@ -2745,6 +2941,12 @@ function scopePollKey(n) {
   const m = aw.find(w => w.to === "master" && w.from !== n.scopeKey);
   return m ? m.from : null;
 }
+// whatever module feeds master — the global fallback source for a Spectrum
+// monitor that isn't riding a wire
+function masterFeedKey() {
+  const m = ((state && state.wires) || []).find(w => w.to === "master");
+  return m ? m.from : null;
+}
 setInterval(() => {
   if (document.hidden) return;   // poll only while the canvas is visible
   const asked = new Set();
@@ -2773,16 +2975,21 @@ function blankWaveHist() { return new Array(WAVE_HIST_N).fill(0); }
 setInterval(() => {
   if (document.hidden) return;
   for (const n of nodes.values()) {
-    if (n.montype !== "wave") continue;
-    const src = waveSrcKey(n.gid);
+    if (n.montype !== "wave" && n.montype !== "spectrum") continue;
+    // Spectrum falls back to the master-feeding module when unwired (global),
+    // like the scope card; Waveform's global mode uses the master meters.
+    let src = waveSrcKey(n.gid);
+    if (!src && n.montype === "spectrum") src = masterFeedKey();
     if (!src) continue;
-    const s = scopeData[src];
-    if (s && s.length) {   // envelope: peak of |samples| from the last reply
-      let pk = 0;
-      for (let i = 0; i < s.length; i++) pk = Math.max(pk, Math.abs(s[i]));
-      const hist = (n.waveHist = n.waveHist || blankWaveHist());
-      hist.push(pk);
-      while (hist.length > WAVE_HIST_N) hist.shift();
+    if (n.montype === "wave") {
+      const s = scopeData[src];
+      if (s && s.length) {   // envelope: peak of |samples| from the last reply
+        let pk = 0;
+        for (let i = 0; i < s.length; i++) pk = Math.max(pk, Math.abs(s[i]));
+        const hist = (n.waveHist = n.waveHist || blankWaveHist());
+        hist.push(pk);
+        while (hist.length > WAVE_HIST_N) hist.shift();
+      }
     }
     send({type: "scope", key: src});
   }
@@ -2824,6 +3031,8 @@ function drawVizLoop(now) {
       if (viz === "deck") drawDeckViz(ctx, W, H, now, style);
       else if (viz === "scope") drawScopeViz(n, ctx, W, H, style);
       else if (viz === "wave") drawWaveViz(n, ctx, W, H, style);
+      else if (viz === "spectrum") drawSpectrumViz(n, ctx, W, H, style);
+      else if (viz === "sphere") drawSphereViz(n, ctx, W, H, style);
       else if (viz === "notes") drawNotesViz(n, ctx, W, H, now, style);
     } catch (err) { console.warn("viz", viz, err); }
   }
@@ -2934,6 +3143,152 @@ function drawWaveViz(n, ctx, W, H, style) {
     const h = Math.max(1, a * (H - 4));
     ctx.fillRect((i / nsmp) * W, (H - h) / 2, Math.max(1, W / nsmp - 0.5), h);
   }
+}
+
+// -- Artifix: Spectrum monitor (client-side FFT of the scope capture) ----------
+// Small iterative radix-2 FFT — the scope already ships a 2048-sample window,
+// so the browser transforms it. No new server data (see build memory doc).
+function fftMag(re) {
+  const N = re.length, im = new Float32Array(N);
+  for (let i = 1, j = 0; i < N; i++) {   // bit-reversal permutation
+    let bit = N >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { const t = re[i]; re[i] = re[j]; re[j] = t; }
+  }
+  for (let len = 2; len <= N; len <<= 1) {
+    const ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < N; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const a = i + k, b = i + k + len / 2;
+        const tr = re[b] * cr - im[b] * ci, ti = re[b] * ci + im[b] * cr;
+        re[b] = re[a] - tr; im[b] = im[a] - ti;
+        re[a] += tr; im[a] += ti;
+        const ncr = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = ncr;
+      }
+    }
+  }
+  const mag = new Float32Array(N / 2);
+  for (let i = 0; i < N / 2; i++) mag[i] = Math.hypot(re[i], im[i]);
+  return mag;
+}
+function drawSpectrumViz(n, ctx, W, H, style) {
+  let src = waveSrcKey(n.gid);
+  if (!src) src = masterFeedKey();
+  updateMonSub(n, waveSrcKey(n.gid) ? "local: " + src : (src ? "global" : "no source"));
+  const s = src && scopeData[src];
+  if (!s || s.length < 4) return;
+  // nearest power of two <= length, Hann-windowed
+  let N = 1; while (N * 2 <= s.length) N *= 2;
+  const re = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const w = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (N - 1));
+    re[i] = s[i] * w;
+  }
+  const mag = fftMag(re);
+  const bins = mag.length;
+  ctx.fillStyle = style.getPropertyValue("--mod") || "#9085e9";
+  const bars = Math.min(96, W);
+  for (let x = 0; x < bars; x++) {
+    // log-frequency bucket
+    const f0 = Math.pow(bins, x / bars), f1 = Math.pow(bins, (x + 1) / bars);
+    let m = 0;
+    for (let i = Math.floor(f0); i < Math.max(Math.floor(f0) + 1, f1) && i < bins; i++)
+      m = Math.max(m, mag[i]);
+    const db = 20 * Math.log10(m + 1e-6);
+    const a = Math.max(0, Math.min(1, (db + 48) / 48));   // -48..0 dB → 0..1
+    const h = Math.max(1, a * (H - 3));
+    ctx.fillRect((x / bars) * W, H - h, Math.max(1, W / bars - 0.6), h);
+  }
+}
+
+// -- Artifix: Sphere monitor (radius-conserving Living Oscillator trajectory) --
+let trajCache = {};   // living id -> [x, y, r²]
+function onTrajectory(m) { trajCache = m.traj || {}; }
+function sphereLivingId(n) {
+  const live = (state && state.living) || [];
+  if (n.livingId && live.some(l => l.id === n.livingId)) return n.livingId;
+  return live.length ? (n.livingId = live[0].id) : null;
+}
+// Clamp a projected point into the UNIT DISK. The Living oscillator publishes
+// a point ON the unit sphere (ux²+uy²+uz² ≈ 1), so ux²+uy² ≤ 1 already — this
+// is a numerical safety rail so the dot can never escape the silhouette even
+// if a stray value arrives.
+function sphereUnit(x, y) {
+  let ux = x || 0, uy = y || 0;
+  const rr = ux * ux + uy * uy;
+  if (rr > 1) { const inv = 1 / Math.sqrt(rr); ux *= inv; uy *= inv; }
+  return [ux, uy];
+}
+// Radius-conserving TWO-BALL sphere (ported from the Artifix demonstrator):
+// ball 1 rides the Living trajectory; ball 2 holds a conserved angular
+// separation γ and orbits ball 1's axis at ψ; a link line shows the conserved
+// distance D. Both sit on ‖P‖ = 1 every frame. drawVizLoop runs ~60fps, so ψ,
+// the separation breath, and a slow view spin all advance client-side.
+function drawSphereViz(n, ctx, W, H, style) {
+  const id = sphereLivingId(n);
+  const cx = W / 2, cy = H / 2, R = Math.min(W, H) * 0.4;
+  const hair = style.getPropertyValue("--hairline") || "#2c2c2a";
+
+  n.sphPsi  = (n.sphPsi  || 0) + 0.045;   // ball-2 orbit around ball-1's axis
+  n.sphView = (n.sphView || 0) + 0.004;   // slow whole-sphere turn (depth cue)
+  n.sphGP   = (n.sphGP   || 0) + 0.011;   // separation-angle breathing phase
+
+  // ball 1 rides the Living trajectory (a point on the unit sphere); smooth
+  // the ~10 Hz server frames into continuous motion
+  const t = id ? trajCache[id] : null;
+  if (t && t.length >= 3) n.sphTgt = [t[0], t[1], t[2]];
+  let P1 = n.sphP1 || n.sphTgt || [0, 0.25, 0.97];
+  if (n.sphTgt) P1 = [P1[0] + (n.sphTgt[0] - P1[0]) * 0.16,
+                      P1[1] + (n.sphTgt[1] - P1[1]) * 0.16,
+                      P1[2] + (n.sphTgt[2] - P1[2]) * 0.16];
+  let m = Math.hypot(P1[0], P1[1], P1[2]) || 1e-9;
+  P1 = [P1[0] / m, P1[1] / m, P1[2] / m];
+  n.sphP1 = P1;
+
+  // orthonormal basis ⟂ P1, then ball 2 at conserved separation γ, orbit ψ
+  const ref = Math.abs(P1[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+  let e1 = [P1[1]*ref[2]-P1[2]*ref[1], P1[2]*ref[0]-P1[0]*ref[2], P1[0]*ref[1]-P1[1]*ref[0]];
+  let e1n = Math.hypot(e1[0], e1[1], e1[2]) || 1e-9; e1 = [e1[0]/e1n, e1[1]/e1n, e1[2]/e1n];
+  const e2 = [P1[1]*e1[2]-P1[2]*e1[1], P1[2]*e1[0]-P1[0]*e1[2], P1[0]*e1[1]-P1[1]*e1[0]];
+  const g = 0.78 + 0.32 * Math.sin(n.sphGP);
+  const cg = Math.cos(g), sg = Math.sin(g), cp = Math.cos(n.sphPsi), sp = Math.sin(n.sphPsi);
+  const P2 = [cg*P1[0]+sg*(cp*e1[0]+sp*e2[0]),
+              cg*P1[1]+sg*(cp*e1[1]+sp*e2[1]),
+              cg*P1[2]+sg*(cp*e1[2]+sp*e2[2])];
+
+  // view rotation about the vertical axis; orthographic, z carries depth
+  const vc = Math.cos(n.sphView), vs = Math.sin(n.sphView);
+  const scr = (P) => [cx + (P[0]*vc + P[2]*vs) * R, cy - P[1] * R, -P[0]*vs + P[2]*vc];
+
+  // wire sphere + centre C
+  ctx.strokeStyle = hair; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.ellipse(cx, cy, R, R, 0, 0, Math.PI*2); ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(cx, cy, R*0.5, R, 0, 0, Math.PI*2); ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(cx, cy, R, R*0.42, 0, 0, Math.PI*2); ctx.stroke();
+  ctx.fillStyle = hair; ctx.beginPath(); ctx.arc(cx, cy, 2.2, 0, Math.PI*2); ctx.fill();
+  if (!id) { updateMonSub(n, "no Living Osc"); return; }
+  updateMonSub(n, "living: " + id + " · two-ball");
+
+  const s1 = scr(P1), s2 = scr(P2);
+  const T1 = (n.sphT1 = n.sphT1 || []), T2 = (n.sphT2 = n.sphT2 || []);
+  T1.push(s1); T2.push(s2); while (T1.length > 52) { T1.shift(); T2.shift(); }
+  const trail = (T, rgb) => { for (let i = 1; i < T.length; i++) {
+    ctx.strokeStyle = "rgba(" + rgb + "," + (i / T.length * 0.5).toFixed(2) + ")";
+    ctx.lineWidth = 1.3; ctx.beginPath();
+    ctx.moveTo(T[i-1][0], T[i-1][1]); ctx.lineTo(T[i][0], T[i][1]); ctx.stroke(); } };
+  trail(T1, "144,133,233");    // ball 1 — mod violet
+  trail(T2, "224,168,111");    // ball 2 — amber
+  // link line = the conserved separation D
+  ctx.strokeStyle = "rgba(150,150,170,0.4)"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(s1[0], s1[1]); ctx.lineTo(s2[0], s2[1]); ctx.stroke();
+  // balls, depth-shaded, far one painted first (painter's order by z)
+  const ball = (s, rgb) => { const d = (s[2] + 1) / 2, rad = 3 + 3.6 * d, k = 0.45 + 0.55 * d;
+    ctx.fillStyle = "rgb(" + rgb.split(",").map(v => Math.round(v * k)).join(",") + ")";
+    ctx.beginPath(); ctx.arc(s[0], s[1], rad, 0, Math.PI*2); ctx.fill(); };
+  const c1 = "144,133,233", c2 = "224,168,111";
+  if (s1[2] < s2[2]) { ball(s1, c1); ball(s2, c2); } else { ball(s2, c2); ball(s1, c1); }
 }
 // rolling REAL source taps on a beat grid, colored by src. UNWIRED = GLOBAL
 // (all taps); riding ctl wires = LOCAL (only its upstream sources).

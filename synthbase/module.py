@@ -56,13 +56,15 @@ FAMILIES = {
     # voices
     "wobble_saw": "voice", "pulse_pad": "voice", "fm_bell": "voice",
     "pluck": "voice", "wind": "voice", "audio_in": "input", "drone": "service",
+    "artifix_gen": "voice",
     # filters / eq-ish
     "lowpass": "filter", "telephone": "filter",
     # time & space
     "echo": "time", "reverb": "time", "chorus": "time", "flanger": "time",
-    "phaser": "time", "autopan": "time",
+    "phaser": "time", "golden_phaser": "time", "autopan": "time",
     # dirt & dynamics
     "drive": "dirt", "bitcrush": "dirt", "wavefolder": "dirt",
+    "bias_drift_fuzz": "dirt", "dynatron_fuzz": "dirt",
     "compressor": "dyn",
     # pitch / vox
     "pitchshift": "vox", "ringmod": "vox",
