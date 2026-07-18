@@ -16,6 +16,7 @@
 
 import glob
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -24,8 +25,13 @@ from playwright.sync_api import sync_playwright
 REPO = Path(__file__).resolve().parent.parent
 FLEX = REPO / "gui" / "flex.html"
 LEGACY = REPO / "gui" / "index.html"
-CHROME = (glob.glob("/opt/pw-browsers/chromium-*/chrome-linux/chrome")
-          or ["/opt/pw-browsers/chromium"])[0]
+# Prefer a chromium already unpacked in the dev sandbox's browser dir; if it
+# isn't there (e.g. GitHub Actions, where `playwright install` lays the browser
+# out under its own versioned path), fall back to None and let Playwright
+# resolve the browser it installed itself. Keeps this test portable across the
+# sandbox and CI without touching the workflow.
+_CHROME_GLOB = glob.glob("/opt/pw-browsers/chromium-*/chrome-linux/chrome")
+CHROME = _CHROME_GLOB[0] if _CHROME_GLOB else None
 
 FAILURES = []
 
@@ -113,7 +119,10 @@ LAYOUT = {"pos": {
 
 
 def open_page(p, url, layout=None):
-    browser = p.chromium.launch(executable_path=CHROME, headless=True)
+    launch_kw = {"headless": True}
+    if CHROME and os.path.exists(CHROME):
+        launch_kw["executable_path"] = CHROME   # sandbox: use the unpacked binary
+    browser = p.chromium.launch(**launch_kw)    # else: Playwright resolves its own
     page = browser.new_page(viewport={"width": 1700, "height": 1250})
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
