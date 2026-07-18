@@ -235,6 +235,63 @@ class Rack:
             inst.bus_group.free()
         self.instances.remove(inst)
 
+    # -- incremental chain edits (in-place, no whole-rack rebuild) ----------------
+
+    def add_module(self, key: str) -> Instance:
+        """Spawn ONE module in place, parked on the null bus (connected to
+        nothing), without touching any running module. `key` is an instance id;
+        its type is resolved via the registry. Sources start silent (gate=0);
+        effects get a PRIVATE in_bus so a later detach can free it safely.
+        Wiring is applied afterwards through graph_wire/audio_rewire, exactly
+        like every other live edit."""
+        assert self.engine.server is not None, "engine not booted"
+        mod = self._lookup(key)
+        self.engine.register(mod)
+        settings = {name: p.default for name, p in mod.params.items()}
+        if (mod.kind == "source" and "gate" not in settings
+                and "gate" in mod.synthdef.parameters):
+            settings["gate"] = 0
+        owned = None
+        if mod.kind == "effect":
+            owned = self.engine.server.add_bus_group(
+                calculation_rate=CalculationRate.AUDIO, count=2
+            )
+            settings["in_bus"] = int(owned)
+        settings["out"] = self.null_bus()          # parked until wired
+        node = self.engine.server.add_synth(
+            mod.synthdef,
+            add_action=AddAction.ADD_TO_TAIL,
+            target_node=self.engine.root_group,
+            **settings,
+        )
+        inst = Instance(key=key, module=mod, settings=settings, node=node,
+                        bus_group=owned, type=mod.key)
+        self.instances.append(inst)
+        return inst
+
+    def detach_instance(self, key: str) -> None:
+        """Free a single module's node in place. Free its owned bus group ONLY
+        if no surviving instance still reads/writes that bus number — the safety
+        valve for linear-built chains where an effect's in_bus is a neighbour's
+        owned out-bus. Worst case is a small bounded leak (bus kept alive with no
+        owner), reclaimed at the next full teardown; never a dangling read."""
+        inst = self.find(key)
+        self.instances.remove(inst)
+        if inst.node is not None:
+            inst.node.free()
+        if inst.bus_group is not None:
+            bus = int(inst.bus_group)
+            still_used = any(
+                int(i.settings.get("in_bus", -1)) == bus
+                or int(i.settings.get("out", -1)) == bus
+                for i in self.instances
+            )
+            if not still_used:
+                try:
+                    inst.bus_group.free()
+                except Exception:  # noqa: BLE001
+                    pass
+
     # -- runtime control -------------------------------------------------------
 
     def find(self, key: str) -> Instance:
@@ -329,6 +386,22 @@ class Rack:
             return int(dst.settings["in_bus"])
         return int(dst.settings.get("out", 0))
 
+    def _set_nonservice_order(self, order_keys: list[str]) -> None:
+        """Rewrite self.instances so its NON-SERVICE entries follow order_keys,
+        leaving service entries pinned at their current slots. Keeps the list
+        authoritative for scsynth execution order (so reorder_for_wires can
+        cheaply skip when order is already valid)."""
+        lookup = {i.key: i for i in self.instances if not i.service}
+        ordered = [lookup[k] for k in order_keys if k in lookup]
+        # defensive: keep any non-service instance the caller forgot to list,
+        # in its current relative position, so we never drop or StopIteration
+        listed = {i.key for i in ordered}
+        for i in self.instances:
+            if not i.service and i.key not in listed:
+                ordered.append(i)
+        seq = iter(ordered)
+        self.instances = [i if i.service else next(seq) for i in self.instances]
+
     def audio_rewire(self, src_key: str, dst_key: str) -> None:
         """Point src's audio out at dst's input bus, live, and reorder the
         src node before dst so the signal arrives within the same block."""
@@ -347,6 +420,15 @@ class Rack:
                     src.node.move(dst.node, AddAction.ADD_BEFORE)
         except Exception:  # noqa: BLE001 — a failed reorder still leaves audio flowing
             pass
+        # keep the instance list in step with the single node we just moved,
+        # so the list stays a faithful mirror of scsynth order
+        order = [i.key for i in self.instances
+                 if not i.service and i.key != src.key]
+        if dst_key != "master" and dst_key in order:
+            order.insert(order.index(dst_key), src.key)
+        else:
+            order.append(src.key)   # master (tail) or dangling dst
+        self._set_nonservice_order(order)
 
     def audio_disconnect(self, src_key: str) -> None:
         """Silence src's output by parking it on the rack's null bus."""
@@ -382,19 +464,28 @@ class Rack:
         return out
 
     def reorder_for_wires(self, wires: list[dict]) -> None:
-        """Globally order nodes so every wire's src executes before its dst:
-        topological sort, then move each node to the root group's tail in
-        order (sequential ADD_TO_TAIL ⇒ final order = topo order). Services
-        (drone/LFO writers at the head) are left alone."""
+        """Ensure every wire's src executes before its dst. CHEAP PATH FIRST:
+        if the current (authoritative) instance order already satisfies every
+        wire, do nothing — no scsynth node moves at all. Only when a wire is
+        violated do we topological-sort and move nodes. Services (drone/LFO
+        writers at the head) are left alone."""
         keys = [i.key for i in self.instances if not i.service]
+        pos = {k: n for n, k in enumerate(keys)}
         kset = set(keys)
+
+        # Fast check: is the current order already valid? (the common case —
+        # wires are added consistent with existing order, so ZERO server ops)
+        edges = [(w.get("from"), w.get("to")) for w in wires]
+        edges = [(a, b) for a, b in edges if a in kset and b in kset]
+        if all(pos[a] < pos[b] for a, b in edges):
+            self._move_tail_router()
+            return
+
         indeg = {k: 0 for k in keys}
         adj = {k: [] for k in keys}
-        for w in wires:
-            a, b = w.get("from"), w.get("to")
-            if a in kset and b in kset:
-                adj[a].append(b)
-                indeg[b] += 1
+        for a, b in edges:
+            adj[a].append(b)
+            indeg[b] += 1
         ready = [k for k in keys if indeg[k] == 0]
         order = []
         while ready:
@@ -414,6 +505,10 @@ class Rack:
                 inst.node.move(self.engine.root_group, AddAction.ADD_TO_TAIL)
             except Exception:  # noqa: BLE001
                 pass
+        self._set_nonservice_order(order)   # keep the list authoritative
+        self._move_tail_router()
+
+    def _move_tail_router(self) -> None:
         if self._tail_router is not None:
             try:
                 self._tail_router.move(self.engine.root_group, AddAction.ADD_TO_TAIL)

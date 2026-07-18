@@ -64,6 +64,7 @@ class GuiServer:
         self.port = port
         self.clients: set[web.WebSocketResponse] = set()
         self.loop: asyncio.AbstractEventLoop | None = None
+        self._scope_inflight: set[str] = set()  # keys with a capture in flight
         self.web_app = web.Application()
         self.web_app.router.add_get("/", self._index)
         self.web_app.router.add_get("/legacy", self._legacy)
@@ -241,8 +242,18 @@ class GuiServer:
         elif t == "note_off":
             self.synth.note_off(m["note"])
         elif t == "scope":
-            data = await loop.run_in_executor(None, self.synth.scope.capture, m["key"])
-            await sender.send_json({"type": "scope_data", **data})
+            # A scope capture BLOCKS (server sync + ~46 ms record window) —
+            # awaiting it here would stall the per-socket message loop, so every
+            # note/param/edit queued behind a scope poll waits too (audio lags
+            # the GUI by the whole backlog). Run it as a background task, and
+            # coalesce PER KEY: one capture in flight per scope, a duplicate
+            # poll for a key already capturing is dropped. Per-key (not global)
+            # so N scopes each get serviced fairly — a global flag starved every
+            # scope but the first in each poll burst.
+            key = m["key"]
+            if key not in self._scope_inflight:
+                self._scope_inflight.add(key)
+                asyncio.create_task(self._run_scope(key, sender))
         elif t == "sustain":
             # global pedal: the arp latch + every mono voice
             self.synth._keys.set_sustain(bool(m.get("on")))
@@ -260,6 +271,19 @@ class GuiServer:
             await self._broadcast_state()
         else:
             raise ValueError(f"unknown message type {t!r}")
+
+    async def _run_scope(self, key: str, ws) -> None:
+        """Background one-shot scope capture; self-clears the busy flag so the
+        next poll can start. Errors (dead socket, module gone mid-capture) are
+        swallowed — a scope must never wedge the control plane."""
+        loop = asyncio.get_running_loop()
+        try:
+            data = await loop.run_in_executor(None, self.synth.scope.capture, key)
+            await ws.send_json({"type": "scope_data", **data})
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            self._scope_inflight.discard(key)
 
     async def _broadcast(self, payload: dict, exclude=None) -> None:
         dead = []

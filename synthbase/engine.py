@@ -50,6 +50,7 @@ class Engine:
         self.server: Server | None = None
         self.root_group = None  # all racks/chains go inside this group
         self.boot_note: str | None = None  # human-readable boot fallback info
+        self._sent: set[str] = set()  # synthdef names already on the live server
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -94,6 +95,7 @@ class Engine:
                 )
                 self.server = Server().boot(options=self.options)
         self.root_group = self.server.add_group(add_action=AddAction.ADD_TO_TAIL)
+        self._sent = set()   # fresh server: nothing sent yet
         return self
 
     def quit(self) -> None:
@@ -109,7 +111,21 @@ class Engine:
     # -- synthdefs -----------------------------------------------------------
 
     def register(self, *modules: Module) -> None:
-        """Send module synthdefs to the server and wait until they're ready."""
+        """Send module synthdefs to the server and wait until they're ready.
+
+        Each synthdef is sent AT MOST ONCE per server: a def already on the
+        server is skipped, and if none are new we return without a sync() at
+        all. That sync is a blocking round-trip — doing it on every module add
+        (even for a type already loaded) was the residual add-lag, worst when
+        the server is busy streaming scopes."""
         assert self.server is not None, "engine not booted"
-        self.server.add_synthdefs(*(m.synthdef for m in modules))
+
+        def _name(m: Module) -> str:
+            return getattr(m.synthdef, "effective_name", None) or m.key
+
+        fresh = [m for m in modules if _name(m) not in self._sent]
+        if not fresh:
+            return  # every synthdef already live — no send, no sync, instant
+        self.server.add_synthdefs(*(m.synthdef for m in fresh))
         self.server.sync()
+        self._sent.update(_name(m) for m in fresh)
