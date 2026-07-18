@@ -197,9 +197,10 @@ def test_spawn_unconnected():
     check("spawn snapshots wiring before add",
           app.graph_wires is not None and
           {"from": "pluck", "to": "echo"} in app.graph_wires)
-    check("spawn adds then disconnects",
-          added == [("add", "chorus")] and
-          {"from": "chorus", "to": None} in app.graph_wires)
+    # parking-on-null is now edit_chain("add")'s job (spawn no longer fires a
+    # redundant graph_wire remove); spawn just delegates a single add.
+    check("spawn delegates exactly one add to edit_chain",
+          added == [("add", "chorus")])
     check("spawn returns the fresh id", new_id == "chorus")
 
 
@@ -631,6 +632,133 @@ def test_snip_heal_audio():
           {"from": "pluck", "to": "echo"} in app.graph_wires)
     check("no dangling wires to the removed module", all(
         "chorus" not in (w.get("from"), w.get("to"))
+        for w in app.graph_wires))
+    app.transport.shutdown()
+
+
+# ---- incremental edit_chain: survivors are never respawned (mass-delete fix) ------
+
+def test_incremental_add_preserves_survivors():
+    """Adding a module must NOT rebuild the rack: every existing instance keeps
+    its exact node + bus objects (identity), proving no teardown-rebuild."""
+    app = make_engine_app()
+    before = {i.key: (id(i.node), id(i)) for i in app.rack.instances
+              if not i.service}
+    new_id = app.spawn_unconnected("echo")     # echo.2, parked
+    after = {i.key: (id(i.node), id(i)) for i in app.rack.instances
+             if not i.service}
+    check("new module appended", new_id == "echo.2" and new_id in after)
+    check("every original module survived", all(k in after for k in before))
+    check("survivors keep the SAME node objects (not respawned)",
+          all(after[k] == before[k] for k in before))
+    app.transport.shutdown()
+
+
+def test_incremental_remove_frees_only_one():
+    """Removing a module frees exactly that node and leaves the rest untouched."""
+    app = make_engine_app()
+    freed = []
+    for i in app.rack.instances:
+        i.node.free = (lambda k=i.key: freed.append(k))  # record who gets freed
+    keep = {i.key: id(i.node) for i in app.rack.instances
+            if not i.service and i.key != "chorus"}
+    app.graph_wires = app.rack.audio_wires()
+    app.edit_chain("remove", "chorus")
+    surv = {i.key: id(i.node) for i in app.rack.instances if not i.service}
+    check("only the removed node was freed", freed == ["chorus"])
+    check("all other modules still present", set(surv) == set(keep))
+    check("survivors keep identical node objects", all(surv[k] == keep[k]
+                                                       for k in keep))
+    app.transport.shutdown()
+
+
+def test_add_spawn_failure_no_mass_delete():
+    """THE regression guard: if the NEW module's spawn raises, the existing rack
+    must survive intact (the teardown-before-build bug lost everything here)."""
+    app = make_engine_app()
+    app.graph_wires = app.rack.audio_wires()
+    before = [i.key for i in app.rack.instances if not i.service]
+    before_nodes = {i.key: id(i.node) for i in app.rack.instances
+                    if not i.service}
+
+    orig_add_synth = app.engine.server.add_synth
+    def boom(*a, **k):
+        raise RuntimeError("scsynth refused /s_new (simulated heavy-module fail)")
+    app.engine.server.add_synth = boom
+    raised = False
+    try:
+        app.edit_chain("add", "echo")     # this spawn will fail
+    except RuntimeError:
+        raised = True
+    app.engine.server.add_synth = orig_add_synth
+
+    after = [i.key for i in app.rack.instances if not i.service]
+    check("failed add raised (surfaces to the GUI toast, not silent loss)", raised)
+    check("NO mass delete — every existing module survived", after == before)
+    check("survivors were never respawned", all(
+        id(i.node) == before_nodes[i.key]
+        for i in app.rack.instances if not i.service))
+    app.transport.shutdown()
+
+
+# ---- streamlined edit flow: no greedy per-edit node churn -------------------------
+
+def _count_moves(app):
+    """Wrap every live node's .move to count scsynth reorder ops."""
+    calls = {"n": 0}
+    for i in app.rack.instances:
+        if i.node is not None:
+            orig = i.node.move
+            i.node.move = lambda *a, _o=orig, **k: (calls.__setitem__("n", calls["n"] + 1), _o(*a, **k))[1]
+    return calls
+
+
+def _order_valid(app):
+    keys = [i.key for i in app.rack.instances if not i.service]
+    pos = {k: n for n, k in enumerate(keys)}
+    for w in app.graph_wires or []:
+        a, b = w.get("from"), w.get("to")
+        if a in pos and b in pos and pos[a] >= pos[b]:
+            return False
+    return True
+
+
+def test_add_issues_no_node_moves():
+    """Adding a module must not move ANY existing node (parked, silent)."""
+    app = make_engine_app()
+    app.graph_wires = app.rack.audio_wires()
+    calls = _count_moves(app)
+    app.spawn_unconnected("echo")
+    check("bare add triggers zero node reorders", calls["n"] == 0)
+    app.transport.shutdown()
+
+
+def test_reorder_noop_when_already_ordered():
+    """reorder_for_wires must do ZERO node moves when the order already holds."""
+    app = make_engine_app()
+    app.graph_wires = app.rack.audio_wires()  # pluck→chorus→echo→master, in order
+    calls = _count_moves(app)
+    app.rack.reorder_for_wires(app.graph_wires)
+    check("redundant reorder moves nothing (cheap path)", calls["n"] == 0)
+    app.transport.shutdown()
+
+
+def test_order_invariant_after_edits():
+    """After a mix of adds, splices and removes, every wire's src precedes its
+    dst in the authoritative instance order (so reorder can stay cheap)."""
+    app = make_engine_app()
+    app.graph_wires = app.rack.audio_wires()
+    a = app.spawn_unconnected("echo")      # echo.2, parked
+    app.graph_wire("add", "pluck", a)      # splice pluck→echo.2
+    app.graph_wire("add", a, "chorus")     # → chorus
+    b = app.spawn_unconnected("chorus")    # chorus.2, parked
+    app.graph_wire("add", a, b)            # re-aim echo.2 → chorus.2
+    app.graph_wire("add", b, "master")
+    app.edit_chain("remove", "echo")       # remove original tail-ish module
+    check("instance order satisfies every wire after edits", _order_valid(app))
+    check("no wires reference removed 'echo'", all(
+        "echo" not in (w.get("from"), w.get("to")) or w.get("from", "").startswith("echo.")
+        or w.get("to", "").startswith("echo.")
         for w in app.graph_wires))
     app.transport.shutdown()
 
@@ -1115,6 +1243,12 @@ def main():
     test_keys_off_paths()
     test_spawn_delete_respawn_cycle()
     test_snip_heal_audio()
+    test_incremental_add_preserves_survivors()
+    test_incremental_remove_frees_only_one()
+    test_add_spawn_failure_no_mass_delete()
+    test_add_issues_no_node_moves()
+    test_reorder_noop_when_already_ordered()
+    test_order_invariant_after_edits()
     test_snip_heal_ctl()
     test_keyshift_offsets()
     test_keyshift_lanes_no_merge()

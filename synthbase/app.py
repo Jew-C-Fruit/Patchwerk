@@ -569,41 +569,59 @@ class SynthApp:
                 pass
 
     def edit_chain(self, action: str, key: str, index: int | None = None) -> str | None:
-        """Live chain surgery: add/remove/move a stage. Auto-snaps wiring by
-        rebuilding the chain in the new order with all settings, enabled
-        states, and LFO assignments preserved.
+        """Live chain surgery: add/remove/move a stage IN PLACE — spawn/free/
+        rewire only the affected module, never a whole-rack rebuild. Modules
+        already running are untouched, so a failed spawn can only affect the one
+        module being added (see docs/INCREMENTAL_EDIT_PLAN.md). A full
+        `_build_from` is now reserved for patch LOAD / boot only.
 
-        v5: `key` is an instance id for remove/move; for add it's a module
-        TYPE (duplicates allowed — the new instance auto-suffixes to a fresh
-        id, which is returned)."""
+        `key` is an instance id for remove/move; for add it's a module TYPE
+        (duplicates allowed — the new instance auto-suffixes to a fresh id,
+        which is returned). Audio topology is wire-defined (`graph_wires`), so
+        add arrives parked on the null bus and the GUI splices it with ordinary
+        graph_wire messages."""
         with self._lock:
-            stages = [
-                (i.key, dict(i.settings), i.enabled)
-                for i in self.rack.instances if not i.service
-            ]
-            keys = [k for k, _, _ in stages]
+            if not self.rack:
+                raise RuntimeError("no rack running")
+            keys = [i.key for i in self.rack.instances if not i.service]
+            if self.graph_wires is None:
+                # first structural edit: adopt the current wiring as the
+                # authoritative overlay before we start mutating in place
+                self.graph_wires = self.rack.audio_wires()
             result: str | None = None
+
             if action == "add":
                 base = type_of(key)
                 if base not in self.registry:
                     raise ValueError(f"unknown module {key!r}")
                 new_id = key if ("." in key and key not in keys) \
                     else alloc_id(base, keys)
-                stages.append((new_id, {}, True))
+                self.rack.add_module(new_id)          # spawn ONE parked node
+                self.graph_wires = [w for w in self.graph_wires
+                                    if w["from"] != new_id]
+                self.graph_wires.append({"from": new_id, "to": None})
                 result = new_id
+                # a parked module is wired to nothing and silent — NO reorder,
+                # NO wire reapply, NO voice rebuild. This is the whole point:
+                # adding a module must not touch the running rack.
+
             elif action == "remove":
-                stages = [s for s in stages if s[0] != key]
-                if self.graph_wires is not None:
-                    # splice-out healing: bridge everything that fed the
-                    # removed module to the removed module's own destination
-                    dst = next((w["to"] for w in self.graph_wires
-                                if w["from"] == key), None)
-                    self.graph_wires = [
-                        {**w, "to": dst} if w["to"] == key else w
-                        for w in self.graph_wires if w["from"] != key
-                    ]
-                    if self.drums.target == key:
-                        self.drums.target = dst
+                if key not in keys:
+                    raise KeyError(f"no module {key!r} to remove")
+                if len(keys) <= 1:
+                    raise ValueError("chain cannot be empty")
+                # splice-out healing: bridge everything that fed the removed
+                # module to the removed module's own destination
+                dst = next((w["to"] for w in self.graph_wires
+                            if w["from"] == key), None)
+                feeders = [w["from"] for w in self.graph_wires
+                           if w["to"] == key]
+                self.graph_wires = [
+                    {**w, "to": dst} if w["to"] == key else w
+                    for w in self.graph_wires if w["from"] != key
+                ]
+                if self.drums.target == key:
+                    self.drums.target = dst
                 # the removed instance's control-plane presence goes with it
                 self.ctl_wires = [w for w in self.ctl_wires
                                   if key not in (w.get("from"), w.get("to"))]
@@ -611,34 +629,44 @@ class SynthApp:
                 if self._legacy_drone_id == key:
                     self._legacy_drone_id = None
                     self._legacy_drone = False
+                # drop any LFO assignments on the departing module + its map guards
+                for aid in [a for a in list(self.lfos.assignments)
+                            if a.rsplit(".", 1)[0] == key]:
+                    self.lfos.unassign(aid)
+                self.rack.mapped = {(k, p) for (k, p) in self.rack.mapped
+                                    if k != key}
+                voice_touched = (key in self._voice_targets.values()
+                                 or any(getattr(v, "target_key", None) == key
+                                        for v in self.voices.values()))
+                self.rack.detach_instance(key)        # free ONE node
+                # re-aim ONLY the wires that fed the removed module at its dst
+                for f in feeders:
+                    try:
+                        if dst is None:
+                            self.rack.audio_disconnect(f)
+                        else:
+                            self.rack.audio_rewire(f, dst)
+                    except Exception:  # noqa: BLE001
+                        pass
+                if voice_touched:
+                    self._make_voices(self.patch or {})
+
             elif action == "move":
-                i = keys.index(key)
-                j = max(0, min(len(stages) - 1, i + (index or 0)))
-                stages.insert(j, stages.pop(i))
-            # keep a source at the head (effects can't start a chain)
-            stages.sort(key=lambda s: 0 if (self.registry[type_of(s[0])].kind
-                                            == "source") else 1)
-            if not stages:
-                raise ValueError("chain cannot be empty")
-            if self.registry[type_of(stages[0][0])].kind != "source":
-                raise ValueError("chain needs at least one source")
-            lfo_snap = self.lfos.snapshot()
-            new_patch = dict(self.patch or {})
-            new_patch["chain"] = [(k, {}) for k, _, _ in stages]
-            self._build_from(new_patch, self.patch_name)
-            for k, settings, enabled in stages:
-                try:
-                    clean = {n: v for n, v in settings.items()
-                             if n in self.registry[type_of(k)].params}
-                    if clean:
-                        self.rack.set_params(k, **clean)
-                    if not enabled:
-                        self.rack.set_enabled(k, False)
-                except KeyError:
-                    pass
-            live = [k for k, _, _ in stages]
-            self.lfos.restore({aid: cfg for aid, cfg in lfo_snap.items()
-                               if aid.rsplit(".", 1)[0] in live})
+                # audio order is wire-defined; a move is a pure list reorder.
+                insts = [i for i in self.rack.instances if not i.service]
+                svc = [i for i in self.rack.instances if i.service]
+                i = next(n for n, ins in enumerate(insts) if ins.key == key)
+                j = max(0, min(len(insts) - 1, i + (index or 0)))
+                insts.insert(j, insts.pop(i))
+                self.rack.instances = insts + svc
+                self.rack.reorder_for_wires(self.graph_wires)
+            else:
+                raise ValueError(f"unknown edit_chain action {action!r}")
+
+            if self.patch is not None:
+                self.patch["chain"] = [
+                    (i.key, {}) for i in self.rack.instances if not i.service
+                ]
             return result
 
     def graph_wire(self, action: str, src: str, dst: str | None = None) -> None:
@@ -684,9 +712,10 @@ class SynthApp:
         with self._lock:
             if self.graph_wires is None and self.rack:
                 self.graph_wires = self.rack.audio_wires()
-            new_id = self.edit_chain("add", key)
-            self.graph_wire("remove", new_id)
-            return new_id
+            # edit_chain("add") already spawns the module parked on the null bus;
+            # the old extra graph_wire("remove") here was redundant and triggered
+            # a full node reorder per add — dropped.
+            return self.edit_chain("add", key)
 
     def set_voice_target(self, key: str, voice: str = "voice") -> None:
         """Re-aim a mono voice at another playable source (GUI wire re-drag)."""
