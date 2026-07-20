@@ -1,0 +1,3189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Patchwerk — Flex</title>
+<style>
+  :root {
+    --plane: #0d0d0d; --surface: #1a1a19; --card: #202020; --ink-1: #f2f1ea;
+    --ink-2: #a9a89e; --hairline: #2c2c2a; --border: rgba(255,255,255,0.10);
+    --audio: #3987e5; --ctl: #1baf7a; --mod: #9085e9; --tonic: #d9a521;
+    --danger: #e34948; --meter: #1baf7a; --grid: rgba(255,255,255,0.045);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { background: var(--plane); color: var(--ink-1);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 13px;
+    /* a patch canvas is all drags — never let a gesture select text */
+    -webkit-user-select: none; user-select: none; }
+  input, textarea { -webkit-user-select: auto; user-select: auto; }
+
+  header { position: fixed; inset: 0 0 auto 0; z-index: 40; display: flex; gap: 10px;
+    align-items: center; flex-wrap: wrap; padding: 7px 14px;
+    background: color-mix(in srgb, var(--plane) 85%, transparent);
+    backdrop-filter: blur(6px); border-bottom: 1px solid var(--hairline); }
+  header h1 { font-size: 14px; margin: 0; font-weight: 650; white-space: nowrap; }
+  header .grp { display: flex; gap: 5px; align-items: center; white-space: nowrap; }
+  header .lb { font-size: 9px; letter-spacing: 0.07em; color: var(--ink-2);
+    text-transform: uppercase; }
+  header button, header select, header input[type=text] { background: var(--card);
+    color: var(--ink-1); font-size: 11px; border: 1px solid var(--border);
+    border-radius: 7px; padding: 2px 8px; cursor: pointer; font-family: inherit; }
+  header input[type=text] { cursor: text; width: 74px; }
+  header select { max-width: 120px; }
+  header button:hover { border-color: var(--ink-2); }
+  header input[type=range] { width: 84px; accent-color: var(--audio); height: 14px; }
+  header a { color: var(--ink-2); font-size: 11px; text-decoration: none; }
+  header a:hover { color: var(--ink-1); }
+  header label { font-size: 11px; color: var(--ink-2); display: flex; gap: 3px;
+    align-items: center; }
+  #status { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--danger); margin-right: 5px; vertical-align: 1px; }
+  #status.ok { background: var(--meter); }
+  .mbars { display: flex; flex-direction: column; gap: 2px; width: 70px; }
+  .mbars > div { height: 5px; background: var(--hairline); border-radius: 3px; overflow: hidden; }
+  .mbars > div > div { height: 100%; width: 0%; background: var(--meter);
+    transition: width 50ms linear; }
+  .mbars > div.clip > div { background: var(--danger); }
+  #beat-pos { font-variant-numeric: tabular-nums; min-width: 28px; display: inline-block;
+    color: var(--ink-1); }
+  #midi-ind { font-size: 10px; color: var(--ink-2); max-width: 130px; overflow: hidden;
+    text-overflow: ellipsis; }
+
+  #palette { position: fixed; top: 54px; left: 0; bottom: 0; width: 172px; z-index: 30;
+    background: color-mix(in srgb, var(--surface) 92%, transparent); border-right: 1px solid var(--hairline);
+    overflow-y: auto; padding: 10px; backdrop-filter: blur(6px); }
+  #palette h3 { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--ink-2); margin: 12px 2px 5px; font-weight: 600; }
+  #palette button { display: flex; align-items: center; gap: 7px; width: 100%; text-align: left;
+    background: var(--card); color: var(--ink-1); border: 1px solid var(--border);
+    border-radius: 7px; padding: 5px 8px; margin: 3px 0; font-size: 12px; cursor: pointer; }
+  #palette button:hover { border-color: var(--ink-2); }
+  #palette button i { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+
+  #board { position: absolute; inset: 54px 0 0 0; overflow: auto; }
+  #world { position: relative; width: 2600px; height: 1800px;
+    background-image: linear-gradient(var(--grid) 1px, transparent 1px),
+                      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 24px 24px; }
+  svg#wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  svg#wires path.hit { pointer-events: stroke; cursor: default; }
+  /* v8: wire labels are DRAG HANDLES — grab a badge, drop it on a module */
+  #wire-labels g { pointer-events: auto; cursor: grab; }
+  .mod.splice-target { border-color: rgba(255,255,255,0.85);
+    box-shadow: 0 0 0 1.5px rgba(255,255,255,0.55), 0 3px 14px rgba(0,0,0,0.45); }
+  svg#wires path.hit.cuttable { cursor: pointer; }
+  svg#wires path.splice-hi { stroke-width: 5 !important;
+    filter: brightness(1.4) drop-shadow(0 0 4px rgba(255,255,255,0.45)); }
+  svg#wires path.flow { stroke: #fff; stroke-width: 2.7; fill: none;
+    stroke-linecap: round; stroke-dasharray: 0.1 16;
+    animation: flowdots 0.55s linear infinite; opacity: 0.95; }
+  @keyframes flowdots { to { stroke-dashoffset: -16.1; } }
+  svg#wiretop { position: absolute; inset: 0; width: 100%; height: 100%;
+    pointer-events: none; z-index: 15; }
+
+  .mod { position: absolute; width: 170px; background: var(--card);
+    border: 1px solid var(--border); border-radius: 9px; user-select: none;
+    box-shadow: 0 3px 14px rgba(0,0,0,0.45); z-index: 1; }
+  .mod.dragging { opacity: 0.9; box-shadow: 0 10px 26px rgba(0,0,0,0.6); z-index: 20; }
+  .mod.shifting { transition: left 140ms ease, top 140ms ease; }
+  .mod.bypassed .body, .mod.bypassed .viz-sec { opacity: 0.4; }
+  .mod.rec { outline: 1.5px solid var(--danger); box-shadow: 0 0 10px rgba(227,73,72,0.5); }
+  .mod .head { display: flex; align-items: center; gap: 7px; padding: 7px 9px 4px; cursor: grab; }
+  .mod .head:active { cursor: grabbing; }
+  .mod .stripe { width: 4px; align-self: stretch; border-radius: 3px; flex: none; }
+  .mod .title { font-weight: 640; font-size: 12.5px; line-height: 1.15; }
+  .mod .sub { font-size: 9.5px; color: var(--ink-2); }
+  .mod .kill { margin-left: 2px; color: var(--ink-2); font-size: 11px; cursor: pointer;
+    padding: 0 2px; border-radius: 4px; }
+  .mod .kill:hover { color: var(--danger); }
+  .mod .onoff { margin-left: auto; width: 12px; height: 12px; accent-color: var(--ctl);
+    cursor: pointer; flex: none; }
+  .mod .body { padding: 1px 10px 8px 14px; }
+  .mini { display: flex; align-items: center; gap: 6px; margin: 2.5px 0; height: 11px; }
+  .mini label { font-size: 9px; color: var(--ink-2); width: 48px; flex: none;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mini .track { flex: 1; height: 11px; position: relative; cursor: ew-resize; }
+  .mini .track::before { content: ""; position: absolute; top: 4px; left: 0; right: 0;
+    height: 3px; border-radius: 2px; background: var(--hairline); }
+  .mini .track i { position: absolute; top: 50%; transform: translate(-50%, -50%);
+    width: 7px; height: 7px; border-radius: 50%; background: var(--ink-2); }
+  .mini .track i.zero { background: var(--danger); }
+  .mini.mapped .track i { background: var(--mod); }
+  .mini .v { width: 34px; flex: none; font-size: 8.5px; color: var(--ink-2);
+    text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap;
+    overflow: hidden; }
+  .mini .chip { flex: 1; font-size: 9px; color: var(--ink-1); background: var(--hairline);
+    border-radius: 3px; padding: 0 5px; line-height: 11px; cursor: pointer;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mini .chip:hover { background: #3a3a38; }
+  .mini .chip.static { cursor: default; }
+  .viz-sec { padding: 3px 10px 8px 14px; }
+  canvas.vz { width: 100%; display: block; background: var(--plane);
+    border: 1px solid var(--hairline); border-radius: 6px; }
+  .deckbtns { display: flex; gap: 4px; margin: 3px 0; }
+  .deckbtns button { flex: 1; background: var(--hairline); color: var(--ink-1); border: 0;
+    border-radius: 4px; font-size: 9px; padding: 2px 0; cursor: pointer; font-family: inherit; }
+  .deckbtns button:hover { background: #3a3a38; }
+  .deckbtns button.recbtn { color: var(--danger); font-weight: 700; }
+  .dgrid { display: grid; grid-template-columns: repeat(16, 1fr); gap: 2px; margin: 2px 0; }
+  .dlane { font-size: 8px; color: var(--ink-2); height: 9px; margin-top: 3px; }
+  .dstep { aspect-ratio: 1; border: 0; padding: 0; border-radius: 2px;
+    background: var(--hairline); cursor: pointer; }
+  .dstep.on { background: var(--audio); }
+  .dstep.q { box-shadow: inset 0 0 0 1px rgba(255,255,255,0.14); }
+  .dstep.ph { outline: 1.5px solid rgba(255,255,255,0.75); }
+  .expander { cursor: pointer; color: var(--ink-2); font-size: 10px; padding: 0 3px;
+    margin-left: 2px; }
+  .expander:hover { color: var(--ink-1); }
+  /* key shifter: progression step strip + the pop-out key palette */
+  .ksgrid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; margin: 2px 0; }
+  .ksstep { aspect-ratio: 1; border: 0; padding: 0; border-radius: 2px;
+    background: var(--hairline); cursor: pointer; color: var(--ink-2);
+    font-size: 8px; font-family: inherit; line-height: 1; }
+  .ksstep.on { background: var(--ctl); color: #0d0d0d; font-weight: 700; }
+  .ksstep.sel { outline: 1.5px solid #fff; }
+  .ksstep.ph { box-shadow: 0 0 0 1.5px rgba(255,255,255,0.75); }
+  #keypop { position: fixed; z-index: 80; background: var(--card);
+    border: 1px solid var(--ink-2); border-radius: 9px; padding: 6px;
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px;
+    box-shadow: 0 10px 26px rgba(0,0,0,0.6); }
+  #keypop button { background: var(--hairline); color: var(--ink-1); border: 0;
+    border-radius: 5px; font-size: 10px; padding: 5px 7px; cursor: pointer;
+    font-family: inherit; white-space: nowrap; }
+  #keypop button:hover { background: #3a3a38; }
+  #keypop button.sel { background: var(--ctl); color: #0d0d0d; font-weight: 700; }
+
+  .port { position: absolute; width: 12px; height: 12px; border-radius: 50%;
+    border: 2px solid var(--plane); cursor: crosshair; z-index: 5; }
+  .port.subtle { width: 9px; height: 9px; border-width: 1.5px; opacity: 0.78; }
+  .port::after { content: attr(data-label); position: absolute;
+    font-size: 8.5px; color: var(--ink-2); white-space: nowrap; pointer-events: none;
+    opacity: 0; transition: opacity 120ms; }
+  .port.e-top::after { top: 14px; left: 50%; transform: translateX(-50%); }
+  .port.e-bottom::after { bottom: 14px; left: 50%; transform: translateX(-50%); }
+  .port.e-left::after { left: 13px; top: 50%; transform: translateY(-50%); }
+  .port.e-right::after { right: 13px; top: 50%; transform: translateY(-50%); }
+  .mod:hover .port::after, .port.hot::after { opacity: 1; }
+  .port[data-sig=audio] { background: var(--audio); }
+  .port[data-sig=ctl]   { background: var(--ctl); }
+  .port[data-sig=mod]   { background: var(--mod); }
+  /* tonic handles sit above the quiet per-param mod handles on the same edge */
+  .port[data-sig=tonic] { background: var(--tonic); z-index: 6; }
+  .port.quiet { width: 7px; height: 7px; border-width: 1.5px;
+    background: #6f6d64; opacity: 0.5; }
+  .port.quiet:hover, .port.quiet.hot { opacity: 1; background: var(--mod); }
+  .port.hot { box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 30%, transparent); }
+  .legend { display: flex; gap: 12px; font-size: 10px; color: var(--ink-2); }
+  .legend b { display: inline-block; width: 18px; height: 3px; border-radius: 2px;
+    vertical-align: middle; margin-right: 4px; }
+  .hint { position: fixed; bottom: 8px; left: 50%; transform: translateX(-50%);
+    z-index: 40; font-size: 11px; color: var(--ink-2);
+    background: color-mix(in srgb, var(--plane) 85%, transparent);
+    border: 1px solid var(--hairline); border-radius: 8px; padding: 4px 12px;
+    backdrop-filter: blur(6px); white-space: nowrap; }
+  #toast { position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
+    z-index: 60; font-size: 11px; color: var(--ink-1); background: #2c2c2a;
+    border: 1px solid var(--border); border-radius: 8px; padding: 5px 14px;
+    opacity: 0; transition: opacity 200ms; pointer-events: none; white-space: nowrap; }
+  #toast.show { opacity: 1; }
+  #ghost-card { position: fixed; z-index: 70; width: 170px; pointer-events: none;
+    background: var(--card); border: 1px solid var(--ink-2); border-radius: 9px;
+    opacity: 0.85; box-shadow: 0 10px 26px rgba(0,0,0,0.6); padding: 8px 10px;
+    display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 640; }
+  #ghost-card i { width: 4px; height: 22px; border-radius: 3px; flex: none; }
+</style>
+</head>
+<body>
+<header id="hdr">
+  <h1><span id="status"></span>Patchwerk · flex</h1>
+  <button id="reconnect-btn" title="force reconnect">⟳</button>
+  <div class="grp"><span class="lb">patch</span><select id="patch-sel"></select></div>
+  <div class="grp"><span class="lb">preset</span><select id="preset-sel"></select>
+    <button id="preset-load">load</button>
+    <input type="text" id="preset-name" placeholder="save as">
+    <button id="preset-save">save</button>
+    <button id="preset-del" title="delete selected">✕</button></div>
+  <div class="grp"><button id="play-btn" title="transport play/stop">▶</button>
+    <span class="lb" id="bpm-v">— bpm</span>
+    <input type="range" id="bpm" min="40" max="220" step="1">
+    <select id="meter" title="meter"><option value="2">2/4</option><option value="3">3/4</option>
+      <option value="4" selected>4/4</option><option value="6">6/8</option></select>
+    <label><input type="checkbox" id="click-on">click</label>
+    <span class="lb">pos</span><b id="beat-pos">—</b>
+    <span class="lb">tonic</span><b id="tonic-root" style="font-size:11px">—</b></div>
+  <div class="grp"><span class="lb">master</span>
+    <input type="range" id="vol" min="0" max="1" step="0.001" value="0.8">
+    <div class="mbars"><div id="m-out-l"><div></div></div><div id="m-out-r"><div></div></div></div></div>
+  <div class="grp"><label><input type="checkbox" id="keys-on" checked>keys</label>
+    <b id="oct" style="font-size:11px">C4</b>
+    <b id="caps-note" style="color:var(--danger);font-size:10px"></b></div>
+  <span id="midi-ind">midi: —</span>
+  <button id="tidy" title="compact the layout">⇱ tidy</button>
+  <div class="legend">
+    <span><b style="background:linear-gradient(90deg,#3987e5,#22b8d4)"></b>audio</span>
+    <span><b style="background:linear-gradient(90deg,#1baf7a,#e8c832)"></b>notes</span>
+    <span><b style="background:linear-gradient(90deg,#e34948,#9085e9)"></b>mod</span>
+    <span data-legend="tonic"><b style="background:linear-gradient(90deg,#d9a521,#f0c96a)"></b>tonic</span>
+  </div>
+  <span class="lb">view</span><select id="view-sel" title="switch view">
+    <option value="/">blocks</option>
+    <option value="/flex" selected>flex</option>
+    <option value="/legacy">legacy</option>
+  </select>
+</header>
+<div id="palette"></div>
+<div id="board"><div id="world">
+  <svg id="wires">
+    <g id="wire-perm"></g>
+    <g id="wire-labels" style="font: 600 8.5px system-ui; text-anchor: middle;"></g>
+    <path id="wire-live" fill="none" stroke-width="2.5" stroke-dasharray="5 5" style="display:none"/>
+  </svg>
+  <svg id="wiretop"></svg>
+</div></div>
+<div class="hint">keys <b>A–;</b> play · <b>Z/X</b> octave · <b>caps</b> sustain · <b>space</b> loop-rec
+  · click any wire to cut · drag port→port to wire · drag from the palette to splice</div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+// ============================================================================
+// flex.html — the subway-routed patch canvas from the visual prototype, wired
+// to the REAL synth over the websocket protocol (see synthbase/server.py).
+// Graph nodes/wires are DERIVED from every `state` message; card positions
+// survive rebuilds (and reloads, via localStorage keyed by patch name).
+// ============================================================================
+const GRID = 24, CARD_W = 170, CELL = 12;
+const WORLD_W = 2600, WORLD_H = 1800;
+const COLS = WORLD_W / CELL | 0, ROWS = WORLD_H / CELL | 0;
+
+const FAMILY = {
+  voice: "#3987e5", input: "#1baf7a", filter: "#eda100", time: "#199e70",
+  dirt: "#eb6834", dyn: "#e87ba4", vox: "#e34948", service: "#9085e9",
+  io: "#c3c2b7", ctl: "#1baf7a", source: "#3987e5", effect: "#199e70",
+  psine: "#22b8d4",
+};
+// subway line palettes — audio owns the cools, notes/control green→yellow,
+// mod the warm+violet half (the population that grows), tonic amber/gold.
+const LINES = {
+  audio: ["#3987e5", "#22b8d4", "#1f9e9e", "#6db1ff", "#4a5fd0", "#7fd4ef"],
+  ctl:   ["#1baf7a", "#8cc63f", "#e8c832", "#4fd08c", "#c9d94d", "#0f8f66"],
+  mod:   ["#e34948", "#f2842c", "#d446b8", "#9085e9", "#e87ba4", "#ff6b5e", "#7a5fd0"],
+  tonic: ["#d9a521", "#f0c96a", "#b8860b", "#e8b93e"],
+};
+const lineCount = {audio: 0, ctl: 0, mod: 0, tonic: 0};
+const BASE_R = 9, LANE = 6;
+const LANE_SEQ = [0, -1, 1, -2, 2, -3, 3];
+const SIG_CSS = {audio: "var(--audio)", ctl: "var(--ctl)", mod: "var(--mod)",
+                 tonic: "var(--tonic)"};
+
+const world = document.getElementById("world");
+const wiresPerm = document.getElementById("wire-perm");
+const wireLive = document.getElementById("wire-live");
+const $ = (id) => document.getElementById(id);
+
+const nodes = new Map();      // gid -> node
+const wires = [];
+let state = null;
+
+// ---------- websocket (legacy's watchdog verbatim) ----------
+let ws = null, lastMsg = 0, reconnectTimer = null;
+function scheduleReconnect(ms) {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(connect, ms);
+}
+function connect() {
+  if (ws && ws.readyState <= 1) return;
+  try {
+    ws = new WebSocket(`ws://${location.host}/ws`);
+  } catch (_) {   // file:// or bad host — keep the page alive, retry later
+    scheduleReconnect(3000);
+    return;
+  }
+  ws.onopen = () => {
+    lastMsg = performance.now();
+    $("status").classList.add("ok");
+    // flush anything queued while the socket was down — a dropped note_off
+    // or all_notes_off leaves stuck notes + never-clearing monitor bars
+    const q = outbox.splice(0, outbox.length);
+    for (const m of q) {
+      try { ws.send(JSON.stringify(m)); } catch (_) { break; }
+    }
+    // a fresh socket means the server already silenced us (last-client
+    // disconnect = all_notes_off) — any tap still open predates this
+    // connection and would otherwise pin a full-width bar forever
+    for (const ev of tapNotes) if (ev.t1 === null) ev.t1 = performance.now();
+  };
+  ws.onclose = () => { $("status").classList.remove("ok"); scheduleReconnect(800); };
+  ws.onerror = () => { try { ws.close(); } catch (_) {} };
+  ws.onmessage = (ev) => {
+    lastMsg = performance.now();
+    const m = JSON.parse(ev.data);
+    if (m.type === "state") { state = m; onState(); }
+    else if (m.type === "meters") onMeters(m);
+    else if (m.type === "param") onParam(m);
+    else if (m.type === "midi") onMidi(m.event);
+    else if (m.type === "beat") onBeat(m);
+    else if (m.type === "tonic") $("tonic-root").textContent = m.root || "—";
+    else if (m.type === "scope_data") onScopeData(m);
+    else if (m.type === "error") console.warn("server:", m.message);
+  };
+}
+// messages sent during a reconnect gap are QUEUED, not dropped (v7: dropped
+// note_offs were leaving stuck notes and permanent green monitor bars)
+const outbox = [];
+function send(m) {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(m));
+  else {
+    outbox.push(m);
+    if (outbox.length > 200) outbox.shift();  // bounded: knob spam can go
+  }
+}
+function ensureLive() {
+  if (!ws || ws.readyState >= 2) { connect(); return; }
+  if (ws.readyState === 1 && performance.now() - lastMsg > 3000) {
+    $("status").classList.remove("ok");
+    try { ws.close(); } catch (_) {}
+    scheduleReconnect(150);
+  }
+}
+setInterval(() => { if (!document.hidden) ensureLive(); }, 2000);
+window.addEventListener("focus", ensureLive);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) ensureLive(); });
+document.addEventListener("pointerdown", ensureLive, true);
+window.addEventListener("keydown", ensureLive, true);
+$("view-sel").addEventListener("change", (e) => { location.href = e.target.value; });
+$("reconnect-btn").addEventListener("click", (e) => {
+  try { ws && ws.close(); } catch (_) {}
+  scheduleReconnect(100);
+  e.target.blur();
+});
+
+// ---------- unit <-> value curve math (legacy verbatim) ----------
+function fmt(v) {
+  if (v >= 1000) return v.toFixed(0);
+  if (v >= 100) return v.toFixed(1);
+  if (v >= 10) return v.toFixed(2);
+  return v.toFixed(3);
+}
+function toUnit(p, value) {
+  if (p.curve === "exp") {
+    const lo = Math.max(p.min, 1e-6);
+    return Math.log(value / lo) / Math.log(p.max / lo);
+  }
+  return (value - p.min) / (p.max - p.min || 1);
+}
+function fromUnit(p, u) {
+  if (p.curve === "exp") {
+    const lo = Math.max(p.min, 1e-6);
+    return lo * Math.pow(p.max / lo, u);
+  }
+  return p.min + u * (p.max - p.min);
+}
+const timers = {};
+function throttled(key, fn, ms = 30) {
+  if (timers[key]) { timers[key].fn = fn; return; }
+  fn();
+  timers[key] = { fn: null };
+  setTimeout(() => {
+    const pending = timers[key].fn;
+    delete timers[key];
+    if (pending) throttled(key, pending, ms);
+  }, ms);
+}
+
+// ---------- layout persistence ----------
+// positions per patch: {pos: {gid: [x,y]}, monitors: [[gid, type, x, y, expanded]], monN}
+let currentPatch = null, posMem = {}, monN = 1;
+function storeKey(patch) { return "supersynth.flex." + patch; }
+function saveLayout() {
+  if (!currentPatch) return;
+  throttled("savelayout", () => {
+    for (const n of nodes.values()) posMem[n.gid] = [n.x, n.y];
+    const monitors = [...nodes.values()].filter(n => n.persistent && n.montype)
+      .map(n => [n.gid, n.montype, n.x, n.y, !!n.expanded]);
+    try {
+      localStorage.setItem(storeKey(currentPatch),
+        JSON.stringify({pos: posMem, monitors, monN}));
+    } catch (_) {}
+  }, 400);
+}
+function loadLayout(patch) {
+  try {
+    const d = JSON.parse(localStorage.getItem(storeKey(patch)) || "{}");
+    posMem = d.pos || {};
+    monN = d.monN || 1;
+    return d.monitors || [];
+  } catch (_) { posMem = {}; return []; }
+}
+
+// ---------- generic card builder ----------
+function snap(v) { return Math.max(0, Math.round(v / GRID) * GRID); }
+const MIN_X = 8 * GRID, MIN_Y = 3 * GRID;   // header/palette must not swallow cards
+function place(node) {
+  const h = node.el.offsetHeight || 64;
+  node.x = Math.min(WORLD_W - (node.w || CARD_W) - GRID, Math.max(MIN_X, node.x));
+  node.y = Math.min(WORLD_H - h - GRID, Math.max(MIN_Y, node.y));
+  node.el.style.left = node.x + "px"; node.el.style.top = node.y + "px";
+}
+function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+
+// live param widgets, keyed "<gid>.<pname>" — `param` echoes land here
+const uiParam = {};
+let sliderDrag = null;         // id of the track being dragged (blocks echo + rebuild)
+
+function rowSlider(node, pname, opts) {
+  // opts: {unit, text, onUnit, valText(u), mapped}
+  const id = `${node.gid}.${pname}`;
+  const row = document.createElement("div");
+  row.className = "mini" + (opts.mapped ? " mapped" : "");
+  row.innerHTML = `<label title="${esc(pname)}">${esc(pname)}${opts.mapped ? " ∿" : ""}</label>
+    <div class="track"><i></i></div><span class="v"></span>`;
+  const track = row.querySelector(".track"), thumb = track.firstElementChild,
+        vEl = row.querySelector(".v");
+  const setUI = (u, txt) => {
+    thumb.style.left = (Math.min(1, Math.max(0, u)) * 100) + "%";
+    thumb.classList.toggle("zero", u <= 0.02);
+    vEl.textContent = txt;
+  };
+  setUI(opts.unit, opts.text);
+  track.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+    sliderDrag = id;
+    track.setPointerCapture(e.pointerId);
+    const mv = (ev) => {
+      const r = track.getBoundingClientRect();
+      const u = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
+      setUI(u, opts.valText(u));
+      opts.onUnit(u);
+    };
+    mv(e);
+    track.addEventListener("pointermove", mv);
+    const done = () => {
+      track.removeEventListener("pointermove", mv);
+      sliderDrag = null;
+      flushRebuild();
+    };
+    track.addEventListener("pointerup", done, {once: true});
+    track.addEventListener("pointercancel", done, {once: true});
+  });
+  uiParam[id] = setUI;
+  return row;
+}
+function rowChip(node, pname, opts) {
+  // opts: {text, onClick, static}
+  const id = `${node.gid}.${pname}`;
+  const row = document.createElement("div");
+  row.className = "mini";
+  row.innerHTML = `<label title="${esc(pname)}">${esc(pname)}</label>
+    <span class="chip${opts.static ? " static" : ""}"></span>`;
+  const chip = row.querySelector(".chip");
+  chip.textContent = opts.text;
+  chip.addEventListener("pointerdown", (e) => e.stopPropagation());
+  if (opts.onClick) chip.addEventListener("click", () => opts.onClick(chip));
+  uiParam[id] = (u, txt) => { chip.textContent = txt; };
+  return row;
+}
+
+// cfg: {gid, name, short, sub, fam, headCheck:{checked,onChange}|null, kill:fn|null,
+//       rows:[el...], vizHTML, expandable, expanded, persistent, ports:[[dir,sig,label]],
+//       quietRows:[{pname,rowEl}] added after body build}
+function addCard(cfg) {
+  const el = document.createElement("div");
+  el.className = "mod";
+  const stripe = FAMILY[cfg.fam] || "#888";
+  el.innerHTML = `
+    <div class="head"><div class="stripe" style="background:${stripe}"></div>
+      <div><div class="title">${esc(cfg.name)}</div><div class="sub">${esc(cfg.sub || "")}</div></div>
+    </div><div class="body"></div>`;
+  const head = el.querySelector(".head");
+  if (cfg.headCheck) {
+    const cb = document.createElement("input");
+    cb.type = "checkbox"; cb.className = "onoff"; cb.checked = !!cfg.headCheck.checked;
+    cb.title = "enabled";
+    cb.addEventListener("pointerdown", (e) => e.stopPropagation());
+    cb.addEventListener("change", (e) => { cfg.headCheck.onChange(cb.checked); e.target.blur(); });
+    head.appendChild(cb);
+    if (!cfg.headCheck.checked) el.classList.add("bypassed");
+  }
+  if (cfg.expandable) {
+    const ex = document.createElement("span");
+    ex.className = "expander"; ex.textContent = cfg.expanded ? "▾" : "▸";
+    ex.title = "expand";
+    if (!cfg.headCheck) ex.style.marginLeft = "auto";
+    head.appendChild(ex);
+  }
+  if (cfg.kill) {
+    const k = document.createElement("span");
+    k.className = "kill"; k.textContent = "✕"; k.title = "remove";
+    if (!cfg.headCheck && !cfg.expandable) k.style.marginLeft = "auto";
+    head.appendChild(k);
+    k.addEventListener("pointerdown", (e) => e.stopPropagation());
+    k.addEventListener("click", () => cfg.kill(node));
+  }
+  const body = el.querySelector(".body");
+  for (const r of (cfg.rows || [])) body.appendChild(r);
+  if (cfg.vizHTML) {
+    const vs = document.createElement("div");
+    vs.className = "viz-sec";
+    vs.innerHTML = cfg.vizHTML;
+    el.appendChild(vs);
+    if (cfg.expandable && !cfg.expanded) vs.style.display = "none";
+  }
+  world.appendChild(el);
+  const node = {gid: cfg.gid, name: cfg.name, short: cfg.short || cfg.name.split(" ")[0],
+                fam: cfg.fam, x: 0, y: 0, el, ports: [], w: CARD_W,
+                expanded: !!cfg.expanded, persistent: !!cfg.persistent,
+                montype: cfg.montype || null, seed: !!cfg.seed, mod: cfg.mod || null};
+  if (cfg.expandable) {
+    const ex = el.querySelector(".expander"), vs = el.querySelector(".viz-sec");
+    ex.addEventListener("pointerdown", (e) => e.stopPropagation());
+    ex.addEventListener("click", (e) => {
+      e.stopPropagation();
+      node.expanded = !node.expanded;
+      ex.textContent = node.expanded ? "▾" : "▸";
+      if (vs) vs.style.display = node.expanded ? "" : "none";
+      node.w = (node.expanded && cfg.wide) ? 240 : CARD_W;   // drum grid needs finger room
+      el.style.width = node.w + "px";
+      requestAnimationFrame(() => { layoutPorts(node); rebuildObstacles(); rerouteAll(); });
+      saveLayout();
+    });
+    if (node.expanded && cfg.wide) { node.w = 240; el.style.width = "240px"; }
+  }
+  // primary ports
+  for (const [dir, sig, label] of (cfg.ports || [])) {
+    const p = document.createElement("div");
+    p.className = `port ${dir}`;
+    p.dataset.sig = sig; p.dataset.label = label;
+    p.style.color = SIG_CSS[sig];
+    node.ports.push({dir, sig, label, el: p});
+    el.appendChild(p);
+  }
+  // quiet mod-target handles on param rows
+  for (const q of (cfg.quietRows || [])) {
+    const p = document.createElement("div");
+    p.className = "port in quiet";
+    p.dataset.sig = "mod"; p.dataset.label = q.pname;
+    p.style.color = SIG_CSS.mod;
+    node.ports.push({dir: "in", sig: "mod", label: q.pname, param: q.pname,
+                     quiet: true, rowEl: q.rowEl, el: p});
+    el.appendChild(p);
+  }
+  nodes.set(node.gid, node);
+  bindNode(node);
+  return node;
+}
+function removeNode(node) {
+  for (const w of [...wires])
+    if (w.from.node === node || w.to.node === node) removeWire(w);
+  node.el.remove();
+  nodes.delete(node.gid);
+}
+
+// ---------- ports geometry (prototype verbatim) ----------
+const NORMALS = {top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0]};
+function layoutPorts(node) {
+  const h = node.el.offsetHeight || 64;
+  for (const p of node.ports.filter(q => q.quiet)) {
+    p.edge = "left";
+    p.el.classList.add("e-left");
+    p.ox = 0;
+    p.oy = p.rowEl ? p.rowEl.offsetTop + p.rowEl.offsetHeight / 2 : h / 2;
+    p.el.style.left = (p.ox - 3.5) + "px";
+    p.el.style.top = (p.oy - 3.5) + "px";
+  }
+  // TONIC INS pin to the card's UPPER-LEFT CORNER (v8) — a fixed spot that
+  // cannot collide with the audio in (top center) or the quiet per-param
+  // handles (left edge at row heights below the head): the amber root socket
+  for (const p of node.ports.filter(q => !q.quiet && q.sig === "tonic" &&
+                                         q.dir === "in")) {
+    p.edge = "left";
+    p.el.classList.remove("e-top", "e-bottom", "e-right");
+    p.el.classList.add("e-left", "subtle");
+    p.ox = 0;
+    p.oy = 10;
+    p.el.style.left = (p.ox - 4.5) + "px";
+    p.el.style.top = (p.oy - 4.5) + "px";
+  }
+  // mod handles ride the sides (subtle); audio/ctl flow top→bottom; the
+  // deriver's tonic OUT keeps the right edge
+  const side = (p) => p.sig === "mod" || p.sig === "tonic";
+  const cornered = (p) => p.sig === "tonic" && p.dir === "in";
+  const groups = {
+    top:    node.ports.filter(p => !p.quiet && !side(p) && p.dir === "in"),
+    bottom: node.ports.filter(p => !p.quiet && !side(p) && p.dir === "out"),
+    left:   node.ports.filter(p => !p.quiet && side(p) && !cornered(p) &&
+                                   p.dir === "in"),
+    right:  node.ports.filter(p => !p.quiet && side(p) && p.dir === "out"),
+  };
+  for (const [edge, list] of Object.entries(groups)) list.forEach((p, i) => {
+    p.edge = edge;
+    p.el.classList.remove("e-top", "e-bottom", "e-left", "e-right");
+    p.el.classList.add("e-" + edge);
+    p.el.classList.toggle("subtle", side(p));
+    const half = side(p) ? 4.5 : 6;
+    if (edge === "top" || edge === "bottom") {
+      const cw = node.w || CARD_W;
+      let x = cw * (i + 1) / (list.length + 1);
+      x = Math.round((node.x + x) / CELL) * CELL - node.x;   // on a routing lane
+      x = Math.min(cw - 10, Math.max(10, x));
+      p.ox = x; p.oy = edge === "top" ? 0 : h;
+    } else {
+      let y = h * (i + 1) / (list.length + 1);
+      y = Math.round((node.y + y) / CELL) * CELL - node.y;
+      y = Math.min(h - 8, Math.max(8, y));
+      p.ox = edge === "left" ? 0 : (node.w || CARD_W); p.oy = y;
+    }
+    p.el.style.left = (p.ox - half) + "px";
+    p.el.style.top = (p.oy - half) + "px";
+  });
+}
+function portXY(node, port) { return [node.x + port.ox, node.y + port.oy]; }
+function portNormal(port) {
+  return NORMALS[port.edge || (port.dir === "out" ? "bottom" : "top")];
+}
+
+// ---------- obstacle map + A* router (prototype verbatim) ----------
+let obst = new Uint8Array(COLS * ROWS);
+const core = new Uint8Array(COLS * ROWS);
+function rebuildObstacles(skip) {
+  obst.fill(0); core.fill(0);
+  for (const n of nodes.values()) {
+    if (n === skip) continue;
+    const h = n.el.offsetHeight || 64;
+    const mark = (pad, g) => {
+      const x0 = Math.max(0, (n.x - pad) / CELL | 0), y0 = Math.max(0, (n.y - pad) / CELL | 0);
+      const x1 = Math.min(COLS - 1, Math.ceil((n.x + (n.w || CARD_W) + pad) / CELL));
+      const y1 = Math.min(ROWS - 1, Math.ceil((n.y + h + pad) / CELL));
+      for (let cy = y0; cy <= y1; cy++)
+        for (let cx = x0; cx <= x1; cx++) g[cy * COLS + cx] = 1;
+    };
+    mark(6, obst); mark(-2, core);
+  }
+  for (const n of nodes.values()) {
+    if (n === skip) continue;
+    for (const p of n.ports) {
+      const [px, py] = portXY(n, p);
+      const [nx, ny] = portNormal(p);
+      for (let k = 0; k < 3; k++) {
+        const cx = Math.round((px + nx * (6 + k * CELL)) / CELL);
+        const cy = Math.round((py + ny * (6 + k * CELL)) / CELL);
+        if (cx < 0 || cy < 0 || cx >= COLS || cy >= ROWS) continue;
+        const i = cy * COLS + cx;
+        if (!core[i]) obst[i] = 0;
+      }
+    }
+  }
+}
+const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+function freeNear(cx, cy, g) {
+  if (!g[cy * COLS + cx]) return [cx, cy];
+  for (let r = 1; r < 8; r++)
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      const x = cx + dx, y = cy + dy;
+      if (x >= 0 && y >= 0 && x < COLS && y < ROWS && !g[y * COLS + x]) return [x, y];
+    }
+  return [cx, cy];
+}
+function astar(sx, sy, tx, ty, grid = obst) {
+  [sx, sy] = freeNear(sx, sy, grid); [tx, ty] = freeNear(tx, ty, grid);
+  const N = COLS * ROWS;
+  const g = new Float32Array(N * 4).fill(Infinity);
+  const prev = new Int32Array(N * 4).fill(-1);
+  const heap = [];
+  const push = (f, s) => { heap.push([f, s]); let i = heap.length - 1;
+    while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break;
+      [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
+  const pop = () => { const top = heap[0], last = heap.pop();
+    if (heap.length) { heap[0] = last; let i = 0;
+      for (;;) { const l = 2 * i + 1, r = l + 1; let m = i;
+        if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+        if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+        if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } }
+    return top; };
+  const h = (x, y) => Math.abs(x - tx) + Math.abs(y - ty);
+  const TURN = 9;
+  for (let d = 0; d < 4; d++) { const s = (sy * COLS + sx) * 4 + d; g[s] = 0; push(h(sx, sy), s); }
+  let goal = -1;
+  while (heap.length) {
+    const [f, s] = pop();
+    const d = s & 3, cell = s >> 2, cx = cell % COLS, cy = (cell / COLS) | 0;
+    if (f - h(cx, cy) > g[s]) continue;
+    if (cx === tx && cy === ty) { goal = s; break; }
+    for (let nd = 0; nd < 4; nd++) {
+      const nx = cx + DIRS[nd][0], ny = cy + DIRS[nd][1];
+      if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+      if (grid[ny * COLS + nx] && !(nx === tx && ny === ty)) continue;
+      const ns = (ny * COLS + nx) * 4 + nd;
+      const cost = g[s] + 1 + (nd !== d ? TURN : 0);
+      if (cost < g[ns]) { g[ns] = cost; prev[ns] = s; push(cost + h(nx, ny), ns); }
+    }
+  }
+  if (goal < 0) return null;
+  const pts = [];
+  for (let s = goal; s >= 0; s = prev[s]) {
+    const cell = s >> 2;
+    pts.push([(cell % COLS) * CELL, ((cell / COLS) | 0) * CELL]);
+  }
+  pts.reverse();
+  return simplify(pts);
+}
+function simplify(pts) {
+  const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [a, b, c] = [out[out.length - 1], pts[i], pts[i + 1]];
+    if ((a[0] === b[0] && b[0] === c[0]) || (a[1] === b[1] && b[1] === c[1])) continue;
+    out.push(b);
+  }
+  out.push(pts[pts.length - 1]);
+  return out;
+}
+
+// ---------- wire geometry: lanes, fan-out, labels (prototype verbatim) ----------
+function attachOffset(w, port) {
+  const mates = wires.filter(v => v.from.port === port || v.to.port === port);
+  if (mates.length < 2) return 0;
+  const [nx, ny] = portNormal(port);
+  const lateral = (v) => {
+    const other = v.from.port === port ? v.to : v.from;
+    const [ox, oy] = portXY(other.node, other.port);
+    return ny !== 0 ? ox : oy;
+  };
+  mates.sort((a, b) => lateral(a) - lateral(b) || a.seq - b.seq);
+  const k = mates.indexOf(w);
+  return (k - (mates.length - 1) / 2) * (CELL / 2);
+}
+function routeWire(w, grid) {
+  const [nx1, ny1] = portNormal(w.from.port);
+  const [nx2, ny2] = portNormal(w.to.port);
+  let [x1, y1] = portXY(w.from.node, w.from.port);
+  let [x2, y2] = portXY(w.to.node, w.to.port);
+  const o1 = attachOffset(w, w.from.port), o2 = attachOffset(w, w.to.port);
+  x1 += -ny1 * o1; y1 += nx1 * o1;
+  x2 += -ny2 * o2; y2 += nx2 * o2;
+  const S = 16;
+  const s = [x1 + nx1 * S, y1 + ny1 * S], t = [x2 + nx2 * S, y2 + ny2 * S];
+  const sc = [Math.round(s[0] / CELL), Math.round(s[1] / CELL)];
+  const tc = [Math.round(t[0] / CELL), Math.round(t[1] / CELL)];
+  let pts = astar(sc[0], sc[1], tc[0], tc[1], grid);
+  if (!pts && grid && grid !== obst) pts = astar(sc[0], sc[1], tc[0], tc[1], obst);
+  if (!pts) pts = fallbackRoute(sc, tc);
+  const j1 = ny1 !== 0 ? [pts[0][0], s[1]] : [s[0], pts[0][1]];
+  const j2 = ny2 !== 0 ? [pts[pts.length - 1][0], t[1]] : [t[0], pts[pts.length - 1][1]];
+  pts = dedupe([[x1, y1], s, j1, ...pts, j2, t, [x2, y2]]);
+  pts = alignPortRun(dejag(pts));
+  w.pts = pts;
+  w.o1 = o1; w.o2 = o2;
+}
+// sealed-route fallback: NEVER draw a blind L through cards. Try both Ls,
+// then detour via the nearest free column/row (checked against `core`, the
+// actual card bodies), so even desperation routes circumscribe every module.
+function segClearCore(x0, y0, x1, y1) {
+  if (x0 === x1) {
+    for (let y = Math.min(y0, y1); y <= Math.max(y0, y1); y++)
+      if (core[y * COLS + x0]) return false;
+  } else {
+    for (let x = Math.min(x0, x1); x <= Math.max(x0, x1); x++)
+      if (core[y0 * COLS + x]) return false;
+  }
+  return true;
+}
+function fallbackRoute(sc, tc) {
+  const [sx, sy] = sc, [tx, ty] = tc;
+  const P = (cells) => cells.map(([x, y]) => [x * CELL, y * CELL]);
+  if (segClearCore(sx, sy, tx, sy) && segClearCore(tx, sy, tx, ty))
+    return P([[sx, sy], [tx, sy], [tx, ty]]);
+  if (segClearCore(sx, sy, sx, ty) && segClearCore(sx, ty, tx, ty))
+    return P([[sx, sy], [sx, ty], [tx, ty]]);
+  const midX = Math.round((sx + tx) / 2), midY = Math.round((sy + ty) / 2);
+  for (let r = 0; r < COLS; r++) for (const x of (r ? [midX - r, midX + r] : [midX])) {
+    if (x < 0 || x >= COLS) continue;
+    if (segClearCore(sx, sy, x, sy) && segClearCore(x, sy, x, ty) &&
+        segClearCore(x, ty, tx, ty))
+      return P([[sx, sy], [x, sy], [x, ty], [tx, ty]]);
+  }
+  for (let r = 0; r < ROWS; r++) for (const y of (r ? [midY - r, midY + r] : [midY])) {
+    if (y < 0 || y >= ROWS) continue;
+    if (segClearCore(sx, sy, sx, y) && segClearCore(sx, y, tx, y) &&
+        segClearCore(tx, y, tx, ty))
+      return P([[sx, sy], [sx, y], [tx, y], [tx, ty]]);
+  }
+  // truly sealed (endpoint buried under an overlapping card): last-resort L
+  return P([[sx, sy], [tx, sy], [tx, ty]]);
+}
+function alignPortRun(pts) {
+  const fix = (p) => {
+    if (p.length < 5) return p;
+    const [x0, y0] = p[0];
+    const vert = p[1][0] === x0 && p[1][1] !== y0;
+    if (vert) {
+      if (p[2][1] === p[1][1] && Math.abs(p[2][0] - x0) <= CELL * 0.75 &&
+          p[3][0] === p[2][0] && p.length > 4) {
+        p[2] = [x0, p[2][1]]; p[3] = [x0, p[3][1]];
+      }
+    } else {
+      if (p[2][0] === p[1][0] && Math.abs(p[2][1] - y0) <= CELL * 0.75 &&
+          p[3][1] === p[2][1] && p.length > 4) {
+        p[2] = [p[2][0], y0]; p[3] = [p[3][0], y0];
+      }
+    }
+    return p;
+  };
+  let out = fix(pts.map(q => [...q]));
+  out = fix(out.reverse()).reverse();
+  return dedupe(out);
+}
+function dejag(pts) {
+  for (let pass = 0; pass < 4; pass++) {
+    let changed = false;
+    for (let i = 2; i + 2 <= pts.length - 3; i++) {
+      const a = pts[i - 1], b = pts[i], c = pts[i + 1], d = pts[i + 2];
+      const midLen = Math.abs(c[0] - b[0]) + Math.abs(c[1] - b[1]);
+      if (midLen === 0 || midLen > CELL + 0.5) continue;
+      const prevH = a[1] === b[1], nextH = c[1] === d[1];
+      if (prevH !== nextH) continue;
+      const lp = Math.abs(b[0] - a[0]) + Math.abs(b[1] - a[1]);
+      const ln = Math.abs(d[0] - c[0]) + Math.abs(d[1] - c[1]);
+      if (prevH) {
+        const y = lp >= ln ? a[1] : d[1];
+        if (y === a[1]) pts[i + 2] = [d[0], y]; else pts[i - 1] = [a[0], y];
+      } else {
+        const x = lp >= ln ? a[0] : d[0];
+        if (x === a[0]) pts[i + 2] = [x, d[1]]; else pts[i - 1] = [x, a[1]];
+      }
+      pts.splice(i, 2);
+      changed = true; i--;
+    }
+    if (!changed) break;
+  }
+  return dedupe(pts);
+}
+function offsetPath(pts, o) {
+  if (!o || pts.length < 3) return pts.slice();
+  const n = pts.length - 1;
+  const segs = [];
+  for (let i = 0; i < n; i++) {
+    const dx = Math.sign(pts[i + 1][0] - pts[i][0]);
+    const dy = Math.sign(pts[i + 1][1] - pts[i][1]);
+    const horiz = dy === 0;
+    let c = horiz ? pts[i][1] : pts[i][0];
+    if (i > 0 && i < n - 1) c += horiz ? -dx * o : dy * o;
+    segs.push({horiz, c});
+  }
+  const out = [pts[0]];
+  for (let i = 0; i < n - 1; i++) {
+    const a = segs[i], b = segs[i + 1];
+    if (a.horiz === b.horiz) continue;
+    out.push(a.horiz ? [b.c, a.c] : [a.c, b.c]);
+  }
+  out.push(pts[n]);
+  return dedupe(out);
+}
+function roundedPathNested(pts, o) {
+  if (pts.length < 2) return "";
+  let d = `M${pts[0][0]},${pts[0][1]}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [px, py] = pts[i - 1], [cx, cy] = pts[i], [nx, ny] = pts[i + 1];
+    const u = [Math.sign(cx - px), Math.sign(cy - py)];
+    const v = [Math.sign(nx - cx), Math.sign(ny - cy)];
+    const turn = u[0] * v[1] - u[1] * v[0];
+    let r = BASE_R + turn * o;
+    r = Math.max(1.5, Math.min(r, Math.hypot(cx - px, cy - py) / 2,
+                                  Math.hypot(nx - cx, ny - cy) / 2));
+    const inx = cx - u[0] * r, iny = cy - u[1] * r;
+    const outx = cx + v[0] * r, outy = cy + v[1] * r;
+    d += ` L${inx},${iny} Q${cx},${cy} ${outx},${outy}`;
+  }
+  d += ` L${pts[pts.length - 1][0]},${pts[pts.length - 1][1]}`;
+  return d;
+}
+function roundedPath(pts) {
+  if (pts.length < 2) return "";
+  let d = `M${pts[0][0]},${pts[0][1]}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [px, py] = pts[i - 1], [cx, cy] = pts[i], [nx, ny] = pts[i + 1];
+    const r = Math.min(6, Math.hypot(cx - px, cy - py) / 2, Math.hypot(nx - cx, ny - cy) / 2);
+    const inx = cx - Math.sign(cx - px) * r, iny = cy - Math.sign(cy - py) * r;
+    const outx = cx + Math.sign(nx - cx) * r, outy = cy + Math.sign(ny - cy) * r;
+    d += ` L${inx},${iny} Q${cx},${cy} ${outx},${outy}`;
+  }
+  d += ` L${pts[pts.length - 1][0]},${pts[pts.length - 1][1]}`;
+  return d;
+}
+function drawWire(w) {
+  const o = w.lane * LANE;
+  const pts = offsetPath(w.pts, o);
+  w.dpts = pts;
+  const d = roundedPathNested(pts, o);
+  w.el.setAttribute("d", d);
+  w.hitEl.setAttribute("d", d);
+  w.flow.setAttribute("d", d);
+  const ends = [[w.dotA, pts[0], w.o1], [w.dotB, pts[pts.length - 1], w.o2]];
+  for (const [dot, p, off] of ends) {
+    dot.style.display = off ? "" : "none";
+    dot.setAttribute("cx", p[0]); dot.setAttribute("cy", p[1]);
+  }
+}
+function labelGeom(w) {
+  const dst = w.to.port.quiet
+    ? `${w.to.node.short}.${w.to.port.param}` : w.to.node.short;
+  // src/dst kept separate so applyLabel can compose the text to READ WITH the
+  // data flow of the segment it lands on (pts are ordered source → dest)
+  return {src: w.from.node.short, dst, wpx: (w.from.node.short + dst).length * 4.9 + 27};
+}
+function applyLabel(w, mx, my, dx, dy, src, dst, wpx) {
+  // (dx, dy) = the carrying segment's flow direction. Horizontal right-flow
+  // reads "Src → Dst"; left-flow flips to "Dst ← Src" so the arrow still
+  // points along the flow. Vertical rotates -90 for upward flow, +90 for
+  // downward, so the text is read in the direction the signal travels.
+  const horiz = dy === 0;
+  let transform = "", txt = `${src} → ${dst}`;
+  if (horiz) {
+    if (dx < 0) txt = `${dst} ← ${src}`;
+  } else {
+    transform = `rotate(${dy < 0 ? -90 : 90} ${mx} ${my})`;
+  }
+  w.labelG.style.display = "";
+  w.labelG.setAttribute("transform", transform);
+  w.labelT.textContent = txt;
+  w.labelR.setAttribute("x", mx - wpx / 2); w.labelR.setAttribute("width", wpx);
+  w.labelR.setAttribute("y", my - 7);
+  w.labelR.setAttribute("fill", w.color);
+  w.labelT.setAttribute("x", mx); w.labelT.setAttribute("y", my + 2.8);
+}
+function boxHitsWires(box, self) {
+  for (const v of wires) {
+    if (v === self || !v.dpts) continue;
+    for (let i = 0; i < v.dpts.length - 1; i++) {
+      const [a, b] = [v.dpts[i], v.dpts[i + 1]];
+      const x0 = Math.min(a[0], b[0]) - 3, x1 = Math.max(a[0], b[0]) + 3;
+      const y0 = Math.min(a[1], b[1]) - 3, y1 = Math.max(a[1], b[1]) + 3;
+      if (x0 < box[2] && box[0] < x1 && y0 < box[3] && box[1] < y1) return true;
+    }
+  }
+  return false;
+}
+function labelPass() {
+  const placed = [];
+  const PAD = 8;
+  const hit = (a, b) => a[0] < b[2] + PAD && b[0] < a[2] + PAD &&
+                        a[1] < b[3] + PAD && b[1] < a[3] + PAD;
+  for (const w of wires) {
+    const pts = w.dpts || w.pts;
+    const {src, dst, wpx} = labelGeom(w);
+    const segs = [];
+    for (let i = 0; i < pts.length - 1; i++)
+      segs.push({i, len: Math.abs(pts[i + 1][0] - pts[i][0]) + Math.abs(pts[i + 1][1] - pts[i][1])});
+    segs.sort((a, b) => b.len - a.len);
+    w.labelBox = null;
+    outer: for (const strict of [true, false]) {
+      for (const sg of segs.slice(0, 4)) {
+        if (sg.len < wpx + 14) break;
+        const a = pts[sg.i], b = pts[sg.i + 1], horiz = a[1] === b[1];
+        // pts run source → dest, so the segment direction IS the flow direction
+        const dx = Math.sign(b[0] - a[0]), dy = Math.sign(b[1] - a[1]);
+        for (const f of [0.5, 0.35, 0.65, 0.22, 0.78]) {
+          const mx = a[0] + (b[0] - a[0]) * f, my = a[1] + (b[1] - a[1]) * f;
+          const box = horiz ? [mx - wpx / 2, my - 8, mx + wpx / 2, my + 8]
+                            : [mx - 8, my - wpx / 2, mx + 8, my + wpx / 2];
+          if (placed.some(r => hit(r, box))) continue;
+          if (strict && boxHitsWires(box, w)) continue;
+          applyLabel(w, mx, my, dx, dy, src, dst, wpx);
+          w.labelBox = box; placed.push(box);
+          break outer;
+        }
+      }
+    }
+    if (!w.labelBox) w.labelG.style.display = "none";
+  }
+}
+function stampRect(g, box, pad) {
+  const x0 = Math.max(0, (box[0] - pad) / CELL | 0), y0 = Math.max(0, (box[1] - pad) / CELL | 0);
+  const x1 = Math.min(COLS - 1, Math.ceil((box[2] + pad) / CELL));
+  const y1 = Math.min(ROWS - 1, Math.ceil((box[3] + pad) / CELL));
+  for (let cy = y0; cy <= y1; cy++)
+    for (let cx = x0; cx <= x1; cx++) g[cy * COLS + cx] = 1;
+}
+
+// ---------- corridor-aware coloring (prototype verbatim) ----------
+function hueOf(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = (n >> 16) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  if (!d) return 0;
+  let h = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return h * 60;
+}
+const HUES = Object.fromEntries(Object.entries(LINES).map(([k, v]) => [k, v.map(hueOf)]));
+function hueDist(a, b) { const d = Math.abs(a - b) % 360; return Math.min(d, 360 - d); }
+function segsOf(w) {
+  const out = [];
+  for (let i = 0; i < (w.pts?.length || 1) - 1; i++) {
+    const [ax, ay] = w.pts[i], [bx, by] = w.pts[i + 1];
+    if (ay === by) out.push({h: 1, c: ay, a: Math.min(ax, bx), b: Math.max(ax, bx)});
+    else out.push({h: 0, c: ax, a: Math.min(ay, by), b: Math.max(ay, by)});
+  }
+  return out;
+}
+function sharesCorridor(sa, sb) {
+  for (const x of sa) for (const y of sb) {
+    if (x.h !== y.h || Math.abs(x.c - y.c) > 9) continue;
+    if (Math.min(x.b, y.b) - Math.max(x.a, y.a) >= 24) return true;
+  }
+  return false;
+}
+function assignLayout() {
+  const seg = new Map(wires.map(w => [w, segsOf(w)]));
+  const conflict = new Map(wires.map(w => [w, []]));
+  for (let i = 0; i < wires.length; i++)
+    for (let j = i + 1; j < wires.length; j++)
+      if (sharesCorridor(seg.get(wires[i]), seg.get(wires[j]))) {
+        conflict.get(wires[i]).push(wires[j]);
+        conflict.get(wires[j]).push(wires[i]);
+      }
+  const order = [...wires].sort((a, b) =>
+    conflict.get(b).length - conflict.get(a).length || a.seq - b.seq);
+  const done = new Set();
+  for (const w of order) {
+    const nbs = conflict.get(w).filter(n => done.has(n));
+    const usedLanes = new Set(nbs.map(n => n.lane));
+    w.lane = LANE_SEQ.find(l => !usedLanes.has(l)) ?? ((w.seq % 7) - 3);
+    const sig = w.from.port.sig, pal = LINES[sig], hues = HUES[sig];
+    let bestI = w.famIndex % pal.length, bestScore = -1;
+    for (let i = 0; i < pal.length; i++) {
+      let minD = 999;
+      for (const nb of nbs) minD = Math.min(minD, hueDist(hues[i], nb.hue));
+      const score = minD + (i === w.famIndex % pal.length ? 0.5 : 0);
+      if (score > bestScore) { bestScore = score; bestI = i; }
+    }
+    w.color = pal[bestI]; w.hue = hues[bestI];
+    w.el.setAttribute("stroke", w.color);
+    done.add(w);
+  }
+}
+function dedupe(pts) {
+  const out = [pts[0]];
+  for (const p of pts.slice(1)) {
+    const q = out[out.length - 1];
+    if (p[0] !== q[0] || p[1] !== q[1]) out.push(p);
+  }
+  return simplify(out);
+}
+
+// ---------- wires ----------
+// opts.cut: the click-to-cut callback. Every cut is REAL in v3: audio cuts
+// are graph_wire remove / set_drums target null, mod cuts unassign the LFO,
+// and ctl cuts send ctl_wire remove (the backend note router follows).
+function addWire(from, to, opts = {}) {
+  if (!from.port || !to.port) return null;
+  if (wires.some(w => w.from.port === from.port && w.to.port === to.port)) return null;
+  const sig = from.port.sig;
+  const n = lineCount[sig]++;
+  const color = LINES[sig][n % LINES[sig].length];
+  const seq = wires.length;
+  const NS = "http://www.w3.org/2000/svg";
+  const el = document.createElementNS(NS, "path");
+  el.setAttribute("fill", "none");
+  el.setAttribute("stroke", color);
+  el.setAttribute("stroke-width", "2.6");
+  el.setAttribute("stroke-linecap", "round");
+  const hit = document.createElementNS(NS, "path");
+  hit.setAttribute("fill", "none"); hit.setAttribute("stroke", "transparent");
+  hit.setAttribute("stroke-width", "13"); hit.classList.add("hit");
+  const flow = document.createElementNS(NS, "path");
+  flow.classList.add("flow");
+  flow.style.display = "none";
+  const dotA = document.createElementNS(NS, "circle");
+  const dotB = document.createElementNS(NS, "circle");
+  for (const d of [dotA, dotB]) {
+    d.setAttribute("r", 2.8); d.setAttribute("fill", color);
+    d.setAttribute("stroke", "#0d0d0d"); d.setAttribute("stroke-width", 1);
+    d.style.display = "none";
+  }
+  const labelG = document.createElementNS(NS, "g");
+  const labelR = document.createElementNS(NS, "rect");
+  labelR.setAttribute("height", 14); labelR.setAttribute("rx", 7);
+  labelR.setAttribute("fill-opacity", "0.82");
+  const labelT = document.createElementNS(NS, "text");
+  labelT.setAttribute("fill", "#0d0d0d");
+  labelG.appendChild(labelR); labelG.appendChild(labelT);
+  $("wire-labels").appendChild(labelG);
+  const w = {from, to, sig, color, hue: hueOf(color), famIndex: n, seq,
+             lane: 0, el, hitEl: hit, flow, dotA, dotB, labelG, labelR, labelT,
+             lfoId: opts.lfoId || null};
+  if (opts.cut) {
+    hit.classList.add("cuttable");
+    hit.addEventListener("click", () => opts.cut(w));
+  }
+  bindLabelHandle(w);   // v8: the label badge is a splice drag handle
+  wiresPerm.appendChild(el); wiresPerm.appendChild(hit);
+  wiresPerm.appendChild(flow);
+  const top = $("wiretop");
+  top.appendChild(dotA); top.appendChild(dotB);
+  wires.push(w);
+  // ports get their offsets in layoutPorts — a wire added mid-rebuild (before
+  // the rAF layout pass) must wait for rerouteAll or it paints NaN paths
+  if (from.port.ox !== undefined && to.port.ox !== undefined) {
+    routeWire(w); drawWire(w);
+  }
+  return w;
+}
+function removeWire(w) {
+  w.el.remove(); w.hitEl.remove(); w.labelG.remove();
+  w.flow.remove(); w.dotA.remove(); w.dotB.remove();
+  const i = wires.indexOf(w);
+  if (i >= 0) wires.splice(i, 1);
+}
+function rerouteAll() {
+  rebuildObstacles();
+  for (const w of wires) routeWire(w);
+  assignLayout();
+  for (const w of wires) drawWire(w);
+  labelPass();
+  // pass 2: contour around other lines' labels (walls only in open space)
+  const stampable = new Map();
+  for (const v of wires) {
+    if (!v.labelBox) continue;
+    const b = v.labelBox, vert = (b[3] - b[1]) > (b[2] - b[0]);
+    let clear = 0;
+    for (const side of [-1, 1]) {
+      let ok = true;
+      if (vert) {
+        const cx = ((side < 0 ? b[0] : b[2]) / CELL | 0) + side * 2;
+        for (let cy = (b[1] / CELL | 0); cy <= Math.ceil(b[3] / CELL); cy++)
+          if (cx < 0 || cx >= COLS || obst[cy * COLS + cx]) { ok = false; break; }
+      } else {
+        const cy = ((side < 0 ? b[1] : b[3]) / CELL | 0) + side * 2;
+        for (let cx = (b[0] / CELL | 0); cx <= Math.ceil(b[2] / CELL); cx++)
+          if (cy < 0 || cy >= ROWS || obst[cy * COLS + cx]) { ok = false; break; }
+      }
+      if (ok) clear++;
+    }
+    stampable.set(v, clear === 2);
+  }
+  for (const w of wires) {
+    const g = obst.slice();
+    for (const v of wires) {
+      if (v === w || !v.labelBox || !stampable.get(v)) continue;
+      if (v.from.node === w.from.node || v.to.node === w.from.node ||
+          v.from.node === w.to.node || v.to.node === w.to.node) continue;
+      stampRect(g, v.labelBox, 2);
+    }
+    routeWire(w, g);
+  }
+  for (const w of wires) drawWire(w);
+  labelPass();
+}
+function rerouteFor(node) {
+  for (const w of wires)
+    if (w.from.node === node || w.to.node === node) { routeWire(w); drawWire(w); }
+  labelPass();
+}
+
+// ---------- min separation / make-space / tidy (prototype verbatim) ----------
+function cardRect(n) { const h = n.el.offsetHeight || 64; return [n.x, n.y, n.x + (n.w || CARD_W), n.y + h]; }
+function overlapsAny(node) {
+  const [ax0, ay0, ax1, ay1] = cardRect(node);
+  for (const o of nodes.values()) {
+    if (o === node) continue;
+    const [bx0, by0, bx1, by1] = cardRect(o);
+    if (ax0 < bx1 + GRID && bx0 < ax1 + GRID && ay0 < by1 + GRID && by0 < ay1 + GRID)
+      return true;
+  }
+  return false;
+}
+const rectsClose = (a, b, m) => a[0] < b[2] + m && b[0] < a[2] + m &&
+                                a[1] < b[3] + m && b[1] < a[3] + m;
+const rcenter = (r) => [(r[0] + r[2]) / 2, (r[1] + r[3]) / 2];
+function makeSpacePreview(node) {
+  if (!drag) return;
+  drag.shifted = drag.shifted || new Map();
+  for (const [n, [ox, oy]] of drag.shifted) { n.x = ox; n.y = oy; }
+  const orig = new Map([...nodes.values()].map(n => [n, [n.x, n.y]]));
+  const pos = new Map(orig);
+  const rectOf = (n) => {
+    const [px, py] = pos.get(n), h = n.el.offsetHeight || 64;
+    return [px, py, px + (n.w || CARD_W), py + h];
+  };
+  const victims = [...nodes.values()].filter(n =>
+    n !== node && rectsClose(rectOf(n), rectOf(node), GRID - 1));
+  if (victims.length) {
+    const c = rcenter(rectOf(node));
+    const vc = rcenter(rectOf(victims.sort((a, b) =>
+      Math.hypot(...rcenter(rectOf(a)).map((v, i) => v - c[i])) -
+      Math.hypot(...rcenter(rectOf(b)).map((v, i) => v - c[i])))[0]));
+    const axis = Math.abs(vc[0] - c[0]) > Math.abs(vc[1] - c[1]) ? 0 : 1;
+    const pushers = new Set([node]);
+    for (let iter = 0; iter < 12; iter++) {
+      let any = false;
+      for (const p of [...pushers]) {
+        const rp = rectOf(p);
+        for (const n of nodes.values()) {
+          if (n === p || n === node) continue;
+          const rn = rectOf(n);
+          if (!rectsClose(rp, rn, GRID - 1)) continue;
+          const s = rcenter(rn)[axis] >= rcenter(rp)[axis] ? 1 : -1;
+          let d = axis === 1
+            ? (s > 0 ? rp[3] + GRID - rn[1] : -(rn[3] + GRID - rp[1]))
+            : (s > 0 ? rp[2] + GRID - rn[0] : -(rn[2] + GRID - rp[0]));
+          d = Math.sign(d) * Math.ceil(Math.abs(d) / GRID) * GRID;
+          if (!d) continue;
+          const [px, py] = pos.get(n);
+          pos.set(n, axis === 1 ? [px, py + d] : [px + d, py]);
+          pushers.add(n);
+          any = true;
+        }
+      }
+      if (!any) break;
+    }
+  }
+  const newShift = new Map();
+  for (const n of nodes.values()) {
+    if (n === node) continue;
+    const [ox, oy] = orig.get(n), [nx2, ny2] = pos.get(n);
+    if (nx2 !== ox || ny2 !== oy) {
+      newShift.set(n, [ox, oy]);
+      n.x = nx2; n.y = ny2;
+      n.el.classList.add("shifting"); place(n);
+    } else if (drag.shifted.has(n)) {
+      place(n);
+    }
+  }
+  drag.shifted = newShift;
+}
+// splice targeting: while a card is dragged over an audio wire, that wire
+// highlights; dropping performs a LIVE splice via graph_wire (see
+// spliceExistingIntoWire). A Note Monitor targets CTL wires instead — it
+// rides them visually (spliceMonitorIntoCtl).
+function updateSpliceTarget(node) {
+  if (!drag) return;
+  const wantSig = node.montype === "notes" ? "ctl" : "audio";
+  const R = cardRect(node);
+  let best = null, bestD = 1e9;
+  for (const w of wires) {
+    if (w.from.node === node || w.to.node === node) continue;
+    if (w.sig !== wantSig) continue;
+    const pts = w.dpts || w.pts;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const x0 = Math.min(pts[i][0], pts[i + 1][0]), x1 = Math.max(pts[i][0], pts[i + 1][0]);
+      const y0 = Math.min(pts[i][1], pts[i + 1][1]), y1 = Math.max(pts[i][1], pts[i + 1][1]);
+      if (x0 < R[2] && R[0] < x1 && y0 < R[3] && R[1] < y1) {
+        const c = rcenter(R);
+        const d = Math.abs((x0 + x1) / 2 - c[0]) + Math.abs((y0 + y1) / 2 - c[1]);
+        if (d < bestD) { bestD = d; best = w; }
+      }
+    }
+  }
+  if (drag.spliceTarget && drag.spliceTarget !== best)
+    drag.spliceTarget.el.classList.remove("splice-hi");
+  drag.spliceTarget = best;
+  if (best) best.el.classList.add("splice-hi");
+}
+function compactLayout() {
+  // Tidy = the BLOCKS rule: each connected tree gets its own small grid,
+  // 2-unit gutters, flowing top->bottom then left->right; trees sit side by
+  // side. INPUT at the top (top-center of a 1-column tree, top-left of a
+  // grid); OUTPUT parked under the first column (bottom-center / bottom-left).
+  const list = [...nodes.values()];
+  if (!list.length) return;
+  const gap = 2 * GRID;
+  const touch = (m, k) => { if (!m.has(k)) m.set(k, new Set()); return m.get(k); };
+  const adj = new Map(), outs = new Map();
+  for (const w of wires) {
+    const a = w.from.node, b = w.to.node;
+    if (!a || !b || a === b) continue;
+    touch(adj, a.gid).add(b.gid); touch(adj, b.gid).add(a.gid);
+    touch(outs, a.gid).add(b.gid);
+  }
+  const comp = new Map(); let nc = 0;
+  for (const n of list) {
+    if (comp.has(n.gid)) continue;
+    const st = [n.gid]; comp.set(n.gid, nc);
+    while (st.length) { const c = st.pop();
+      for (const nb of (adj.get(c) || [])) if (!comp.has(nb)) { comp.set(nb, nc); st.push(nb); } }
+    nc++;
+  }
+  const rank = new Map(list.map(n => [n.gid, 0]));
+  for (let it = 0; it < list.length; it++) {
+    let ch = false;
+    for (const [a, tos] of outs) for (const b of tos) {
+      if (!rank.has(a) || !rank.has(b)) continue;
+      const nr = Math.min(rank.get(a) + 1, list.length);
+      if (nr > rank.get(b)) { rank.set(b, nr); ch = true; }
+    }
+    if (!ch) break;
+  }
+  const groups = [];
+  for (let c = 0; c < nc; c++) groups.push(list.filter(n => comp.get(n.gid) === c));
+  groups.sort((A, B) => (A.some(n => n.gid === "keys") ? 0 : 1) -
+                        (B.some(n => n.gid === "keys") ? 0 : 1)
+                        || B.length - A.length || (A[0].gid < B[0].gid ? -1 : 1));
+  const board = $("board");
+  const maxY = MIN_Y + Math.max(10 * GRID, (board.clientHeight || 900) - 4 * GRID);
+  const okey = (n) => [rank.get(n.gid) || 0, n.montype ? 1 : 0, n.gid];
+  const hOf = (n) => n.el.offsetHeight || 64;
+  let baseX = MIN_X + GRID;
+  for (const G of groups) {
+    const out = G.filter(n => n.gid === "master");
+    const rest = G.filter(n => n.gid !== "master").sort((a, b) => {
+      const A = okey(a), B = okey(b);
+      return A[0] - B[0] || A[1] - B[1] || (A[2] < B[2] ? -1 : 1);
+    });
+    let x = baseX, y = MIN_Y, colW = 0, treeRight = baseX, col0Bottom = MIN_Y;
+    const room = out.length ? maxY - (Math.ceil(hOf(out[0]) / GRID) + 2) * GRID : maxY;
+    for (const n of rest) {
+      const h = hOf(n), w = n.w || CARD_W;
+      const lim = x === baseX ? room : maxY;         // col 0 leaves space for OUT
+      if (y > MIN_Y && y + h > lim) { x += colW + gap; y = MIN_Y; colW = 0; }
+      n.x = snap(x); n.y = snap(y);
+      if (x === baseX) col0Bottom = n.y + Math.ceil(h / GRID) * GRID;
+      y = n.y + Math.ceil(h / GRID) * GRID + gap;
+      colW = Math.max(colW, w);
+      treeRight = Math.max(treeRight, x + colW);
+      n.el.classList.add("shifting");
+      place(n);
+      setTimeout(() => n.el.classList.remove("shifting"), 220);
+    }
+    for (const m of out) {                            // OUT under the first column
+      m.x = snap(baseX); m.y = snap(col0Bottom + gap);
+      treeRight = Math.max(treeRight, baseX + (m.w || CARD_W));
+      m.el.classList.add("shifting");
+      place(m);
+      setTimeout(() => m.el.classList.remove("shifting"), 220);
+    }
+    baseX = treeRight + gap;                          // parallel tree grids, L->R
+  }
+  requestAnimationFrame(() => {
+    for (const n of nodes.values()) layoutPorts(n);
+    rerouteAll();
+    saveLayout();
+  });
+}
+$("tidy").addEventListener("click", (e) => { compactLayout(); e.target.blur(); });
+function enforceSeparation(node) {
+  if (!overlapsAny(node)) return;
+  const ox = node.x, oy = node.y;
+  for (let r = 1; r < 40; r++)
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+      // clamp BEFORE the overlap test — place() clamps too, and a candidate
+      // that only looked free outside the workspace would snap back onto
+      // whatever card it was fleeing
+      node.x = Math.max(MIN_X, ox + dx * GRID); node.y = Math.max(MIN_Y, oy + dy * GRID);
+      if (!overlapsAny(node)) { place(node); return; }
+    }
+  node.x = ox; node.y = oy; place(node);
+}
+
+// ---------- rewiring: cut / connect semantics ----------
+// v3: ctl wires are SERVER TRUTH (state.ctl_wires) — the old client-side
+// approximation layer (cutMem/extraCtl + "approximated" toast) is gone.
+// A Note Monitor may visually ride a ctl wire (see monRide) — the backend
+// wire stays A→B untouched; the monitor only watches.
+const monRide = new Map();   // monitor gid -> Set("from>to") ctl wires it sits on (visual only)
+const waveRide = new Map();  // wave monitor gid -> "from>to" audio wire it sits on (visual only)
+let toastTimer = 0;
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 1800);
+}
+function audioKeyOut(n) { return n.gid === "drums" ? "drums" : (n.chainKey || null); }
+function wouldCycle(from, to) {
+  // audio graph is one-out-per-source, so following the single outgoing
+  // wire from `to` either reaches master or reveals a loop through `from`
+  const adj = new Map(((state && state.wires) || []).map(v => [v.from, v.to]));
+  let cur = to, hops = 0;
+  while (cur && cur !== "master" && hops++ < 128) {
+    if (cur === from) return true;
+    cur = adj.get(cur);
+  }
+  return false;
+}
+// what does connecting out-port → in-port MEAN? returns a sender fn or null.
+// audio: real graph rewiring. mod: LFO (re)assignment. tonic: deriver TONIC
+// out → a drone instance's tonic-in (ctl_wire — same vocabulary). ctl: real
+// control-plane wiring (ctl_wire add among keys/arp/deck/voice ids/tonic
+// ids); voice.out → source stays set_voice_target (each voice always drives
+// exactly one target).
+function voiceIds() {
+  return new Set(((state && state.voices) || [{id: "voice"}]).map(v => v.id));
+}
+function tonicIds() {
+  return new Set(((state && state.tonics) || []).map(t => t.id));
+}
+function keyshiftIds() {
+  return new Set(((state && state.keyshifts) || []).map(k => k.id));
+}
+// ctl endpoint grammar: "keyshift.2:3" = node "keyshift.2", lane 3. Nodes
+// without lanes are plain ids (unchanged).
+function splitEp(s) {
+  const i = String(s).indexOf(":");
+  return i < 0 ? [String(s), undefined]
+               : [String(s).slice(0, i), parseInt(String(s).slice(i + 1), 10)];
+}
+function laneOk(l) { return Number.isInteger(l) && l >= 1 && l <= 4; }
+function ctlSrcOk(s) {
+  const [b, l] = splitEp(s);
+  if (keyshiftIds().has(b)) return laneOk(l);
+  return l === undefined &&
+    (b === "keys" || b === "arp" || b === "deck" || tonicIds().has(b));
+}
+function ctlDstOk(d) {
+  const [b, l] = splitEp(d);
+  if (keyshiftIds().has(b)) return laneOk(l);
+  return l === undefined &&
+    (b === "arp" || b === "deck" || voiceIds().has(b) || tonicIds().has(b));
+}
+// backend node id for a canvas node (module cards carry their instance id)
+function ctlId(n) { return n.chainKey || n.gid; }
+// full ctl ENDPOINT for a node+port (lane ports carry their ":<lane>" suffix)
+function ctlEp(n, p) {
+  const id = ctlId(n);
+  return p && p.lane ? `${id}:${p.lane}` : id;
+}
+function connectAction(out, inn) {
+  const po = out.port, pi = inn.port;
+  if (!po || !pi || po.sig !== pi.sig || out.node === inn.node) return null;
+  const sig = po.sig;
+  if (sig === "audio") {
+    const from = audioKeyOut(out.node);
+    const to = inn.node.gid === "master" ? "master" : inn.node.chainKey;
+    if (!from || !to || to === "drums") return null;
+    if (inn.node.mod && inn.node.mod.kind !== "effect") return null; // sources take no audio in
+    if (from === "drums")
+      return () => send({type: "set_drums", target: to});
+    if (to !== "master" && wouldCycle(from, to)) return null;
+    return () => send({type: "graph_wire", action: "add", from, to});
+  }
+  if (sig === "mod") {
+    if (!pi.quiet || !inn.node.chainKey) return null;
+    const src = out.node;
+    return () => {
+      // park the LFO card's position where it was drawn so the server-born
+      // card (id "<key>.<param>") appears in place
+      posMem["lfo:" + inn.node.chainKey + "." + pi.param] = [src.x, src.y];
+      if (src.armed) { removeNode(src); rerouteAll(); }
+      else if (src.gid.startsWith("lfo:"))
+        send({type: "lfo_unassign", id: src.gid.slice(4)});  // re-target a live LFO
+      send({type: "lfo_assign", key: inn.node.chainKey, name: pi.param});
+    };
+  }
+  if (sig === "tonic") {
+    // tonic outs only connect to tonic ins (drone instances)
+    const from = ctlId(out.node), to = ctlId(inn.node);
+    if (!tonicIds().has(from)) return null;
+    if (!(inn.node.mod && inn.node.mod.type === "drone")) return null;
+    return () => send({type: "ctl_wire", action: "add", from, to});
+  }
+  // ---- ctl ----
+  if (voiceIds().has(out.node.gid) && inn.node.mod && inn.node.mod.kind === "source" &&
+      inn.node.mod.params && "freq" in inn.node.mod.params && "gate" in inn.node.mod.params)
+    return () => send({type: "set_voice_target", key: inn.node.chainKey,
+                       voice: out.node.gid});
+  const from = ctlEp(out.node, out.port), to = ctlEp(inn.node, inn.port);
+  // no self-wires — for lane nodes that's a BASE-id rule (keyshift:1 →
+  // keyshift:2 would recurse synchronously through the shifter)
+  if (ctlSrcOk(from) && ctlDstOk(to) && splitEp(from)[0] !== splitEp(to)[0])
+    return () => send({type: "ctl_wire", action: "add", from, to});
+  return null;
+}
+function compatEnds(a, b) {
+  if (!a.port || !b.port || a.port.dir === b.port.dir) return false;
+  const [out, inn] = a.port.dir === "out" ? [a, b] : [b, a];
+  return !!connectAction(out, inn);
+}
+function distToSeg(x, y, a, b) {
+  const x0 = Math.min(a[0], b[0]), x1 = Math.max(a[0], b[0]);
+  const y0 = Math.min(a[1], b[1]), y1 = Math.max(a[1], b[1]);
+  const cx = Math.max(x0, Math.min(x1, x)), cy = Math.max(y0, Math.min(y1, y));
+  return Math.hypot(x - cx, y - cy);
+}
+function wireNearPoint(x, y, maxD = 18) {
+  let best = null, bestD = maxD;
+  for (const w of wires) {
+    if (w.sig !== "audio") continue;
+    const pts = w.dpts || w.pts;
+    if (!pts) continue;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const d = distToSeg(x, y, pts[i], pts[i + 1]);
+      if (d < bestD) { bestD = d; best = w; }
+    }
+  }
+  return best;
+}
+// predict the instance id the server will assign a fresh spawn of `type`
+// (same deterministic allocation: bare type first, then ".2", ".3", ...)
+function nextId(type) {
+  const taken = new Set(((state && state.chain) || []).map(c => c.key));
+  if (!taken.has(type)) return type;
+  let n = 2;
+  while (taken.has(`${type}.${n}`)) n++;
+  return `${type}.${n}`;
+}
+// splice a FRESHLY SPAWNED module into wire w. spawn_module snapshots the
+// wiring server-side BEFORE the linear append (so nothing else re-routes),
+// then two targeted graph_wire adds re-aim the wire through the newcomer.
+// `key` is a module TYPE; the wires must address the PREDICTED instance id.
+function spliceNewIntoWire(w, key, kind, wx, wy) {
+  const A = w.from.node, B = w.to.node;
+  const fromKey = audioKeyOut(A);
+  const toKey = B.gid === "master" ? "master" : B.chainKey;
+  if (!toKey) return;
+  const id = nextId(key);
+  posMem["m:" + id] = [snap(Math.max(MIN_X, wx - CARD_W / 2)),
+                       snap(Math.max(MIN_Y, wy - GRID))];
+  send({type: "spawn_module", key});
+  if (kind === "effect" && fromKey) {
+    if (fromKey === "drums") send({type: "set_drums", target: id});
+    else send({type: "graph_wire", action: "add", from: fromKey, to: id});
+  }
+  // sources can't take input — they simply fan into the wire's destination
+  send({type: "graph_wire", action: "add", from: id, to: toKey});
+}
+// splice an EXISTING card into wire w (drop a card on a highlighted wire).
+// Order is chosen so every intermediate step stays acyclic: first aim the
+// card at the wire's destination (clearing its old outgoing), then feed it,
+// then bridge its old feeders to its old destination.
+function spliceExistingIntoWire(w, node) {
+  const A = w.from.node, B = w.to.node;
+  if (A === node || B === node) return;
+  const myKey = audioKeyOut(node);
+  const toKey = B.gid === "master" ? "master" : B.chainKey;
+  const fromKey = audioKeyOut(A);
+  if (!myKey || !toKey) return;
+  if (myKey === "drums") { send({type: "set_drums", target: toKey}); return; }
+  const wiresNow = (state && state.wires || []).map(v => ({...v}));
+  const oldOut = wiresNow.find(v => v.from === myKey);
+  send({type: "graph_wire", action: "add", from: myKey, to: toKey});
+  if (node.mod && node.mod.kind === "effect" && fromKey) {
+    if (fromKey === "drums") send({type: "set_drums", target: myKey});
+    else send({type: "graph_wire", action: "add", from: fromKey, to: myKey});
+    if (oldOut) {  // heal the gap the card left behind
+      for (const v of wiresNow)
+        if (v.to === myKey && v.from !== fromKey)
+          send({type: "graph_wire", action: "add", from: v.from, to: oldOut.to});
+      if (state.drums && state.drums.target === myKey && fromKey !== "drums")
+        send({type: "set_drums", target: oldOut.to});
+    }
+  }
+}
+// Note Monitor dropped on a ctl wire: the monitor is CLIENT-SIDE (a visual
+// in+thru tap), so the simplest honest move is to keep the backend wire A→B
+// unchanged — (re)send its ctl_wire add (a dedup no-op if already present)
+// and remember the monitor rides it; rebuildGraph then draws A→mon→B.
+function spliceMonitorIntoCtl(w, node) {
+  const from = ctlEp(w.from.node, w.from.port), to = ctlEp(w.to.node, w.to.port);
+  if (!ctlSrcOk(from) || !ctlDstOk(to)) return;  // half a ride / voice→target
+  const set = monRide.get(node.gid) || new Set();
+  set.add(`${from}>${to}`);       // fan-in: ride several wires = union of sources
+  monRide.set(node.gid, set);
+  send({type: "ctl_wire", action: "add", from, to});
+  rebuildGraph();
+}
+// Waveform monitor dropped on an audio wire A→B: same visual-ride idea for
+// audio — the backend wire stays untouched; the monitor polls A's out bus
+// (300ms envelope) instead of the master meters. One wire per monitor.
+function spliceWaveIntoAudio(w, node) {
+  const from = audioKeyOut(w.from.node);
+  const to = w.to.node.gid === "master" ? "master" : w.to.node.chainKey;
+  if (!from || !to || from === "drums") return;
+  waveRide.set(node.gid, `${from}>${to}`);
+  node.waveHist = blankWaveHist();   // fresh FIXED-length window for the new feed
+  rebuildGraph();
+}
+
+// ---------- v8: wire labels as splice handles ----------
+// Dragging a wire's LABEL badge over a compatible module highlights it
+// (white outline); dropping splices the module into that wire — the same
+// trio a card-drop performs. Audio wires take effects (or a Waveform
+// monitor ride); ctl wires take arp/deck/tonic/keyshift (lane 1) or a
+// Note Monitor ride.
+let labelDrag = null;   // {w, target, action}
+function labelSpliceAction(w, n) {
+  if (!n || n === w.from.node || n === w.to.node) return null;
+  if (w.sig === "audio") {
+    if (n.montype === "wave") return () => spliceWaveIntoAudio(w, n);
+    if (n.chainKey && n.mod && n.mod.kind === "effect" && !n.mod.service)
+      return () => spliceExistingIntoWire(w, n);
+    return null;
+  }
+  if (w.sig === "ctl") {
+    if (n.montype === "notes") return () => spliceMonitorIntoCtl(w, n);
+    const hasIn = n.ports.some(p => !p.quiet && p.dir === "in" && p.sig === "ctl");
+    const hasOut = n.ports.some(p => !p.quiet && p.dir === "out" && p.sig === "ctl");
+    if (!hasIn || !hasOut) return null;
+    const id = ctlId(n);
+    const ep = keyshiftIds().has(id) ? `${id}:1` : id;   // shifters: lane 1
+    const from = ctlEp(w.from.node, w.from.port);
+    const to = ctlEp(w.to.node, w.to.port);
+    if (!ctlDstOk(ep) || !ctlSrcOk(ep)) return null;     // e.g. voice: no thru
+    if (splitEp(from)[0] === id || splitEp(to)[0] === id) return null;
+    return () => {
+      send({type: "ctl_wire", action: "remove", from, to});
+      send({type: "ctl_wire", action: "add", from, to: ep});
+      send({type: "ctl_wire", action: "add", from: ep, to});
+    };
+  }
+  return null;
+}
+function bindLabelHandle(w) {
+  w.labelG.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    labelDrag = {w, target: null, action: null};
+    w.labelG.style.pointerEvents = "none";  // hit-test the cards underneath
+    document.body.style.cursor = "grabbing";
+  });
+}
+document.addEventListener("pointermove", (e) => {
+  if (!labelDrag) return;
+  const el = document.elementFromPoint(e.clientX, e.clientY);
+  const cardEl = el && el.closest ? el.closest(".mod") : null;
+  let target = null;
+  if (cardEl) for (const n of nodes.values()) if (n.el === cardEl) { target = n; break; }
+  const action = target ? labelSpliceAction(labelDrag.w, target) : null;
+  if (labelDrag.target && (labelDrag.target !== target || !action))
+    labelDrag.target.el.classList.remove("splice-target");
+  labelDrag.target = action ? target : null;
+  labelDrag.action = action;
+  if (labelDrag.target) labelDrag.target.el.classList.add("splice-target");
+});
+document.addEventListener("pointerup", () => {
+  if (!labelDrag) return;
+  const {w, target, action} = labelDrag;
+  labelDrag = null;
+  document.body.style.cursor = "";
+  try { w.labelG.style.pointerEvents = ""; } catch (_) {}
+  if (target) target.el.classList.remove("splice-target");
+  if (action) action();
+  flushRebuild();
+});
+
+// ---------- card drag + port-to-port patching gesture ----------
+let drag = null, patchDrag = null, dragRaf = 0;
+function bindNode(node) {
+  const head = node.el.querySelector(".head");
+  head.addEventListener("pointerdown", (e) => {
+    if (e.target.classList.contains("kill") || e.target.classList.contains("onoff") ||
+        e.target.classList.contains("expander")) return;
+    drag = {node, dx: e.pageX - node.x, dy: e.pageY - node.y};
+    node.el.classList.add("dragging");
+    head.setPointerCapture(e.pointerId);
+  });
+  head.addEventListener("pointermove", (e) => {
+    if (!drag || drag.node !== node) return;
+    node.x = snap(e.pageX - drag.dx); node.y = snap(e.pageY - drag.dy);
+    place(node);
+    makeSpacePreview(node);
+    updateSpliceTarget(node);
+    cancelAnimationFrame(dragRaf);
+    dragRaf = requestAnimationFrame(() => {
+      rebuildObstacles(node);   // wires flow UNDER the hovering card
+      rerouteFor(node);
+      if (drag) for (const n of drag.shifted?.keys() || []) rerouteFor(n);
+    });
+  });
+  head.addEventListener("pointerup", () => {
+    if (!drag || drag.node !== node) return;
+    node.el.classList.remove("dragging");
+    const spliced = drag.spliceTarget;
+    if (spliced) spliced.el.classList.remove("splice-hi");
+    for (const n of drag.shifted?.keys() || []) n.el.classList.remove("shifting"); // BAKE
+    drag = null;
+    enforceSeparation(node);
+    layoutPorts(node);
+    rerouteAll();
+    saveLayout();
+    if (spliced) {
+      if (node.montype === "notes") spliceMonitorIntoCtl(spliced, node);
+      else if (node.montype === "wave") spliceWaveIntoAudio(spliced, node);
+      else spliceExistingIntoWire(spliced, node);        // live server rewire
+    }
+    flushRebuild();
+  });
+  // patch gesture: EVERY port can start a wire drag. Targets are filtered by
+  // signal type + direction (in↔out only) via connectAction(); the drop end
+  // decides what actually gets sent (graph_wire / set_drums / lfo_assign /
+  // set_voice_target / ctl_wire).
+  for (const port of node.ports) {
+    port.el.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      patchDrag = {node, port};
+      wireLive.style.display = "";
+      wireLive.setAttribute("stroke", SIG_CSS[port.sig] || SIG_CSS.mod);
+      port.el.classList.add("hot");
+    });
+  }
+}
+document.addEventListener("pointermove", (e) => {
+  if (!patchDrag) return;
+  const r = world.getBoundingClientRect();
+  const [x1, y1] = portXY(patchDrag.node, patchDrag.port);
+  const x2 = e.clientX - r.left, y2 = e.clientY - r.top;
+  const [nx, ny] = portNormal(patchDrag.port);
+  const mid = ny !== 0
+    ? [[x1, y1], [x1, (y1 + y2) / 2], [x2, (y1 + y2) / 2], [x2, y2]]
+    : [[x1, y1], [(x1 + x2) / 2, y1], [(x1 + x2) / 2, y2], [x2, y2]];
+  wireLive.setAttribute("d", roundedPath(dedupe(mid)));
+  for (const n of nodes.values()) for (const p of n.ports) {
+    // highlight every COMPATIBLE landing spot: opposite direction, same
+    // signal, and a connection the system can actually (or honestly) make
+    const ok = compatEnds(patchDrag, {node: n, port: p});
+    p.el.classList.toggle("hot", ok || p === patchDrag.port);
+  }
+});
+document.addEventListener("pointerup", (e) => {
+  if (!patchDrag) return;
+  const src = patchDrag;
+  patchDrag = null;
+  wireLive.style.display = "none";
+  for (const n of nodes.values()) for (const p of n.ports) p.el.classList.remove("hot");
+  const t = document.elementFromPoint(e.clientX, e.clientY);
+  if (t && t.classList.contains("port")) {
+    outer: for (const n of nodes.values()) for (const p of n.ports) {
+      if (p.el !== t) continue;
+      const cand = {node: n, port: p};
+      if (compatEnds(src, cand)) {
+        const [out, inn] = src.port.dir === "out" ? [src, cand] : [cand, src];
+        connectAction(out, inn)();
+      }
+      break outer;
+    }
+  }
+  flushRebuild();
+});
+
+// ============================================================================
+// GRAPH FROM STATE
+// ============================================================================
+let pendingRebuild = false;
+function flushRebuild() {
+  if (pendingRebuild && !drag && !patchDrag && !sliderDrag) {
+    pendingRebuild = false;
+    rebuildGraph();
+  }
+}
+function busy() { return !!(drag || patchDrag || sliderDrag || labelDrag); }
+
+// fallback for servers that predate state.wires: the old linear derivation
+function deriveLinearWires() {
+  const live = (state && state.chain || [])
+    .filter(c => !c.service && c.enabled).map(c => c.key);
+  const out = [];
+  for (let i = 0; i + 1 < live.length; i++) out.push({from: live[i], to: live[i + 1]});
+  if (live.length) out.push({from: live[live.length - 1], to: "master"});
+  return out;
+}
+
+const KILL_PARAMS = new Set(["amp", "level", "volume", "cutoff", "gain"]);
+
+function sendParam(key, pname, unit) {
+  throttled(`p.${key}.${pname}`, () =>
+    send({type: "set_param", key, name: pname, unit}));
+}
+
+// -- per-node builders --------------------------------------------------------
+function buildChainCard(mod) {
+  const gid = "m:" + mod.key;
+  const rows = [], quietRows = [];
+  for (const [pname, p] of Object.entries(mod.params)) {
+    let row;
+    if (p.curve === "toggle") {
+      row = rowChip({gid}, pname, {
+        text: p.value >= (p.min + p.max) / 2 ? "on" : "off",
+        onClick: (chip) => {
+          const on = chip.textContent !== "on";
+          chip.textContent = on ? "on" : "off";
+          p.value = on ? p.max : p.min;
+          send({type: "set_param", key: mod.key, name: pname, unit: on ? 1 : 0});
+        },
+      });
+      uiParam[`${gid}.${pname}`] = (u, txt) => {
+        row.querySelector(".chip").textContent = u >= 0.5 ? "on" : "off";
+      };
+    } else if (p.curve === "select") {
+      const n = p.options.length;
+      row = rowChip({gid}, pname, {
+        text: p.options[Math.round(p.value)] ?? "",
+        onClick: (chip) => {
+          const i = (p.options.indexOf(chip.textContent) + 1) % n;
+          chip.textContent = p.options[i];
+          p.value = i;
+          send({type: "set_param", key: mod.key, name: pname,
+                unit: n > 1 ? i / (n - 1) : 0});
+        },
+      });
+      uiParam[`${gid}.${pname}`] = (u, txt) => {
+        const i = Math.min(n - 1, Math.max(0, Math.round(u * (n - 1))));
+        row.querySelector(".chip").textContent = p.options[i] ?? "";
+      };
+    } else {
+      row = rowSlider({gid}, pname, {
+        unit: toUnit(p, p.value), text: fmt(p.value), mapped: !!p.lfo,
+        valText: (u) => fmt(fromUnit(p, u)),
+        onUnit: (u) => {
+          p.value = fromUnit(p, u);
+          sendParam(mod.key, pname, u);
+          throttled("act", refreshActivity, 80);
+        },
+      });
+    }
+    rows.push(row);
+    quietRows.push({pname, rowEl: row});
+  }
+  // LIB/type lookups; key is the instance id — when a chain entry lacks the
+  // explicit type field, derive it from the id ("scope_tap.2" → "scope_tap"),
+  // NEVER use the raw instance id as a type (v5 regression: broke scope/drone
+  // card detection for suffixed instances)
+  const mtype = mod.type || String(mod.key).split(".")[0];
+  const isDrone = mtype === "drone";
+  if (isDrone) {
+    // the drone's ctl-plane presence: a follow toggle for its tonic-in
+    rows.push(rowChip({gid}, "follow", {
+      text: (mod.tonic_follow !== false) ? "on" : "off",
+      onClick: (chip) => {
+        const on = chip.textContent !== "on";
+        chip.textContent = on ? "on" : "off";
+        send({type: "drone_follow", id: mod.key, on});
+      },
+    }));
+  }
+  const ports = [];
+  if (isDrone) ports.push(["in", "tonic", "tonic"]);  // subtle side handle
+  else if (mod.service) ports.push(["in", "ctl", "listen"]);
+  else if (mod.kind === "source") ports.push(["in", "ctl", "play"]);
+  else ports.push(["in", "audio", "in"]);
+  if (!mod.service) ports.push(["out", "audio", "out"]);
+  // the scope tap module IS the oscilloscope: an ordinary effect with real
+  // IO handles (spawn/splice/wire it like any other), plus a live trace of
+  // its out bus (polled via the existing {"type":"scope"} message)
+  const isScope = mtype === "scope_tap";
+  const n = addCard({
+    gid, name: mod.name, sub: `${mtype} · ${mod.family}`, fam: mod.family,
+    seed: mod.kind === "source" && !mod.service,
+    vizHTML: isScope ? `<canvas class="vz" data-viz="scope" height="44"></canvas>` : null,
+    headCheck: {
+      checked: mod.enabled,
+      onChange: (on) => send({type: "set_enabled", key: mod.key, enabled: on}),
+    },
+    kill: (nd) => (mod.service && isDrone)
+      ? send({type: "set_drone", enabled: false})   // legacy compat pair
+      : send({type: "edit_chain", action: "remove", key: mod.key}),
+    rows, quietRows, ports, mod,
+  });
+  if (isScope) {
+    n.scopeKey = mod.key;   // the poll loop asks the server for this bus
+    n.zoom = 0.5;
+    n.el.querySelector(".body").appendChild(rowSlider({gid}, "zoom", {
+      unit: 0.5, text: "512 smp",
+      valText: (u) => Math.round(Math.pow(2, 7 + 4 * u)) + " smp",
+      onUnit: (u) => { n.zoom = u; },
+    }));
+  }
+  n.chainKey = mod.key;
+  if (!mod.enabled) n.el.classList.add("bypassed");
+  return n;
+}
+
+function buildKeysCard() {
+  const gid = "keys";
+  const rows = [
+    rowChip({gid}, "octave", {text: `C${octave}`, static: true}),
+    rowChip({gid}, "transpose", {
+      text: String(state.transpose ?? 0),
+      onClick: (chip) => {
+        let t = parseInt(chip.textContent, 10) + 1;
+        if (t > 12) t = -12;
+        chip.textContent = String(t);
+        send({type: "set_transpose", semitones: t});
+      },
+    }),
+  ];
+  return addCard({gid, name: "Keys / MIDI", short: "Keys", sub: "controller",
+                  fam: "ctl", rows, ports: [["out", "ctl", "notes"]]});
+}
+
+function buildArpCard() {
+  const a = state.arp, gid = "arp";
+  const cfgArp = (patchset) => send({type: "set_arp", ...{
+    enabled: a.enabled, pattern: a.pattern, division: a.division,
+    gate: a.gate, octaves: a.octaves}, ...patchset});
+  const rows = [
+    rowChip({gid}, "pattern", {
+      text: a.pattern,
+      onClick: (chip) => {
+        const i = (a.patterns.indexOf(chip.textContent) + 1) % a.patterns.length;
+        a.pattern = a.patterns[i]; chip.textContent = a.pattern;
+        cfgArp({});
+      },
+    }),
+    rowChip({gid}, "division", {
+      text: a.division,
+      onClick: (chip) => {
+        const i = (a.divisions.indexOf(chip.textContent) + 1) % a.divisions.length;
+        a.division = a.divisions[i]; chip.textContent = a.division;
+        cfgArp({});
+      },
+    }),
+    rowSlider({gid}, "gate", {
+      unit: (a.gate - 0.05) / 0.95, text: Math.round(a.gate * 100) + "%",
+      valText: (u) => Math.round((0.05 + u * 0.95) * 100) + "%",
+      onUnit: (u) => { a.gate = 0.05 + u * 0.95; throttled("arp", () => cfgArp({})); },
+    }),
+    rowSlider({gid}, "octaves", {
+      unit: (a.octaves - 1) / 2, text: String(a.octaves),
+      valText: (u) => String(1 + Math.round(u * 2)),
+      onUnit: (u) => { a.octaves = 1 + Math.round(u * 2); throttled("arp", () => cfgArp({})); },
+    }),
+  ];
+  return addCard({gid, name: "Arp", sub: "quantized", fam: "ctl", rows,
+    headCheck: {checked: a.enabled, onChange: (on) => { a.enabled = on; cfgArp({}); }},
+    ports: [["in", "ctl", "notes"], ["out", "ctl", "notes"]]});
+}
+
+// one card per mono voice (state.voices). The target chip cycles through
+// the playable sources; the target wire re-drags via set_voice_target.
+function playableSources() {
+  return (state.chain || []).filter(c => c.kind === "source" &&
+    c.params && c.params.freq && c.params.gate).map(c => c.key);
+}
+function buildVoiceCard(v) {
+  const gid = v.id;
+  const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
+  const rows = [
+    rowChip({gid}, "bend", {text: "±2 st", static: true}),
+    rowChip({gid}, "target", {
+      text: v.target || "—",
+      onClick: (chip) => {
+        const srcs = playableSources();
+        if (!srcs.length) return;
+        const key = srcs[(srcs.indexOf(chip.textContent) + 1) % srcs.length];
+        chip.textContent = key;
+        send({type: "set_voice_target", key, voice: gid});
+      },
+    }),
+  ];
+  return addCard({gid, name: "Mono Voice" + suffix, short: "Voice" + suffix,
+                  sub: "last-note priority", fam: "ctl", rows,
+                  kill: gid === "voice" ? null
+                    : () => send({type: "remove_voice", id: gid}),
+                  ports: [["in", "ctl", "notes"], ["out", "ctl", "drive"]]});
+}
+
+// one card per tonic deriver (state.tonics): estimator knobs + root readout,
+// ctl THRU out and the amber TONIC out.
+function buildTonicCard(t) {
+  const gid = t.id;
+  const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
+  const rows = [
+    rowChip({gid}, "every", {
+      text: t.every,
+      onClick: (chip) => {
+        const es = t.everies || [];
+        if (!es.length) return;
+        const v = es[(es.indexOf(chip.textContent) + 1) % es.length];
+        chip.textContent = v;
+        send({type: "set_tonic", id: gid, every: v});
+      },
+    }),
+    rowChip({gid}, "octave", {
+      text: String(t.octave),
+      onClick: (chip) => {
+        const o = (parseInt(chip.textContent, 10) + 1) % 5;
+        chip.textContent = String(o);
+        send({type: "set_tonic", id: gid, octave: o});
+      },
+    }),
+    rowChip({gid}, "root", {text: t.root || "listening…", static: true}),
+  ];
+  return addCard({gid, name: "Tonic Deriver" + suffix, short: "Tonic" + suffix,
+                  sub: "root estimator", fam: "service", rows,
+                  kill: () => send({type: "remove_tonic", id: gid}),
+                  ports: [["in", "ctl", "notes"], ["out", "ctl", "thru"],
+                          ["out", "tonic", "tonic"]]});
+}
+
+// ---- key shifter: Grasshopper-ish key popover + progression step strip ----
+// 12 pitch classes labeled from A (values = semitone distance from C, the
+// home key — the backend maps that distance to the NEAREST shift, ±6 st).
+const KEY_LABELS = [["A", 9], ["A#/Bb", 10], ["B", 11], ["C", 0], ["C#/Db", 1],
+                    ["D", 2], ["D#/Eb", 3], ["E", 4], ["F", 5], ["F#/Gb", 6],
+                    ["G", 7], ["G#/Ab", 8]];
+const KEY_SHORT = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
+let keyPop = null;
+function closeKeyPop() { if (keyPop) { keyPop.remove(); keyPop = null; } }
+function openKeyPop(anchorEl, current, onPick) {
+  closeKeyPop();
+  const el = document.createElement("div");
+  el.id = "keypop";
+  for (const [label, pc] of KEY_LABELS) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    if (pc === current) b.classList.add("sel");
+    b.addEventListener("pointerdown", (e) => e.stopPropagation());
+    b.addEventListener("click", (e) => { e.stopPropagation(); onPick(pc); });
+    el.appendChild(b);
+  }
+  document.body.appendChild(el);
+  const r = anchorEl.getBoundingClientRect();
+  el.style.left = Math.max(8, Math.min(window.innerWidth - el.offsetWidth - 8,
+                                       r.right + 8)) + "px";
+  el.style.top = Math.max(8, Math.min(window.innerHeight - el.offsetHeight - 8,
+                                      r.top - 8)) + "px";
+  keyPop = el;
+}
+// click-away closes (capture phase: runs before whatever was clicked)
+document.addEventListener("pointerdown", (e) => {
+  if (keyPop && !keyPop.contains(e.target)) closeKeyPop();
+}, true);
+
+const KS_LENGTHS = [1, 2, 4, 8, 12, 16, 24, 32];
+function buildKeyshiftCard(k) {
+  const gid = k.id;
+  const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
+  const sendKS = () => send({type: "set_keyshift", id: gid, key: k.key,
+                             length: k.length, steps: k.steps});
+  let selStep = null;
+  const rows = [
+    rowChip({gid}, "key", {
+      text: KEY_SHORT[k.active ?? k.key] ?? "C",
+      onClick: (chip) => {
+        openKeyPop(chip, k.key, (pc) => {
+          k.key = pc;
+          if (!k.steps.some(s => s !== null)) k.active = pc;  // static mode
+          chip.textContent = KEY_SHORT[k.active ?? pc];
+          sendKS();
+          closeKeyPop();
+        });
+      },
+    }),
+    rowChip({gid}, "length", {
+      text: k.length + (k.length === 1 ? " bar" : " bars"),
+      onClick: (chip) => {
+        const i = KS_LENGTHS.indexOf(k.length);
+        k.length = KS_LENGTHS[(i + 1) % KS_LENGTHS.length];
+        while (k.steps.length < k.length) k.steps.push(null);
+        k.steps.length = k.length;
+        chip.textContent = k.length + (k.length === 1 ? " bar" : " bars");
+        sendKS();
+        paintSteps(n, true);
+      },
+    }),
+  ];
+  const n = addCard({gid, name: "Key Shifter" + suffix, short: "Shift" + suffix,
+    sub: "key transpose · 4 lanes", fam: "ctl", rows,
+    expandable: true, expanded: !!expandMem[gid], wide: true,
+    vizHTML: `<div class="ksgrid"></div>`,
+    kill: () => send({type: "remove_keyshift", id: gid}),
+    ports: [["in", "ctl", "in.1"], ["in", "ctl", "in.2"],
+            ["in", "ctl", "in.3"], ["in", "ctl", "in.4"],
+            ["out", "ctl", "out.1"], ["out", "ctl", "out.2"],
+            ["out", "ctl", "out.3"], ["out", "ctl", "out.4"]]});
+  for (const p of n.ports) {           // lane handles: "in.3" → lane 3
+    const m2 = /^(?:in|out)\.(\d)$/.exec(p.label);
+    if (m2) p.lane = parseInt(m2[1], 10);
+  }
+  n.ks = k;
+  const paintSteps = (node, rebuild) => {
+    const grid = node.el.querySelector(".ksgrid");
+    if (!grid) return;
+    if (rebuild || grid.children.length !== k.length) {
+      grid.innerHTML = "";
+      grid.style.gridTemplateColumns =
+        `repeat(${Math.min(8, Math.max(4, k.length))}, 1fr)`;
+      for (let s = 0; s < k.length; s++) {
+        const b = document.createElement("button");
+        b.className = "ksstep";
+        b.dataset.s = s;
+        b.addEventListener("pointerdown", (e) => e.stopPropagation());
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const i = parseInt(b.dataset.s, 10);
+          if (selStep === i) {
+            // click the (selected) assigned step again = clear it
+            if (k.steps[i] !== null) { k.steps[i] = null; sendKS(); }
+            selStep = null;
+            closeKeyPop();
+          } else {
+            selStep = i;   // select, then pick a key in the pop-out to assign
+            openKeyPop(b, k.steps[i], (pc) => {
+              k.steps[i] = pc;
+              sendKS();
+              selStep = null;
+              closeKeyPop();
+              paintSteps(node);
+            });
+          }
+          paintSteps(node);
+        });
+        grid.appendChild(b);
+      }
+      requestAnimationFrame(() => {
+        layoutPorts(node); rebuildObstacles(); rerouteAll();
+      });
+    }
+    for (const b of grid.children) {
+      const i = parseInt(b.dataset.s, 10);
+      const v = k.steps[i];
+      b.textContent = v === null || v === undefined ? "·" : KEY_SHORT[v];
+      b.classList.toggle("on", v !== null && v !== undefined);
+      b.classList.toggle("sel", selStep === i);
+    }
+  };
+  n.paintKsSteps = paintSteps;
+  paintSteps(n, true);
+  return n;
+}
+
+function buildDeckCard() {
+  // no position chip in v3 — what the deck records/replays IS its wiring
+  const l = state.looper, gid = "deck";
+  const rows = [
+    rowChip({gid}, "bars", {
+      text: String(l.bars),
+      onClick: (chip) => {
+        const seq = [1, 2, 4, 8];
+        const v = seq[(seq.indexOf(parseInt(chip.textContent, 10)) + 1) % seq.length];
+        chip.textContent = String(v);
+        send({type: "set_looper", bars: v});
+      },
+    }),
+    rowSlider({gid}, "level", {
+      unit: l.level, text: Math.round(l.level * 100) + "%",
+      valText: (u) => Math.round(u * 100) + "%",
+      onUnit: (u) => throttled("looplvl", () => send({type: "set_looper", level: u})),
+    }),
+    rowChip({gid}, "overdub", {
+      text: l.overdub ? "on" : "off",
+      onClick: (chip) => {
+        const on = chip.textContent !== "on";
+        chip.textContent = on ? "on" : "off";
+        send({type: "set_looper", overdub: on});
+      },
+    }),
+  ];
+  const btns = document.createElement("div");
+  btns.className = "deckbtns";
+  btns.innerHTML = `<button class="recbtn" data-a="record" title="spacebar">● rec</button>
+    <button data-a="stop">■</button><button data-a="play">▶</button>
+    <button data-a="clear">✕</button>`;
+  for (const b of btns.querySelectorAll("button")) {
+    b.addEventListener("pointerdown", (e) => e.stopPropagation());
+    b.addEventListener("click", (e) => {
+      send({type: "set_looper", action: b.dataset.a});
+      e.target.blur();
+    });
+  }
+  rows.push(btns);
+  const n = addCard({gid, name: "Loop Deck", short: "Deck", sub: "midi looper · " + l.state,
+    fam: "ctl", rows, expandable: true, expanded: expandMem.deck,
+    vizHTML: `<canvas class="vz" data-viz="deck" height="54"></canvas>`,
+    ports: [["in", "ctl", "notes"], ["out", "ctl", "replay"]]});
+  n.subEl = n.el.querySelector(".sub");
+  updateDeckCard(n);
+  return n;
+}
+function updateDeckCard(n) {
+  const l = state && state.looper;
+  if (!n || !l) return;
+  n.subEl.textContent = "midi looper · " + l.state;
+  n.el.classList.toggle("rec", ["armed", "recording", "overdubbing"].includes(l.state));
+}
+
+function buildDrumsCard() {
+  const d = state.drums, gid = "drums";
+  const rows = [];
+  for (const lane of d.lanes) {
+    rows.push(rowSlider({gid}, lane, {
+      unit: d.levels[lane], text: Math.round(d.levels[lane] * 100) + "%",
+      valText: (u) => Math.round(u * 100) + "%",
+      onUnit: (u) => {
+        d.levels[lane] = u;
+        throttled("drumlvl", () => send({type: "set_drums", levels: d.levels}));
+      },
+    }));
+  }
+  // routing chip gone: the drums OUT port is now a standard audio out —
+  // drag its wire wherever the hits should land (set_drums {target})
+  let viz = "";
+  for (const lane of d.lanes) {
+    viz += `<div class="dlane">${esc(lane)}</div><div class="dgrid" data-lane="${esc(lane)}">`;
+    for (let s = 0; s < d.steps; s++)
+      viz += `<button class="dstep ${d.patterns[lane][s] ? "on" : ""} ${s % 4 === 0 ? "q" : ""}"
+        data-s="${s}"></button>`;
+    viz += `</div>`;
+  }
+  const n = addCard({gid, name: "Drums", sub: "16-step · 1/16 grid", fam: "time",
+    rows, expandable: true, expanded: expandMem.drums, wide: true, vizHTML: viz,
+    headCheck: {checked: d.enabled, onChange: (on) => send({type: "set_drums", enabled: on})},
+    ports: [["out", "audio", "hits"]]});
+  for (const btn of n.el.querySelectorAll(".dstep")) {
+    btn.addEventListener("pointerdown", (e) => e.stopPropagation());
+    btn.addEventListener("click", () => {
+      const lane = btn.closest(".dgrid").dataset.lane, s = parseInt(btn.dataset.s, 10);
+      d.patterns[lane][s] = d.patterns[lane][s] ? 0 : 1;
+      btn.classList.toggle("on");
+      throttled("drums", () => send({type: "set_drums", patterns: d.patterns}));
+    });
+  }
+  return n;
+}
+
+function buildMasterCard() {
+  const gid = "master";
+  const rows = [rowSlider({gid}, "volume", {
+    unit: state.volume, text: Math.round(state.volume * 100) + "%",
+    valText: (u) => Math.round(u * 100) + "%",
+    onUnit: (u) => throttled("vol", () => send({type: "set_volume", volume: u})),
+  })];
+  return addCard({gid, name: "Master Out", short: "Master", sub: "volume · meters",
+                  fam: "io", rows, ports: [["in", "audio", "in"]]});
+}
+
+function buildLfoCard(l) {
+  const gid = "lfo:" + l.id;
+  const RATE = {min: 0.02, max: 20, curve: "exp"};
+  const rows = [
+    rowSlider({gid}, "rate", {
+      unit: toUnit(RATE, l.rate), text: l.rate.toFixed(2) + "Hz",
+      valText: (u) => fromUnit(RATE, u).toFixed(2) + "Hz",
+      onUnit: (u) => {
+        l.rate = fromUnit(RATE, u);
+        throttled("lfo" + l.id + "r", () => send({type: "lfo_set", id: l.id, rate: l.rate}));
+      },
+    }),
+    rowSlider({gid}, "depth", {
+      unit: l.depth, text: ((l.depth * 100) | 0) + "%",
+      valText: (u) => ((u * 100) | 0) + "%",
+      onUnit: (u) => {
+        l.depth = u;
+        throttled("lfo" + l.id + "d", () => send({type: "lfo_set", id: l.id, depth: u}));
+      },
+    }),
+    rowSlider({gid}, "center", {
+      unit: l.center, text: ((l.center * 100) | 0) + "%",
+      valText: (u) => ((u * 100) | 0) + "%",
+      onUnit: (u) => {
+        l.center = u;
+        throttled("lfo" + l.id + "c", () => send({type: "lfo_set", id: l.id, center: u}));
+      },
+    }),
+    rowChip({gid}, "shape", {
+      text: l.shapes[l.shape] ?? "sine",
+      onClick: (chip) => {
+        l.shape = (l.shape + 1) % l.shapes.length;
+        chip.textContent = l.shapes[l.shape];
+        send({type: "lfo_set", id: l.id, shape: l.shape});
+      },
+    }),
+  ];
+  return addCard({gid, name: "LFO ∿", short: "LFO", sub: `→ ${l.key}.${l.param}`,
+    fam: "service", rows, ports: [["out", "mod", "mod"]],
+    kill: () => send({type: "lfo_unassign", id: l.id})});
+}
+
+let armN = 1;
+function buildArmedLfo() {
+  const gid = "lfoarm:" + armN++;
+  const n = addCard({gid, name: "LFO ∿", short: "LFO", sub: "drag ∿ port onto a param",
+    fam: "service", rows: [], ports: [["out", "mod", "mod"]], persistent: true,
+    kill: (nd) => { removeNode(nd); rerouteAll(); }});
+  n.armed = true;
+  const board = $("board");
+  n.x = snap(board.scrollLeft + 300 + Math.random() * 120);
+  n.y = snap(board.scrollTop + 160 + Math.random() * 160);
+  place(n);
+  requestAnimationFrame(() => {
+    enforceSeparation(n); layoutPorts(n); rebuildObstacles(); rerouteAll();
+  });
+  return n;
+}
+
+// -- monitors (client-side, not in server state) --------------------------------
+// The old target-chip Oscilloscope monitor is GONE: the scope is the
+// scope_tap module now (a real effect card — see buildChainCard).
+function buildMonitor(type, gid, x, y, expanded) {
+  gid = gid || `mon:${type}:${monN++}`;
+  let n;
+  if (type === "wave") {
+    // audio thru ports let the monitor sit INLINE on an audio wire (visual
+    // ride — drop the card on an audio wire; the backend wire stays untouched)
+    n = addCard({gid, name: "Waveform", short: "Wave", sub: "global",
+      fam: "io", rows: [], persistent: true, montype: type,
+      ports: [["in", "audio", "thru"], ["out", "audio", "thru"]],
+      vizHTML: `<canvas class="vz" data-viz="wave" height="34"></canvas>`,
+      kill: (nd) => { waveRide.delete(nd.gid); removeNode(nd); rerouteAll(); saveLayout(); }});
+  } else {  // notes
+    // ctl thru ports let the monitor sit INLINE on a ctl wire (visual ride —
+    // drop the card on a ctl wire; the backend wire stays untouched)
+    n = addCard({gid, name: "Note Monitor", short: "Notes", sub: "global",
+      fam: "io", rows: [], persistent: true, montype: type,
+      ports: [["in", "ctl", "thru"], ["out", "ctl", "thru"]],
+      vizHTML: `<canvas class="vz" data-viz="notes" height="54"></canvas>`,
+      kill: (nd) => { monRide.delete(nd.gid); removeNode(nd); rerouteAll(); saveLayout(); }});
+  }
+  const p = posMem[gid];
+  if (p) { n.x = p[0]; n.y = p[1]; place(n); }
+  else {
+    const board = $("board");
+    n.x = snap(board.scrollLeft + 340 + Math.random() * 140);
+    n.y = snap(board.scrollTop + 160 + Math.random() * 180);
+    place(n);
+    enforceSeparation(n);   // fresh monitors must not stack on existing cards
+  }
+  return n;
+}
+
+// -- expanded-state memory across rebuilds --------------------------------------
+const expandMem = {deck: false, drums: false};
+
+// -- the rebuild ----------------------------------------------------------------
+function rebuildGraph() {
+  if (!state) return;
+  if (busy()) { pendingRebuild = true; return; }
+  // patch switch → load that patch's remembered layout, respawn its monitors
+  if (state.patch !== currentPatch) {
+    for (const n of [...nodes.values()]) if (n.montype) removeNode(n);
+    currentPatch = state.patch;
+    const mons = loadLayout(currentPatch);
+    for (const [gid, type, x, y, exp] of mons) {
+      if (type === "scope") continue;   // pre-v3 layout: scope is a module now
+      posMem[gid] = [x, y];
+      buildMonitor(type, gid, x, y, exp);
+    }
+  }
+  // remember card positions + expansion, then drop all derived nodes & wires
+  for (const n of nodes.values()) {
+    posMem[n.gid] = [n.x, n.y];
+    if (n.gid === "deck") expandMem.deck = n.expanded;
+    if (n.gid === "drums") expandMem.drums = n.expanded;
+    if (n.ks) expandMem[n.gid] = n.expanded;
+  }
+  for (const w of [...wires]) removeWire(w);
+  lineCount.audio = 0; lineCount.ctl = 0; lineCount.mod = 0; lineCount.tonic = 0;
+  for (const n of [...nodes.values()]) if (!n.persistent) removeNode(n);
+  for (const k of Object.keys(uiParam))
+    if (!k.startsWith("mon:")) delete uiParam[k];
+
+  // ---- nodes ----
+  const keys = buildKeysCard();
+  const arp = state.arp ? buildArpCard() : null;
+  const deck = buildDeckCard();
+  const voiceList = (state.voices && state.voices.length)
+    ? state.voices : [{id: "voice", target: state.voice_target}];
+  const voiceNodes = voiceList.map(buildVoiceCard);
+  const tonicNodes = (state.tonics || []).map(buildTonicCard);
+  const ksNodes = (state.keyshifts || []).map(buildKeyshiftCard);
+  const services = [], chainNodes = [];
+  for (const mod of state.chain) {
+    const n = buildChainCard(mod);
+    (mod.service ? services : chainNodes).push(n);
+  }
+  const master = buildMasterCard();
+  const drums = buildDrumsCard();
+  const lfoNodes = (state.lfos || []).map(buildLfoCard);
+
+  // ---- placement: stored position wins; new nodes flow into columns ----
+  const CTL_X = MIN_X + GRID;               // controllers cascade on the left
+  const CHAIN_X = CTL_X + 11 * GRID;        // audio chain drops top-down beside it
+  const RIGHT_X = CHAIN_X + 11 * GRID;      // drums (and spill) to the right
+  const placeCol = (list, x, y0) => {
+    let y = y0;
+    for (const n of list) {
+      if (!n) continue;
+      const p = posMem[n.gid];
+      if (p) { n.x = p[0]; n.y = p[1]; place(n); continue; }
+      n.x = x; n.y = y;
+      place(n);
+      enforceSeparation(n);
+      y = n.y + Math.ceil((n.el.offsetHeight || 64) / GRID) * GRID + GRID;
+    }
+  };
+  placeCol([keys, arp, deck, ...voiceNodes], CTL_X, MIN_Y);
+  placeCol([...chainNodes, master], CHAIN_X, MIN_Y);
+  // derivers + services sit left of the chain, below the controller cascade
+  const svcY = Math.max(...[keys, arp, deck, ...voiceNodes].filter(Boolean)
+    .map(n => n.y + (n.el.offsetHeight || 64))) + 2 * GRID;
+  placeCol([...tonicNodes, ...ksNodes, ...services], CTL_X, snap(svcY));
+  placeCol([drums], RIGHT_X, MIN_Y);
+  // each LFO lands left of its target module
+  for (let i = 0; i < lfoNodes.length; i++) {
+    const n = lfoNodes[i], l = state.lfos[i];
+    if (posMem[n.gid]) { n.x = posMem[n.gid][0]; n.y = posMem[n.gid][1]; place(n); continue; }
+    const tgt = nodes.get("m:" + l.key);
+    n.x = tgt ? tgt.x - CARD_W - 3 * GRID : CTL_X;
+    n.y = tgt ? tgt.y : MIN_Y;
+    place(n);
+    enforceSeparation(n);
+  }
+
+  // ---- wires (derived, exactly mirroring server truth) ----
+  const port = (n, dir, sig, param, lane) => n && n.ports.find(p =>
+    p.dir === dir && p.sig === sig && (!param || p.param === param) &&
+    (!!param === !!p.quiet) && (lane === undefined || p.lane === lane));
+  const W = (a, asig, b, bsig, opts) => a && b && addWire(
+    {node: a, port: port(a, "out", asig, null, opts && opts.fromLane)},
+    {node: b, port: port(b, "in", bsig, opts && opts.param, opts && opts.toLane)},
+    opts || {});
+  // control: SERVER TRUTH — state.ctl_wires defines the note router among
+  // keys/arp/deck/voice ids/tonic ids/drone instance ids. Cut = ctl_wire
+  // remove; port drag ctl-out → ctl-in = ctl_wire add (connectAction). A
+  // wire INTO a drone instance is a TONIC wire (amber, deriver tonic-out →
+  // drone tonic-in); everything else rides the green ctl family.
+  const ctlNode = (k) => nodes.get(k) || nodes.get("m:" + k);
+  for (const cw of (state.ctl_wires || [])) {
+    // lane endpoints ("keyshift.2:3") resolve to the base node's lane port
+    const [fromBase, fromLane] = splitEp(cw.from);
+    const [toBase, toLane] = splitEp(cw.to);
+    const a = ctlNode(fromBase), b = ctlNode(toBase);
+    if (!a || !b) continue;   // e.g. a wired node whose card isn't spawned
+    const cut = () => send({type: "ctl_wire", action: "remove",
+                            from: cw.from, to: cw.to});
+    if (b.mod && (b.mod.type || String(b.mod.key).split(".")[0]) === "drone") {
+      W(a, "tonic", b, "tonic", {cut});   // its own color family + handles
+      continue;
+    }
+    // a Note Monitor may RIDE this wire (visual splice): draw A→mon→B but
+    // keep the backend wire A→B — cutting either half cuts the real wire
+    const ride = [...monRide].find(([gid, set]) =>
+      set.has(`${cw.from}>${cw.to}`) && nodes.get(gid));
+    if (ride) {
+      const mon = nodes.get(ride[0]);
+      W(a, "ctl", mon, "ctl", {cut, fromLane});
+      W(mon, "ctl", b, "ctl", {cut, toLane});
+    } else W(a, "ctl", b, "ctl", {cut, fromLane, toLane});
+  }
+  // each voice → its target source stays derived (re-drag/chip-click =
+  // set_voice_target; a mono voice always drives exactly one target, so
+  // this wire is not cuttable)
+  for (let i = 0; i < voiceNodes.length; i++) {
+    const target = nodes.get("m:" + voiceList[i].target) ||
+                   chainNodes.find(n => n.mod && n.mod.kind === "source") || null;
+    W(voiceNodes[i], "ctl", target, "ctl");
+  }
+  // audio: SERVER TRUTH — state.wires is derived from the actual bus routing,
+  // so multiple cascades / fan-in render exactly as they sound. Every audio
+  // wire cuts with graph_wire remove; master's in port takes any fan-in.
+  const audioNode = (k) => k === "master" ? master : nodes.get("m:" + k);
+  const audioWires = state.wires || deriveLinearWires();
+  for (const wr of audioWires) {
+    const a = audioNode(wr.from), b = audioNode(wr.to);
+    if (!a || !b) continue;
+    const cut = () => send({type: "graph_wire", action: "remove", from: wr.from});
+    // a Waveform monitor may RIDE this wire (visual splice, like monRide):
+    // draw A→mon→B but keep the backend wire A→B untouched
+    const ride = [...waveRide].find(([gid, wid]) =>
+      wid === `${wr.from}>${wr.to}` && nodes.get(gid));
+    if (ride) {
+      const mon = nodes.get(ride[0]);
+      W(a, "audio", mon, "audio", {cut});
+      W(mon, "audio", b, "audio", {cut});
+    } else W(a, "audio", b, "audio", {cut});
+  }
+  // drums audio out: a standard flexible output. target = key | "master" |
+  // null (disconnected). Cut sends target null; re-drag sends a new target.
+  const dTarget = state.drums
+    ? (state.drums.target !== undefined ? state.drums.target
+       : (state.drums.to_chain ? (state.chain.find(c => !c.service) || {}).key : "master"))
+    : null;
+  // stale target key (module left with a patch switch) → the backend falls
+  // back to master at fire time, so the wire honestly points there too
+  const dNode = dTarget != null ? (audioNode(dTarget) || master) : null;
+  if (dNode) W(drums, "audio", dNode, "audio",
+    {cut: () => send({type: "set_drums", target: null})});
+  // mod: one wire per LFO assignment → the target param's quiet handle
+  for (let i = 0; i < lfoNodes.length; i++) {
+    const l = state.lfos[i];
+    const tgt = nodes.get("m:" + l.key);
+    if (!tgt) continue;
+    addWire({node: lfoNodes[i], port: port(lfoNodes[i], "out", "mod")},
+            {node: tgt, port: tgt.ports.find(p => p.quiet && p.param === l.param)},
+            {lfoId: l.id, cut: () => send({type: "lfo_unassign", id: l.id})});
+  }
+
+  requestAnimationFrame(() => {
+    for (const n of nodes.values()) layoutPorts(n);
+    rebuildObstacles();
+    rerouteAll();
+    if (!window._autoTidied) {                 // first load in a pile? untangle
+      window._autoTidied = true;
+      const L = [...nodes.values()], hOf = (n) => n.el.offsetHeight || 64;
+      const pile = L.some(a => L.some(b => a !== b &&
+        a.x < b.x + (b.w || CARD_W) && b.x < a.x + (a.w || CARD_W) &&
+        a.y < b.y + hOf(b) && b.y < a.y + hOf(a)));
+      if (pile) compactLayout();
+    }
+    refreshActivity();
+  });
+  saveLayout();
+}
+
+// ---------- palette ----------
+function renderPalette() {
+  const pal = $("palette");
+  pal.innerHTML = "";
+  const btn = (label, color, fn) => {
+    const b = document.createElement("button");
+    b.innerHTML = `<i style="background:${color}"></i>${esc(label)}`;
+    b.addEventListener("click", (e) => { fn(); e.target.blur(); });
+    pal.appendChild(b);
+  };
+  const h3 = (t) => {
+    const h = document.createElement("h3"); h.textContent = t; pal.appendChild(h);
+  };
+  h3("voices");
+  btn("Mono Voice", FAMILY.ctl, () => send({type: "spawn_voice"}));
+  h3("control");
+  btn("LFO ∿", FAMILY.service, () => buildArmedLfo());
+  btn("Tonic Deriver", "#d9a521", () => send({type: "spawn_tonic"}));
+  btn("Key Shifter", FAMILY.ctl, () => send({type: "spawn_keyshift"}));
+  // the palette NEVER removes placed modules: any entry can be spawned
+  // again — every click/drag makes a fresh instance ("lowpass.2", ...)
+  const avail = (state && state.available) || [];
+  for (const [label, kind] of [["sources", "source"], ["effects", "effect"]]) {
+    h3(label);
+    for (const a of avail.filter(x => x.kind === kind)) {
+      const b = document.createElement("button");
+      b.innerHTML = `<i style="background:${FAMILY[a.family] || "#888"}"></i>${esc(a.name)}`;
+      b.addEventListener("pointerdown", (e) => startPaletteDrag(e, b, a));
+      pal.appendChild(b);
+    }
+  }
+  h3("monitors");
+  // the oscilloscope lives under effects now (Scope Tap — a real module)
+  btn("Waveform", FAMILY.io, () => { buildMonitor("wave"); afterMonitor(); });
+  btn("Note Monitor", FAMILY.io, () => { buildMonitor("notes"); afterMonitor(); });
+}
+function afterMonitor() {
+  requestAnimationFrame(() => {
+    for (const n of nodes.values()) layoutPorts(n);
+    rebuildObstacles(); rerouteAll(); saveLayout();
+  });
+}
+
+// palette CLICK-vs-DRAG: a plain click spawns the module UNCONNECTED at a
+// free spot; a drag (>6px) grows a ghost card that follows the cursor —
+// dropping it on a highlighted audio wire splices into that wire, dropping
+// on empty canvas spawns unconnected right there.
+let paletteDrag = null;
+function overBoard(ev) {
+  const b = $("board").getBoundingClientRect(), p = $("palette").getBoundingClientRect();
+  return ev.clientX > p.right && ev.clientY > b.top &&
+         ev.clientX < b.right && ev.clientY < b.bottom;
+}
+function startPaletteDrag(e, btn, a) {
+  e.preventDefault();
+  try { btn.setPointerCapture(e.pointerId); } catch (_) {}
+  paletteDrag = {a, x0: e.clientX, y0: e.clientY, moved: false, ghost: null, hover: null};
+  const move = (ev) => {
+    const pd = paletteDrag;
+    if (!pd) return;
+    if (!pd.moved && Math.hypot(ev.clientX - pd.x0, ev.clientY - pd.y0) < 6) return;
+    if (!pd.moved) {
+      pd.moved = true;
+      const g = document.createElement("div");
+      g.id = "ghost-card";
+      g.innerHTML = `<i style="background:${FAMILY[a.family] || "#888"}"></i>${esc(a.name)}`;
+      document.body.appendChild(g);
+      pd.ghost = g;
+    }
+    pd.ghost.style.left = (ev.clientX - 60) + "px";
+    pd.ghost.style.top = (ev.clientY - 16) + "px";
+    const r = world.getBoundingClientRect();
+    const hit = overBoard(ev)
+      ? wireNearPoint(ev.clientX - r.left, ev.clientY - r.top, 18) : null;
+    if (pd.hover && pd.hover !== hit) pd.hover.el.classList.remove("splice-hi");
+    pd.hover = hit;
+    if (hit) hit.el.classList.add("splice-hi");
+  };
+  const finish = (ev, cancelled) => {
+    btn.removeEventListener("pointermove", move);
+    const pd = paletteDrag;
+    paletteDrag = null;
+    if (!pd) return;
+    if (pd.ghost) pd.ghost.remove();
+    if (pd.hover) pd.hover.el.classList.remove("splice-hi");
+    if (cancelled) return;
+    const r = world.getBoundingClientRect();
+    const wx = ev.clientX - r.left, wy = ev.clientY - r.top;
+    if (!pd.moved) {
+      send({type: "spawn_module", key: a.key});           // click → unconnected
+    } else if (pd.hover) {
+      spliceNewIntoWire(pd.hover, a.key, a.kind, wx, wy); // drop on wire → splice
+    } else if (overBoard(ev)) {
+      posMem["m:" + nextId(a.key)] = [snap(Math.max(MIN_X, wx - CARD_W / 2)),
+                                      snap(Math.max(MIN_Y, wy))];
+      send({type: "spawn_module", key: a.key});           // empty drop → unconnected here
+    }
+  };
+  btn.addEventListener("pointermove", move);
+  btn.addEventListener("pointerup", (ev) => finish(ev, false), {once: true});
+  btn.addEventListener("pointercancel", (ev) => finish(ev, true), {once: true});
+}
+
+// ---------- state → toolbar ----------
+function onState() {
+  renderPalette();
+  $("patch-sel").innerHTML = (state.patches || []).map(p =>
+    `<option ${p === state.patch ? "selected" : ""}>${esc(p)}</option>`).join("");
+  $("preset-sel").innerHTML = (state.presets || []).map(p =>
+    `<option>${esc(p)}</option>`).join("");
+  const t = state.transport || {};
+  if (sliderDrag !== "bpm") $("bpm").value = t.bpm ?? 100;
+  $("bpm-v").textContent = Math.round(t.bpm ?? 100) + " bpm";
+  $("meter").value = String(t.beats_per_bar ?? 4);
+  $("click-on").checked = !!t.click;
+  $("play-btn").textContent = t.running === false ? "▶" : "⏹";
+  if (sliderDrag !== "vol") $("vol").value = state.volume;
+  $("midi-ind").textContent = "midi: " +
+    (state.midi_enabled ? (state.midi_port || "auto") : "off");
+  if (busy()) { pendingRebuild = true; return; }
+  rebuildGraph();
+}
+
+// ---------- live message handlers ----------
+function onParam(m) {
+  // move the one thumb (unless it's the one being dragged) + keep local model
+  const id = `m:${m.key}.${m.name}`;
+  if (state) {
+    const mod = state.chain.find(c => c.key === m.key);
+    if (mod && mod.params[m.name]) mod.params[m.name].value = m.value;
+  }
+  if (sliderDrag !== id && uiParam[id]) uiParam[id](m.unit, fmt(m.value));
+  throttled("act", refreshActivity, 80);
+}
+
+let outLevel = 0;
+const wave = new Array(200).fill(0);
+function onMeters(m) {
+  outLevel = Math.max(m.out[0] || 0, m.out[1] || 0);
+  wave.push(outLevel);
+  if (wave.length > 200) wave.shift();
+  const scale = (a) => {
+    if (!a || a <= 0) return 0;
+    const db = 20 * Math.log10(a);
+    return Math.max(0, Math.min(100, (db + 60) / 60 * 100));
+  };
+  const set = (id, amp) => {
+    const el = $(id);
+    el.firstElementChild.style.width = scale(amp) + "%";
+    el.classList.toggle("clip", amp > 0.99);
+  };
+  set("m-out-l", m.out[0]); set("m-out-r", m.out[1]);
+  throttled("act", refreshActivity, 120);
+}
+
+let beatAnchor = null, deckAnchor = null;
+function onBeat(m) {
+  $("beat-pos").textContent = `${m.bar + 1}.${m.beat + 1}`;
+  beatAnchor = {time: performance.now(), downbeat: m.beat === 0};
+  deckAnchor = (m.loop === null || m.loop === undefined)
+    ? null : {time: performance.now(), phase: m.loop};
+  // key shifter progression: highlight the playing step (bar % length)
+  for (const n of nodes.values()) {
+    if (!n.ks) continue;
+    const idx = ((m.bar % n.ks.length) + n.ks.length) % n.ks.length;
+    for (const b of n.el.querySelectorAll(".ksstep"))
+      b.classList.toggle("ph", parseInt(b.dataset.s, 10) === idx);
+  }
+}
+
+const rollNotes = [];   // {note, t0, t1, deck} from "voiced" (wire pulses)
+const tapNotes = [];    // {note, t0, t1, src} from "tap" — note monitor feed
+function onMidi(e) {
+  if (e.kind === "tap") {
+    // one tap per source-fire (keys/arp/deck/tonic*/keyshift*) — monitors
+    // filter by src
+    if (e.on) {
+      // a re-fired note that is still open closes its old segment first —
+      // otherwise duplicate opens pile up and pin full-width bars forever
+      for (let i = tapNotes.length - 1; i >= 0; i--)
+        if (tapNotes[i].note === e.note && tapNotes[i].t1 === null &&
+            tapNotes[i].src === e.src) { tapNotes[i].t1 = performance.now(); break; }
+      tapNotes.push({note: e.note, t0: performance.now(), t1: null, src: e.src});
+    } else for (let i = tapNotes.length - 1; i >= 0; i--)
+      if (tapNotes[i].note === e.note && tapNotes[i].t1 === null &&
+          tapNotes[i].src === e.src) { tapNotes[i].t1 = performance.now(); break; }
+    while (tapNotes.length > 400) tapNotes.shift();
+  } else if (e.kind === "voiced") {
+    const deck = !!e.deck;
+    if (e.on) rollNotes.push({note: e.note, t0: performance.now(), t1: null, deck});
+    else for (let i = rollNotes.length - 1; i >= 0; i--)
+      if (rollNotes[i].note === e.note && rollNotes[i].t1 === null &&
+          rollNotes[i].deck === deck) { rollNotes[i].t1 = performance.now(); break; }
+    while (rollNotes.length > 300) rollNotes.shift();
+    if (e.on) pulseCtl(deck);
+  } else if (e.kind === "drum_step") {
+    const dn = nodes.get("drums");
+    if (dn && dn.expanded) {
+      for (const b of dn.el.querySelectorAll(".dstep.ph")) b.classList.remove("ph");
+      for (const b of dn.el.querySelectorAll(`.dstep[data-s="${e.step}"]`)) b.classList.add("ph");
+    }
+  } else if (e.kind === "loop_note") {
+    if (state?.looper) (state.looper.notes = state.looper.notes || []).push([e.beat, e.note, e.on]);
+  } else if (e.kind === "looper") {
+    // looper settings ride along without a full state broadcast
+    if (state) {
+      const {kind, ...rest} = e;
+      state.looper = {...state.looper, ...rest};
+      updateDeckCard(nodes.get("deck"));
+    }
+  } else if (e.kind === "keyshift") {
+    // a shifter's active key moved (progression step landed) — update chip
+    const k = (state && state.keyshifts || []).find(x => x.id === e.id);
+    if (k) k.active = e.active;
+    const setter = uiParam[`${e.id}.key`];
+    if (setter) setter(0, KEY_SHORT[e.active] ?? "C");
+  } else if (e.kind === "tonic_out") {
+    // a deriver's root changed — update its card's readout in place
+    const id = `${e.id}.root`;
+    if (uiParam[id]) uiParam[id](0, e.root);
+    const t = (state && state.tonics || []).find(x => x.id === e.id);
+    if (t) t.root = e.root;
+  }
+}
+
+// ---------- activity: real signal → white flow dots + kill-param darkening ----
+function passes(node) {
+  if (!node.mod) return true;
+  for (const [pname, p] of Object.entries(node.mod.params)) {
+    if (!KILL_PARAMS.has(pname)) continue;
+    if (p.curve === "toggle" || p.curve === "select") continue;
+    if (toUnit(p, p.value) <= 0.02) return false;   // value ≤ min + 2% of range
+  }
+  return true;
+}
+const ctlPulse = new Map();   // wire -> lit-until timestamp
+function pulseCtl(deck) {
+  const until = performance.now() + 350;
+  for (const w of wires) {
+    if (w.sig !== "ctl") continue;
+    const fromDeck = w.from.node.gid === "deck";
+    if (deck ? fromDeck : !fromDeck) ctlPulse.set(w, until);
+  }
+  refreshActivity();
+  setTimeout(() => refreshActivity(), 380);
+}
+function refreshActivity() {
+  const now = performance.now();
+  const gateOn = outLevel > 0.001;
+  // energize sources, propagate along audio wires; a killed module (amp/cutoff/
+  // gain at the floor) darkens everything downstream of it
+  const energized = new Set();
+  if (gateOn)
+    for (const n of nodes.values())
+      if (n.seed || (n.gid === "drums" && state?.drums?.enabled)) energized.add(n);
+  const active = new Set();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const w of wires) {
+      if (w.sig !== "audio" || active.has(w)) continue;
+      const src = w.from.node;
+      if (!energized.has(src)) continue;
+      if (!passes(src)) continue;
+      active.add(w);
+      if (!energized.has(w.to.node)) { energized.add(w.to.node); changed = true; }
+    }
+  }
+  for (const w of wires) {
+    if (w.sig === "audio") w.flow.style.display = active.has(w) ? "" : "none";
+    else if (w.sig === "ctl") w.flow.style.display = (ctlPulse.get(w) || 0) > now ? "" : "none";
+    else w.flow.style.display = "none";
+  }
+}
+
+// ---------- monitors: scope polling + canvas painting ----------
+let scopeData = {};   // key -> samples
+function onScopeData(m) { scopeData[m.key] = m.samples; }
+// a scope_tap with NO incoming audio wire falls back to the master feed:
+// poll the first module wired to master instead (global), else nothing
+function scopePollKey(n) {
+  const aw = (state && state.wires) || [];
+  if (aw.some(w => w.to === n.scopeKey)) return n.scopeKey;      // fed → local
+  const m = aw.find(w => w.to === "master" && w.from !== n.scopeKey);
+  return m ? m.from : null;
+}
+setInterval(() => {
+  if (document.hidden) return;   // poll only while the canvas is visible
+  const asked = new Set();
+  for (const n of nodes.values())
+    if (n.scopeKey) {            // scope_tap module cards
+      const key = scopePollKey(n);
+      if (!key || asked.has(key)) continue;
+      asked.add(key);
+      send({type: "scope", key});
+    }
+}, 250);
+// Waveform monitors riding an audio wire A→B poll A's out bus every 300ms
+// and keep a peak-envelope history (unwired monitors use the master meters)
+function waveSrcKey(gid) {
+  const wid = waveRide.get(gid);
+  if (!wid) return null;
+  const [a, b] = wid.split(">");
+  return ((state && state.wires) || []).some(w => w.from === a && w.to === b)
+    ? a : null;   // ridden wire gone → back to global
+}
+// FIXED-length rolling window (v5 regression fix): the history is seeded
+// full and shifted on EVERY push, so the strip rolls right-to-left at a
+// constant bar width instead of packing ever-thinner blocks as it grows.
+const WAVE_HIST_N = 100;
+function blankWaveHist() { return new Array(WAVE_HIST_N).fill(0); }
+setInterval(() => {
+  if (document.hidden) return;
+  for (const n of nodes.values()) {
+    if (n.montype !== "wave") continue;
+    const src = waveSrcKey(n.gid);
+    if (!src) continue;
+    const s = scopeData[src];
+    if (s && s.length) {   // envelope: peak of |samples| from the last reply
+      let pk = 0;
+      for (let i = 0; i < s.length; i++) pk = Math.max(pk, Math.abs(s[i]));
+      const hist = (n.waveHist = n.waveHist || blankWaveHist());
+      hist.push(pk);
+      while (hist.length > WAVE_HIST_N) hist.shift();
+    }
+    send({type: "scope", key: src});
+  }
+}, 300);
+// card sub-label: monitors show their scope — "global" / "local: arp+deck"
+function updateMonSub(n, txt) {
+  if (n._subTxt === txt) return;
+  n._subTxt = txt;
+  const el = n.el.querySelector(".sub");
+  if (el) el.textContent = txt;
+}
+// a Note Monitor's upstream source set: the from-ends of the LIVE ctl wires
+// it rides (fan-in = union). No wired-in position → null → GLOBAL.
+function monSources(gid) {
+  const rides = monRide.get(gid);
+  if (!rides || !rides.size) return null;
+  const live = new Set(((state && state.ctl_wires) || [])
+    .map(w => `${w.from}>${w.to}`));
+  const srcs = new Set();
+  // lane endpoints ("keyshift:2") tap with their BASE id — filter on that
+  for (const wid of rides) if (live.has(wid))
+    srcs.add(wid.split(">")[0].split(":")[0]);
+  return srcs.size ? srcs : null;
+}
+
+function drawVizLoop(now) {
+  const style = getComputedStyle(document.body);
+  for (const n of nodes.values()) {
+    const cv = n.el.querySelector("canvas.vz");
+    if (!cv) continue;
+    const viz = cv.dataset.viz;
+    if ((viz === "deck" || n.montype) && n.expanded === false && n.el.querySelector(".expander"))
+      continue;   // collapsed expandable → hidden canvas
+    if (!cv.clientWidth) continue;
+    if (cv.width !== cv.clientWidth) cv.width = cv.clientWidth;
+    const ctx = cv.getContext("2d"), W = cv.width, H = cv.height;
+    ctx.clearRect(0, 0, W, H);
+    try {   // one bad card must never kill the shared rAF loop (all viz dies)
+      if (viz === "deck") drawDeckViz(ctx, W, H, now, style);
+      else if (viz === "scope") drawScopeViz(n, ctx, W, H, style);
+      else if (viz === "wave") drawWaveViz(n, ctx, W, H, style);
+      else if (viz === "notes") drawNotesViz(n, ctx, W, H, now, style);
+    } catch (err) { console.warn("viz", viz, err); }
+  }
+  requestAnimationFrame(drawVizLoop);
+}
+requestAnimationFrame(drawVizLoop);
+
+// loop deck track: grid, red recorded notes, tracking playhead (legacy port)
+function drawDeckViz(ctx, W, H, now, style) {
+  const l = state?.looper;
+  const bpm = state?.transport?.bpm || 100;
+  const bpb = state?.transport?.beats_per_bar || 4;
+  const loopBeats = (l?.loop_beats) || (l?.bars || 2) * bpb;
+  let livePhase = null;
+  if (deckAnchor && l && !["empty", "stopped", "armed"].includes(l.state))
+    livePhase = (deckAnchor.phase + (now - deckAnchor.time) / 1000 * bpm / 60) % loopBeats;
+  const hairline = style.getPropertyValue("--hairline");
+  for (let b = 0; b <= loopBeats; b++) {
+    const x = (b / loopBeats) * W;
+    ctx.strokeStyle = hairline;
+    ctx.lineWidth = b % bpb === 0 ? 2 : 1;
+    ctx.globalAlpha = b % bpb === 0 ? 1 : 0.45;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  if (l && Array.isArray(l.notes) && l.notes.length) {
+    ctx.fillStyle = style.getPropertyValue("--danger");
+    const lo = 36, hi = 96, open = {}, orphanOffs = {};
+    const segs = [];
+    const evs = [...l.notes].sort((a, b) => a[0] - b[0]);
+    for (const [beat, note, on] of evs) {
+      if (on) { (open[note] = open[note] || []).push(beat); }
+      else if (open[note] && open[note].length) segs.push([note, open[note].shift(), beat]);
+      else (orphanOffs[note] = orphanOffs[note] || []).push(beat);
+    }
+    // DEFENSIVE pairing (v7): the take should arrive fully paired from the
+    // server, but a full-width smear must be impossible regardless.
+    //  * leftover on + earlier orphan off = a note wrapped across the loop
+    //    top → draw the true wrap (tail + head)
+    //  * a still-open on caps to the record playhead while recording, or a
+    //    short stub otherwise — NEVER to the full loop width
+    //  * remaining orphan offs are dropped (nothing honest to draw)
+    const rec = ["recording", "overdubbing"].includes(l.state);
+    for (const nn in open) for (const b0 of open[nn]) {
+      const offs = orphanOffs[nn];
+      const wi = offs ? offs.findIndex(b => b < b0) : -1;
+      if (wi >= 0) {
+        const wrapOff = offs.splice(wi, 1)[0];
+        segs.push([+nn, b0, loopBeats]);
+        segs.push([+nn, 0, wrapOff]);
+      } else if (rec && livePhase !== null && livePhase >= b0) {
+        segs.push([+nn, b0, livePhase]);   // sounding under the record head
+      } else {
+        segs.push([+nn, b0, Math.min(loopBeats, b0 + 0.25)]);  // stub
+      }
+    }
+    for (const [note, b0, b1] of segs) {
+      const y = H - ((Math.min(hi, Math.max(lo, note)) - lo) / (hi - lo)) * (H - 8) - 4;
+      const x0 = (b0 / loopBeats) * W;
+      const x1 = (Math.max(b1, b0 + 0.05) / loopBeats) * W;
+      ctx.fillRect(x0, y - 2, Math.max(2, x1 - x0), 4);
+    }
+  }
+  if (livePhase !== null) {
+    const x = (livePhase / loopBeats) * W;
+    ctx.strokeStyle = ["recording", "overdubbing"].includes(l.state)
+      ? style.getPropertyValue("--danger") : style.getPropertyValue("--audio");
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+}
+// real scope trace, zero-cross synced (legacy port, per-card zoom).
+// WIRED inline = local (its own bus); UNWIRED = global (master feed).
+function drawScopeViz(n, ctx, W, H, style) {
+  const fed = ((state && state.wires) || []).some(w => w.to === n.scopeKey);
+  updateMonSub(n, fed ? "local" : "global (master feed)");
+  const key = fed ? n.scopeKey : scopePollKey(n);
+  const s = key && scopeData[key];
+  ctx.strokeStyle = style.getPropertyValue("--hairline");
+  ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
+  if (!s || !s.length) return;
+  let start = 0;
+  for (let i = 1; i < s.length / 2; i++)
+    if (s[i - 1] <= 0 && s[i] > 0) { start = i; break; }
+  const win = Math.min(Math.round(Math.pow(2, 7 + 4 * (n.zoom ?? 0.5))), s.length - start);
+  let peak = 0.05;
+  for (let i = start; i < start + win; i++) peak = Math.max(peak, Math.abs(s[i]));
+  ctx.strokeStyle = style.getPropertyValue("--audio");
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  for (let i = 0; i < win; i++) {
+    const x = (i / win) * W;
+    const y = H / 2 - (s[start + i] / peak) * (H / 2 - 4);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+// rolling output envelope — global (master meters) or, riding an audio wire
+// A→B, the polled peak history of A's out bus
+function drawWaveViz(n, ctx, W, H, style) {
+  const src = waveSrcKey(n.gid);
+  updateMonSub(n, src ? "local: " + src : "global");
+  const hist = src ? (n.waveHist || []) : wave;
+  ctx.fillStyle = style.getPropertyValue("--meter");
+  const nsmp = hist.length;
+  for (let i = 0; i < nsmp; i++) {
+    const a = Math.min(1, Math.pow(hist[i], 0.5));
+    const h = Math.max(1, a * (H - 4));
+    ctx.fillRect((i / nsmp) * W, (H - h) / 2, Math.max(1, W / nsmp - 0.5), h);
+  }
+}
+// rolling REAL source taps on a beat grid, colored by src. UNWIRED = GLOBAL
+// (all taps); riding ctl wires = LOCAL (only its upstream sources).
+const TAP_COLORS = {keys: "#1baf7a", arp: "#e8c832", deck: "#e34948"};
+function tapColor(src, style) {
+  if (TAP_COLORS[src]) return TAP_COLORS[src];
+  if (String(src).startsWith("tonic")) return "#d9a521";    // deriver thru taps
+  if (String(src).startsWith("keyshift")) return "#4fd08c"; // shifter out fires
+  return style.getPropertyValue("--ctl");
+}
+function drawNotesViz(n, ctx, W, H, now, style) {
+  const srcs = monSources(n.gid);   // null = global
+  updateMonSub(n, srcs ? "local: " + [...srcs].sort().join("+") : "global");
+  const bpm = state?.transport?.bpm || 100;
+  const pxPerMs = W / (16 * 60000 / bpm);   // 16-beat window
+  ctx.strokeStyle = style.getPropertyValue("--hairline");
+  ctx.lineWidth = 1;
+  if (beatAnchor) {
+    const beatMs = 60000 / bpm;
+    for (let k = 0; k < 20; k++) {
+      const x = W - (now - (beatAnchor.time - k * beatMs)) * pxPerMs;
+      if (x < 0) break;
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    }
+  }
+  const lo = 36, hi = 96;
+  for (let i = tapNotes.length - 1; i >= 0; i--) {
+    const ev = tapNotes[i];
+    if (ev.t1 !== null && (now - ev.t1) * pxPerMs > W) tapNotes.splice(i, 1);
+  }
+  for (const ev of tapNotes) {
+    if (srcs && !srcs.has(ev.src)) continue;   // local: filter by upstream set
+    const x0 = W - (now - ev.t0) * pxPerMs;
+    const x1 = ev.t1 === null ? W : W - (now - ev.t1) * pxPerMs;
+    if (x1 <= 0) continue;
+    const y = H - ((Math.min(hi, Math.max(lo, ev.note)) - lo) / (hi - lo)) * (H - 6) - 3;
+    ctx.fillStyle = tapColor(ev.src, style);
+    ctx.fillRect(Math.max(0, x0), y - 2, Math.max(2, x1 - x0), 4);
+  }
+}
+
+// ---------- toolbar controls ----------
+$("patch-sel").addEventListener("change", (e) => {
+  send({type: "select_patch", patch: e.target.value});
+  e.target.blur();
+});
+$("preset-load").addEventListener("click", (e) => {
+  const name = $("preset-sel").value;
+  if (name) send({type: "load_preset", name});
+  e.target.blur();
+});
+$("preset-save").addEventListener("click", (e) => {
+  const name = $("preset-name").value.trim() || $("preset-sel").value || "untitled";
+  send({type: "save_preset", name});
+  e.target.blur();
+});
+$("preset-del").addEventListener("click", (e) => {
+  const name = $("preset-sel").value;
+  if (name) send({type: "delete_preset", name});
+  e.target.blur();
+});
+$("play-btn").addEventListener("click", (e) => {
+  const running = state?.transport?.running !== false;
+  send({type: "set_transport", playing: !running});
+  e.target.blur();
+});
+function sendTransport() {
+  throttled("transport", () => send({
+    type: "set_transport",
+    bpm: parseFloat($("bpm").value),
+    beats_per_bar: parseInt($("meter").value, 10),
+    click: $("click-on").checked,
+  }));
+}
+$("bpm").addEventListener("input", () => {
+  $("bpm-v").textContent = $("bpm").value + " bpm";
+  sendTransport();
+});
+$("bpm").addEventListener("pointerdown", () => sliderDrag = "bpm");
+$("bpm").addEventListener("pointerup", (e) => { sliderDrag = null; e.target.blur(); flushRebuild(); });
+$("meter").addEventListener("change", (e) => { sendTransport(); e.target.blur(); });
+$("click-on").addEventListener("change", (e) => { sendTransport(); e.target.blur(); });
+$("vol").addEventListener("input", (e) => {
+  throttled("vol", () => send({type: "set_volume", volume: parseFloat(e.target.value)}));
+});
+$("vol").addEventListener("pointerdown", () => sliderDrag = "vol");
+$("vol").addEventListener("pointerup", (e) => { sliderDrag = null; flushRebuild(); });
+
+// ---------- computer keyboard (legacy verbatim: keymap, caps sustain, space) ----
+function keysEnabled() { return $("keys-on").checked; }
+function keyTarget(e) {
+  const t = e.target;
+  if (!t || !t.tagName) return false;
+  if (t.tagName === "SELECT" || t.tagName === "TEXTAREA") return true;
+  return t.tagName === "INPUT" && !["range", "checkbox"].includes(t.type);
+}
+const KEYMAP = {a:0, w:1, s:2, e:3, d:4, f:5, t:6, g:7, y:8, h:9, u:10, j:11,
+                k:12, o:13, l:14, p:15, ";":16};
+let octave = 4;
+const held = new Set();
+let capsSustain = false;
+function syncCaps(e) {
+  // macOS quirk: CapsLock keydown on engage / keyup on disengage, and
+  // getModifierState is stale during that keyup — trust the event TYPE there
+  let on;
+  if (e.key === "CapsLock") on = e.type === "keydown";
+  else if (e.getModifierState) on = e.getModifierState("CapsLock");
+  else return;
+  if (on !== capsSustain) {
+    capsSustain = on;
+    send({type: "sustain", on});
+    if (!on) send({type: "all_notes_off"});
+    $("caps-note").textContent = on ? "SUSTAIN" : "";
+  }
+}
+window.addEventListener("keydown", (e) => {
+  syncCaps(e);
+  if (e.repeat || keyTarget(e) || e.metaKey || e.ctrlKey || e.altKey) {
+    // macOS swallows the keyup of letter keys while ⌘/ctrl is held — if a
+    // modifier lands while notes are down, release them NOW or their offs
+    // never arrive (stuck notes + never-clearing monitor bars)
+    if ((e.metaKey || e.ctrlKey) && held.size && !keyTarget(e)) noteOffAll();
+    return;
+  }
+  if (e.key === " ") {   // spacebar = loop record, in any input mode
+    send({type: "set_looper", action: "record"});
+    e.preventDefault();
+    return;
+  }
+  if (!keysEnabled()) return;
+  const k = e.key.toLowerCase();
+  if (k === "z") { octave = Math.max(1, octave - 1); noteOffAll(); }
+  else if (k === "x") { octave = Math.min(7, octave + 1); noteOffAll(); }
+  else if (k in KEYMAP) {
+    const note = 12 * (octave + 1) + KEYMAP[k];
+    if (!held.has(note)) { held.add(note); send({type: "note_on", note}); }
+    e.preventDefault();
+  }
+  $("oct").textContent = `C${octave}`;
+  const oc = uiParam["keys.octave"];
+  if (oc) oc(0, `C${octave}`);
+});
+window.addEventListener("keyup", (e) => {
+  syncCaps(e);
+  if (e.key === " " && !keyTarget(e)) { e.preventDefault(); return; }
+  const k = e.key.toLowerCase();
+  if (k in KEYMAP) {
+    const note = 12 * (octave + 1) + KEYMAP[k];
+    held.delete(note); send({type: "note_off", note});
+  }
+});
+function noteOffAll() { held.clear(); send({type: "all_notes_off"}); }
+window.addEventListener("blur", noteOffAll);
+document.addEventListener("visibilitychange", () => { if (document.hidden) noteOffAll(); });
+$("keys-on").addEventListener("change", (e) => {
+  if (!e.target.checked) noteOffAll();
+  e.target.blur();
+});
+document.addEventListener("pointerup", (e) => {
+  if (e.target.tagName === "BUTTON") e.target.blur();
+});
+document.addEventListener("change", (e) => {
+  if (e.target.tagName === "SELECT") e.target.blur();
+});
+
+// ---------- header height → board/palette offset ----------
+function fitHeader() {
+  const h = $("hdr").offsetHeight;
+  $("palette").style.top = h + "px";
+  $("board").style.top = h + "px";
+}
+window.addEventListener("resize", fitHeader);
+fitHeader();
+setTimeout(fitHeader, 50);
+
+// circumscribe audit: web fonts land after first paint and can change card
+// heights → the obstacle map would be stale and wires could slip under cards
+if (document.fonts && document.fonts.ready)
+  document.fonts.ready.then(() => requestAnimationFrame(() => {
+    if (busy()) return;
+    for (const n of nodes.values()) layoutPorts(n);
+    rebuildObstacles();
+    rerouteAll();
+  }));
+
+renderPalette();
+connect();
+</script>
+</body>
+</html>

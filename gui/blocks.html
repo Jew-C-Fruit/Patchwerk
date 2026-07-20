@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Patchwerk — Flex</title>
+<title>Patchwerk — Blocks</title>
 <style>
   :root {
     --plane: #0d0d0d; --surface: #1a1a19; --card: #202020; --ink-1: #f2f1ea;
@@ -193,12 +193,154 @@
     opacity: 0.85; box-shadow: 0 10px 26px rgba(0,0,0,0.6); padding: 8px 10px;
     display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 640; }
   #ghost-card i { width: 4px; height: 22px; border-radius: 3px; flex: none; }
+
+  /* ===================== BLOCKS overhaul ===================== */
+  #board { left: 172px; }   /* board starts clear of the fixed palette */
+  .blockbg { position: absolute; border-radius: 10px;
+    background: rgba(255,255,255,0.022); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.035); }
+  .mod { width: auto; transition: left 150ms ease, top 150ms ease,
+         width 150ms ease, height 150ms ease; overflow: hidden; }
+  .mod.dragging { transition: width 150ms ease, height 150ms ease; }
+  /* NO SCROLLBARS: cards take the smallest footprint that fits everything
+     (sizeFor measures), so bodies never scroll — and never show a bar */
+  .mod .body { overflow: hidden; max-height: calc(100% - 24px); }
+  .mod .body::-webkit-scrollbar { display: none; }
+  /* slimmer card top bar buys the body more room */
+  .mod .head { padding: 4px 8px 2px; gap: 6px; }
+  .mod .title { font-size: 12px; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }   /* titles: ONE line, always */
+  .mod .head > div:not(.stripe):not(.szchips) { min-width: 0; }
+  .mod .sub { font-size: 9px; }
+  .mod .body { padding: 1px 10px 5px 12px; }
+  .mini { margin: 2px 0; }
+  .mod[data-size="S"] .head { padding: 3px 7px 1px; gap: 5px; }
+  .mod[data-size="S"] .title { font-size: 11px; }
+  .mod[data-size="S"] .sub { display: none; }
+  /* L cards flow their param rows into two columns (tall modules size UP
+     into width instead of scrolling) */
+  .mod[data-size="L"] .body { column-count: 2; column-gap: 18px; }
+  .mod[data-size="L"] .body .mini { break-inside: avoid; }
+  /* graphical modules: the viz section flexes into whatever room the card has
+     left, so canvases/grids can NEVER overflow the card at any size */
+  .mod { display: flex; flex-direction: column; }
+  .mod .head { flex: none; }
+  .mod .body { flex: none; }
+  .mod .viz-sec { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+  .mod .viz-sec canvas.vz { height: 100%; display: block; }
+  .mod.measuring .viz-sec canvas.vz { height: 54px !important; } /* deterministic sizeFor */
+  /* drums: sequencer scales with card size — full @L, mini @M, hidden @S.
+     lane label sits LEFT of its 16-step row (2-col grid over the flex markup) */
+  .mod[data-gid="drums"] .viz-sec { display: grid !important; grid-template-columns: 27px 1fr;
+    align-content: center; align-items: center; column-gap: 5px; row-gap: 3px;
+    padding: 3px 10px 7px 12px; }
+  .mod[data-gid="drums"] .dlane { height: auto; margin: 0; }
+  .mod[data-gid="drums"] .dgrid { margin: 0; }
+  .mod[data-gid="drums"] .dstep { aspect-ratio: auto; height: 13px; }
+  .mod[data-gid="drums"][data-size="M"] .viz-sec { grid-template-columns: 15px 1fr;
+    column-gap: 4px; row-gap: 2px; padding: 2px 8px 5px 10px; }
+  .mod[data-gid="drums"][data-size="M"] .dlane { font-size: 6.5px; overflow: hidden; }
+  .mod[data-gid="drums"][data-size="M"] .dgrid { gap: 1px; }
+  .mod[data-gid="drums"][data-size="M"] .dstep { height: 7px; border-radius: 1px; }
+  .mod[data-gid="drums"][data-size="S"] .viz-sec { display: none !important; }
+  .szchips { display: flex; gap: 2px; margin-left: auto; }
+  .szchips button { background: var(--hairline); border: 0; color: var(--ink-2);
+    font-size: 8px; font-family: inherit; border-radius: 3px; padding: 1px 4px;
+    cursor: pointer; line-height: 1.2; }
+  .szchips button.on { background: var(--ink-2); color: #111; font-weight: 700; }
+  .szchips + .kill { margin-left: 4px; }
+  .flash { animation: flashbad .35s ease 2; }
+  @keyframes flashbad { 50% { box-shadow: 0 0 0 2px var(--danger); } }
+  #handles { position: absolute; inset: 0; pointer-events: none; z-index: 26; }
+  .bhandle { position: absolute; width: 11px; height: 11px; border-radius: 50%;
+    border: 2px solid var(--plane); z-index: 26; cursor: crosshair; pointer-events: auto;
+    transition: transform 100ms ease, box-shadow 100ms ease; }
+  .bhandle.empty { background: var(--card); border-color: var(--hc, var(--ink-2)); }
+  .bhandle.plus { width: 9px; height: 9px; opacity: .8; background: var(--hc, var(--ink-2)); }
+  .bhandle.plus::after { content: "+"; position: absolute; inset: 0; color: #0d0d0d;
+    font-size: 8px; line-height: 5px; text-align: center; font-weight: 800; }
+  .bhandle.quiet { width: 8px; height: 8px; border-width: 1.5px; opacity: 0.45; }
+  .bhandle.quiet.wired { opacity: 0.95; }
+  .bhandle.quiet.empty { background: #6f6d64; border-color: transparent; }
+  .bhandle:hover { transform: scale(1.35); opacity: 1; }
+  .bhandle.hl { box-shadow: 0 0 0 3px rgba(255,255,255,0.28); opacity: 1; }
+  .bhandle.active { transform: scale(1.5); box-shadow: 0 0 0 3.5px rgba(255,255,255,0.6),
+    0 0 12px 2px rgba(255,255,255,0.35); z-index: 27; opacity: 1; }
+  .bhandle.hot { transform: scale(1.35); }
+  .bhandle.whl { box-shadow: 0 0 0 1.4px rgba(255,255,255,0.92); z-index: 27; opacity: 1; }
+  #wlabels { position: absolute; inset: 0; pointer-events: none; z-index: 24; }
+  .wtag { position: absolute; transform: translate(-50%, -50%); pointer-events: auto;
+    height: 14px; min-width: 12px; border-radius: 7px; cursor: grab;
+    border: 2px solid #0d0d0d; display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.4); }
+  .wtag span { max-width: 0; opacity: 0; overflow: hidden; white-space: nowrap;
+    font: 600 8.5px system-ui, sans-serif; color: #0d0d0d; padding: 0;
+    transition: max-width 160ms ease, opacity 130ms ease, padding 160ms ease; }
+  .wtag:hover span, .wtag.open span { max-width: 220px; opacity: 1; padding: 0 5px; }
+  .wtag:hover, .wtag.open { z-index: 25; }
+  .wtag.balloon span { position: absolute; bottom: calc(100% + 8px); left: 50%;
+    max-width: none; overflow: visible; height: 14px; line-height: 13px;
+    background: inherit; border: 2px solid #0d0d0d; border-radius: 8px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.4); padding: 0 5px;
+    transform: translateX(-50%) scale(0.4); transform-origin: 50% calc(100% + 14px);
+    transition: transform 160ms ease, opacity 130ms ease; }
+  .wtag.balloon:hover span, .wtag.balloon.open span {
+    transform: translateX(-50%) scale(1); opacity: 1; padding: 0 5px; }
+  .wtag.balloon::before { content: ""; position: absolute; bottom: 100%; left: 50%;
+    width: 2px; height: 0; background: inherit; transform: translateX(-50%);
+    box-shadow: 0 0 0 1px rgba(13,13,13,0.7); transition: height 160ms ease; }
+  .wtag.balloon:hover::before, .wtag.balloon.open::before { height: 8px; }
+  .wtag.balloon.bflip span { bottom: auto; top: calc(100% + 8px);
+    transform-origin: 50% -14px; }
+  .wtag.balloon.bflip::before { bottom: auto; top: 100%; }
+  #fpghost { position: absolute; border-radius: 10px; z-index: 28; pointer-events: none;
+    border: 1.5px dashed rgba(255,255,255,0.55); background: rgba(255,255,255,0.06);
+    display: none; }
+  #fpghost.bad { border-color: var(--danger); background: rgba(227,73,72,0.12); }
+  #fpghost .halfline { position: absolute; left: 0; right: 0;
+    border-top: 1.5px dashed rgba(255,255,255,0.35);
+    border-bottom: 1.5px dashed rgba(255,255,255,0.35); display: none; }
+  path.ghostw { fill: none; stroke-dasharray: 5 5; stroke-width: 2.2;
+    animation: gmarch .5s linear infinite; opacity: .95; }
+  @keyframes gmarch { to { stroke-dashoffset: -10; } }
+  svg#wires path.noroute { stroke-dasharray: 2 5; opacity: .5; }
+  /* device pickers on I/O cards + SR-mismatch corner toast */
+  .mini select.devsel { flex: 1; min-width: 0; background: var(--hairline);
+    color: var(--ink-1); border: 0; border-radius: 4px; font-size: 9px;
+    padding: 1px 3px; height: 13px; }
+  .mini .devname { flex: 1; min-width: 0; font-size: 9px; color: var(--ink-2);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #srwarn { position: fixed; right: 14px; bottom: 14px; z-index: 60;
+    background: #3a2f14; color: #f0c96a; border: 1px solid #d9a521;
+    border-radius: 8px; padding: 8px 12px; font-size: 11px; max-width: 420px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5); }
+  /* LFO-driven params: animated thumb, amplitude band, center marker */
+  .mini .lfoband { position: absolute; top: 4px; height: 3px; border-radius: 2px;
+    background: var(--mod); opacity: 0.3; pointer-events: none; }
+  .mini .lfocenter { position: absolute; top: 2px; width: 1.5px; height: 7px;
+    background: rgba(255,255,255,0.55); transform: translateX(-50%);
+    border-radius: 1px; pointer-events: none; }
+  /* psine viz: static/live toggle rides the top-right of the viz section */
+  .mod .viz-sec { position: relative; }
+  .pslive { position: absolute; top: 1px; right: 8px; z-index: 2;
+    background: var(--hairline); border: 0; color: var(--ink-2);
+    font: 600 7.5px system-ui, sans-serif; border-radius: 3px;
+    padding: 1px 5px; cursor: pointer; line-height: 1.5; opacity: 0.85; }
+  .pslive:hover { opacity: 1; }
+  .pslive.on { background: var(--ink-2); color: #111; }
+  /* grouped view controls: [−][+][⇱ tidy][🔒] as one segmented cluster */
+  #viewctl { display: inline-flex; align-items: stretch; flex: none; }
+  #viewctl button { border-radius: 0; margin: 0; position: relative; }
+  #viewctl button + button { margin-left: -1px; }
+  #viewctl button:first-child { border-radius: 6px 0 0 6px; }
+  #viewctl button:last-child { border-radius: 0 6px 6px 0; }
+  #viewctl button:hover { z-index: 1; }
+  #panlock.on { border-color: var(--ink-2); }
 </style>
 </head>
 <body>
 <header id="hdr">
-  <h1><span id="status"></span>Patchwerk · flex</h1>
-  <button id="reconnect-btn" title="force reconnect">⟳</button>
+  <h1><span id="status"></span>Patchwerk · blocks</h1>
+  <button id="reconnect-btn" title="restart backend (modules, wiring and settings are preserved)">⟳</button>
   <div class="grp"><span class="lb">patch</span><select id="patch-sel"></select></div>
   <div class="grp"><span class="lb">preset</span><select id="preset-sel"></select>
     <button id="preset-load">load</button>
@@ -227,19 +369,25 @@
     <span><b style="background:linear-gradient(90deg,#e34948,#9085e9)"></b>mod</span>
     <span data-legend="tonic"><b style="background:linear-gradient(90deg,#d9a521,#f0c96a)"></b>tonic</span>
   </div>
-  <a href="/legacy">legacy gui →</a>
+
 </header>
 <div id="palette"></div>
 <div id="board"><div id="world">
+  <div id="blocks"></div>
   <svg id="wires">
     <g id="wire-perm"></g>
+    <g id="wire-topc"></g>
     <g id="wire-labels" style="font: 600 8.5px system-ui; text-anchor: middle;"></g>
     <path id="wire-live" fill="none" stroke-width="2.5" stroke-dasharray="5 5" style="display:none"/>
   </svg>
   <svg id="wiretop"></svg>
+  <div id="handles"></div>
+  <div id="wlabels"></div>
+  <div id="fpghost"><div class="halfline"></div></div>
 </div></div>
 <div class="hint">keys <b>A–;</b> play · <b>Z/X</b> octave · <b>caps</b> sustain · <b>space</b> loop-rec
-  · click any wire to cut · drag port→port to wire · drag from the palette to splice</div>
+  · drag handles to wire · drag a wire's end to repatch (space = cut) · double-click a wire to cut
+  · drag its label onto a module to splice · hover a block edge to shove</div>
 <div id="toast"></div>
 
 <script>
@@ -250,14 +398,13 @@
 // Graph nodes/wires are DERIVED from every `state` message; card positions
 // survive rebuilds (and reloads, via localStorage keyed by patch name).
 // ============================================================================
-const GRID = 24, CARD_W = 170, CELL = 12;
-const WORLD_W = 2600, WORLD_H = 1800;
-const COLS = WORLD_W / CELL | 0, ROWS = WORLD_H / CELL | 0;
+const CARD_W = 160;   // legacy name; real footprints come from SIZE_PX
 
 const FAMILY = {
   voice: "#3987e5", input: "#1baf7a", filter: "#eda100", time: "#199e70",
   dirt: "#eb6834", dyn: "#e87ba4", vox: "#e34948", service: "#9085e9",
   io: "#c3c2b7", ctl: "#1baf7a", source: "#3987e5", effect: "#199e70",
+  psine: "#22b8d4",
 };
 // subway line palettes — audio owns the cools, notes/control green→yellow,
 // mod the warm+violet half (the population that grows), tonic amber/gold.
@@ -268,8 +415,6 @@ const LINES = {
   tonic: ["#d9a521", "#f0c96a", "#b8860b", "#e8b93e"],
 };
 const lineCount = {audio: 0, ctl: 0, mod: 0, tonic: 0};
-const BASE_R = 9, LANE = 6;
-const LANE_SEQ = [0, -1, 1, -2, 2, -3, 3];
 const SIG_CSS = {audio: "var(--audio)", ctl: "var(--ctl)", mod: "var(--mod)",
                  tonic: "var(--tonic)"};
 
@@ -348,10 +493,15 @@ window.addEventListener("focus", ensureLive);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) ensureLive(); });
 document.addEventListener("pointerdown", ensureLive, true);
 window.addEventListener("keydown", ensureLive, true);
-$("reconnect-btn").addEventListener("click", (e) => {
+$("reconnect-btn").addEventListener("click", async (e) => {
+  // FULL backend reload: the server snapshots modules/wiring/settings,
+  // re-execs itself, restores on boot; layout is client-side and survives.
+  const b = e.target;
+  b.blur(); b.disabled = true; b.style.opacity = 0.4;
+  try { await fetch("/restart", {method: "POST"}); } catch (_) {}
   try { ws && ws.close(); } catch (_) {}
-  scheduleReconnect(100);
-  e.target.blur();
+  scheduleReconnect(1500);
+  setTimeout(() => { b.disabled = false; b.style.opacity = ""; }, 4000);
 });
 
 // ---------- unit <-> value curve math (legacy verbatim) ----------
@@ -394,9 +544,10 @@ function storeKey(patch) { return "supersynth.flex." + patch; }
 function saveLayout() {
   if (!currentPatch) return;
   throttled("savelayout", () => {
-    for (const n of nodes.values()) posMem[n.gid] = [n.x, n.y];
+    for (const n of nodes.values())
+      if (n.bx !== undefined && n.bx !== null) posMem[n.gid] = memOf(n);
     const monitors = [...nodes.values()].filter(n => n.persistent && n.montype)
-      .map(n => [n.gid, n.montype, n.x, n.y, !!n.expanded]);
+      .map(n => [n.gid, n.montype, ...memOf(n), !!n.expanded]);
     try {
       localStorage.setItem(storeKey(currentPatch),
         JSON.stringify({pos: posMem, monitors, monN}));
@@ -413,14 +564,7 @@ function loadLayout(patch) {
 }
 
 // ---------- generic card builder ----------
-function snap(v) { return Math.max(0, Math.round(v / GRID) * GRID); }
-const MIN_X = 8 * GRID, MIN_Y = 3 * GRID;   // header/palette must not swallow cards
-function place(node) {
-  const h = node.el.offsetHeight || 64;
-  node.x = Math.min(WORLD_W - (node.w || CARD_W) - GRID, Math.max(MIN_X, node.x));
-  node.y = Math.min(WORLD_H - h - GRID, Math.max(MIN_Y, node.y));
-  node.el.style.left = node.x + "px"; node.el.style.top = node.y + "px";
-}
+// snap()/place() live in the blocks engine now
 function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
 
 // live param widgets, keyed "<gid>.<pname>" — `param` echoes land here
@@ -448,7 +592,12 @@ function rowSlider(node, pname, opts) {
     track.setPointerCapture(e.pointerId);
     const mv = (ev) => {
       const r = track.getBoundingClientRect();
-      const u = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
+      const wr = world.getBoundingClientRect();
+      const zs = parseFloat(world.style.zoom) || 1;      // true visual scale
+      const rs = wr.width / (UW * U) || 1;               // rect-units per layout px
+      const xw = (ev.clientX - wr.left) / zs;            // pointer, world layout px
+      const tL = (r.left - wr.left) / rs;                // track left, world layout px
+      const u = Math.min(1, Math.max(0, (xw - tL) / (track.offsetWidth || 1)));
       setUI(u, opts.valText(u));
       opts.onUnit(u);
     };
@@ -486,6 +635,7 @@ function rowChip(node, pname, opts) {
 function addCard(cfg) {
   const el = document.createElement("div");
   el.className = "mod";
+  el.dataset.gid = cfg.gid;
   const stripe = FAMILY[cfg.fam] || "#888";
   el.innerHTML = `
     <div class="head"><div class="stripe" style="background:${stripe}"></div>
@@ -538,32 +688,21 @@ function addCard(cfg) {
       node.expanded = !node.expanded;
       ex.textContent = node.expanded ? "▾" : "▸";
       if (vs) vs.style.display = node.expanded ? "" : "none";
-      node.w = (node.expanded && cfg.wide) ? 240 : CARD_W;   // drum grid needs finger room
-      el.style.width = node.w + "px";
-      requestAnimationFrame(() => { layoutPorts(node); rebuildObstacles(); rerouteAll(); });
+      requestAnimationFrame(() => {
+        const want = (node.expanded && cfg.wide) ? "L" : sizeFor(node);
+        if (want !== node.size) resizeNode(node, want); else place(node);
+        rerouteAll();
+      });
       saveLayout();
     });
-    if (node.expanded && cfg.wide) { node.w = 240; el.style.width = "240px"; }
   }
-  // primary ports
-  for (const [dir, sig, label] of (cfg.ports || [])) {
-    const p = document.createElement("div");
-    p.className = `port ${dir}`;
-    p.dataset.sig = sig; p.dataset.label = label;
-    p.style.color = SIG_CSS[sig];
-    node.ports.push({dir, sig, label, el: p});
-    el.appendChild(p);
-  }
-  // quiet mod-target handles on param rows
-  for (const q of (cfg.quietRows || [])) {
-    const p = document.createElement("div");
-    p.className = "port in quiet";
-    p.dataset.sig = "mod"; p.dataset.label = q.pname;
-    p.style.color = SIG_CSS.mod;
+  // ports are SEMANTIC entries now — the blocks engine draws the handles
+  node.wideCfg = !!cfg.wide;
+  for (const [dir, sig, label] of (cfg.ports || []))
+    node.ports.push({dir, sig, label});
+  for (const q of (cfg.quietRows || []))
     node.ports.push({dir: "in", sig: "mod", label: q.pname, param: q.pname,
-                     quiet: true, rowEl: q.rowEl, el: p});
-    el.appendChild(p);
-  }
+                     quiet: true, rowEl: q.rowEl});
   nodes.set(node.gid, node);
   bindNode(node);
   return node;
@@ -575,495 +714,1461 @@ function removeNode(node) {
   nodes.delete(node.gid);
 }
 
-// ---------- ports geometry (prototype verbatim) ----------
-const NORMALS = {top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0]};
-function layoutPorts(node) {
-  const h = node.el.offsetHeight || 64;
-  for (const p of node.ports.filter(q => q.quiet)) {
-    p.edge = "left";
-    p.el.classList.add("e-left");
-    p.ox = 0;
-    p.oy = p.rowEl ? p.rowEl.offsetTop + p.rowEl.offsetHeight / 2 : h / 2;
-    p.el.style.left = (p.ox - 3.5) + "px";
-    p.el.style.top = (p.oy - 3.5) + "px";
-  }
-  // TONIC INS pin to the card's UPPER-LEFT CORNER (v8) — a fixed spot that
-  // cannot collide with the audio in (top center) or the quiet per-param
-  // handles (left edge at row heights below the head): the amber root socket
-  for (const p of node.ports.filter(q => !q.quiet && q.sig === "tonic" &&
-                                         q.dir === "in")) {
-    p.edge = "left";
-    p.el.classList.remove("e-top", "e-bottom", "e-right");
-    p.el.classList.add("e-left", "subtle");
-    p.ox = 0;
-    p.oy = 10;
-    p.el.style.left = (p.ox - 4.5) + "px";
-    p.el.style.top = (p.oy - 4.5) + "px";
-  }
-  // mod handles ride the sides (subtle); audio/ctl flow top→bottom; the
-  // deriver's tonic OUT keeps the right edge
-  const side = (p) => p.sig === "mod" || p.sig === "tonic";
-  const cornered = (p) => p.sig === "tonic" && p.dir === "in";
-  const groups = {
-    top:    node.ports.filter(p => !p.quiet && !side(p) && p.dir === "in"),
-    bottom: node.ports.filter(p => !p.quiet && !side(p) && p.dir === "out"),
-    left:   node.ports.filter(p => !p.quiet && side(p) && !cornered(p) &&
-                                   p.dir === "in"),
-    right:  node.ports.filter(p => !p.quiet && side(p) && p.dir === "out"),
-  };
-  for (const [edge, list] of Object.entries(groups)) list.forEach((p, i) => {
-    p.edge = edge;
-    p.el.classList.remove("e-top", "e-bottom", "e-left", "e-right");
-    p.el.classList.add("e-" + edge);
-    p.el.classList.toggle("subtle", side(p));
-    const half = side(p) ? 4.5 : 6;
-    if (edge === "top" || edge === "bottom") {
-      const cw = node.w || CARD_W;
-      let x = cw * (i + 1) / (list.length + 1);
-      x = Math.round((node.x + x) / CELL) * CELL - node.x;   // on a routing lane
-      x = Math.min(cw - 10, Math.max(10, x));
-      p.ox = x; p.oy = edge === "top" ? 0 : h;
-    } else {
-      let y = h * (i + 1) / (list.length + 1);
-      y = Math.round((node.y + y) / CELL) * CELL - node.y;
-      y = Math.min(h - 8, Math.max(8, y));
-      p.ox = edge === "left" ? 0 : (node.w || CARD_W); p.oy = y;
-    }
-    p.el.style.left = (p.ox - half) + "px";
-    p.el.style.top = (p.oy - half) + "px";
-  });
-}
-function portXY(node, port) { return [node.x + port.ox, node.y + port.oy]; }
-function portNormal(port) {
-  return NORMALS[port.edge || (port.dir === "out" ? "bottom" : "top")];
-}
+// ============================================================================
+// BLOCKS ENGINE part 1 — grid geometry, occupancy, shove planner, gutter router
+// (ported from patchwerk_blocks_proto v12; adapted to flex's node/wire model)
+// ============================================================================
+const U = 16, HU = U / 2;                 // px per unit / per half-unit
+const BLK = 10, GUT = 2, PITCH = BLK + GUT;
+const SH = 4.5, MIDG = BLK - 2 * SH;      // S = 10x4.5; mid-block gutter = 1u
+                                          // (4.5 + 1 + 4.5 = a block — Cole 2026-07-18)
+const BX = 12, BY = 8;                    // board, in blocks
+const UW = BX * PITCH + GUT, UH = BY * PITCH + GUT;
+const SIZE_PX = {                          // module footprints in px
+  S: [BLK * U, SH * U], M: [BLK * U, BLK * U], L: [(BLK * 2 + GUT) * U, BLK * U],
+};
 
-// ---------- obstacle map + A* router (prototype verbatim) ----------
-let obst = new Uint8Array(COLS * ROWS);
-const core = new Uint8Array(COLS * ROWS);
-function rebuildObstacles(skip) {
-  obst.fill(0); core.fill(0);
-  for (const n of nodes.values()) {
-    if (n === skip) continue;
-    const h = n.el.offsetHeight || 64;
-    const mark = (pad, g) => {
-      const x0 = Math.max(0, (n.x - pad) / CELL | 0), y0 = Math.max(0, (n.y - pad) / CELL | 0);
-      const x1 = Math.min(COLS - 1, Math.ceil((n.x + (n.w || CARD_W) + pad) / CELL));
-      const y1 = Math.min(ROWS - 1, Math.ceil((n.y + h + pad) / CELL));
-      for (let cy = y0; cy <= y1; cy++)
-        for (let cx = x0; cx <= x1; cx++) g[cy * COLS + cx] = 1;
-    };
-    mark(6, obst); mark(-2, core);
+function placeOf(n) { return { size: n.size || "S", bx: n.bx | 0, by: n.by | 0, half: n.half || null }; }
+function halfCells(pl) {
+  const out = [];
+  const blocks = pl.size === "L" ? [[pl.bx, pl.by], [pl.bx + 1, pl.by]] : [[pl.bx, pl.by]];
+  for (const [x, y] of blocks) {
+    if (pl.size === "S") out.push(`${x},${y},${pl.half || "top"}`);
+    else { out.push(`${x},${y},top`); out.push(`${x},${y},bottom`); }
   }
-  for (const n of nodes.values()) {
-    if (n === skip) continue;
-    for (const p of n.ports) {
-      const [px, py] = portXY(n, p);
-      const [nx, ny] = portNormal(p);
-      for (let k = 0; k < 3; k++) {
-        const cx = Math.round((px + nx * (6 + k * CELL)) / CELL);
-        const cy = Math.round((py + ny * (6 + k * CELL)) / CELL);
-        if (cx < 0 || cy < 0 || cx >= COLS || cy >= ROWS) continue;
-        const i = cy * COLS + cx;
-        if (!core[i]) obst[i] = 0;
-      }
-    }
-  }
-}
-const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-function freeNear(cx, cy, g) {
-  if (!g[cy * COLS + cx]) return [cx, cy];
-  for (let r = 1; r < 8; r++)
-    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
-      const x = cx + dx, y = cy + dy;
-      if (x >= 0 && y >= 0 && x < COLS && y < ROWS && !g[y * COLS + x]) return [x, y];
-    }
-  return [cx, cy];
-}
-function astar(sx, sy, tx, ty, grid = obst) {
-  [sx, sy] = freeNear(sx, sy, grid); [tx, ty] = freeNear(tx, ty, grid);
-  const N = COLS * ROWS;
-  const g = new Float32Array(N * 4).fill(Infinity);
-  const prev = new Int32Array(N * 4).fill(-1);
-  const heap = [];
-  const push = (f, s) => { heap.push([f, s]); let i = heap.length - 1;
-    while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break;
-      [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
-  const pop = () => { const top = heap[0], last = heap.pop();
-    if (heap.length) { heap[0] = last; let i = 0;
-      for (;;) { const l = 2 * i + 1, r = l + 1; let m = i;
-        if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
-        if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
-        if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } }
-    return top; };
-  const h = (x, y) => Math.abs(x - tx) + Math.abs(y - ty);
-  const TURN = 9;
-  for (let d = 0; d < 4; d++) { const s = (sy * COLS + sx) * 4 + d; g[s] = 0; push(h(sx, sy), s); }
-  let goal = -1;
-  while (heap.length) {
-    const [f, s] = pop();
-    const d = s & 3, cell = s >> 2, cx = cell % COLS, cy = (cell / COLS) | 0;
-    if (f - h(cx, cy) > g[s]) continue;
-    if (cx === tx && cy === ty) { goal = s; break; }
-    for (let nd = 0; nd < 4; nd++) {
-      const nx = cx + DIRS[nd][0], ny = cy + DIRS[nd][1];
-      if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
-      if (grid[ny * COLS + nx] && !(nx === tx && ny === ty)) continue;
-      const ns = (ny * COLS + nx) * 4 + nd;
-      const cost = g[s] + 1 + (nd !== d ? TURN : 0);
-      if (cost < g[ns]) { g[ns] = cost; prev[ns] = s; push(cost + h(nx, ny), ns); }
-    }
-  }
-  if (goal < 0) return null;
-  const pts = [];
-  for (let s = goal; s >= 0; s = prev[s]) {
-    const cell = s >> 2;
-    pts.push([(cell % COLS) * CELL, ((cell / COLS) | 0) * CELL]);
-  }
-  pts.reverse();
-  return simplify(pts);
-}
-function simplify(pts) {
-  const out = [pts[0]];
-  for (let i = 1; i < pts.length - 1; i++) {
-    const [a, b, c] = [out[out.length - 1], pts[i], pts[i + 1]];
-    if ((a[0] === b[0] && b[0] === c[0]) || (a[1] === b[1] && b[1] === c[1])) continue;
-    out.push(b);
-  }
-  out.push(pts[pts.length - 1]);
   return out;
 }
+function inBoundsPl(pl) {
+  const w = pl.size === "L" ? 2 : 1;
+  return pl.bx >= 0 && pl.by >= 0 && pl.bx + w <= BX && pl.by < BY;
+}
+function unitRect(pl) {
+  const x = pl.bx * PITCH + GUT, yB = pl.by * PITCH + GUT;
+  if (pl.size === "S") return { x, y: (pl.half || "top") === "top" ? yB : yB + SH + MIDG, w: BLK, h: SH };
+  if (pl.size === "M") return { x, y: yB, w: BLK, h: BLK };
+  return { x, y: yB, w: BLK * 2 + GUT, h: BLK };
+}
+function nodeUnitRect(n) { return unitRect(placeOf(n)); }
+function currentPos(excludeGid) {
+  const p = new Map();
+  for (const n of nodes.values()) if (n.gid !== excludeGid) p.set(n.gid, placeOf(n));
+  return p;
+}
+function occOf(posMap) {
+  const occ = new Map();
+  for (const [gid, pl] of posMap) for (const c of halfCells(pl)) occ.set(c, gid);
+  return occ;
+}
 
-// ---------- wire geometry: lanes, fan-out, labels (prototype verbatim) ----------
-function attachOffset(w, port) {
-  const mates = wires.filter(v => v.from.port === port || v.to.port === port);
-  if (mates.length < 2) return 0;
-  const [nx, ny] = portNormal(port);
-  const lateral = (v) => {
-    const other = v.from.port === port ? v.to : v.from;
-    const [ox, oy] = portXY(other.node, other.port);
-    return ny !== 0 ? ox : oy;
+// ---------- shove planner (quadrant displacement, chained, half-step S-vs-S) --
+function shiftPlace(pl, dir, gran) {
+  const p = { ...pl };
+  if (pl.size === "S" && (dir === "up" || dir === "down")) {
+    if (gran === "half") {
+      if (dir === "down") { if (p.half === "top") p.half = "bottom"; else { p.half = "top"; p.by++; } }
+      else                { if (p.half === "bottom") p.half = "top"; else { p.half = "bottom"; p.by--; } }
+      return p;
+    }
+    p.by += dir === "down" ? 1 : -1; return p;
+  }
+  if (dir === "down") p.by++; else if (dir === "up") p.by--;
+  else if (dir === "right") p.bx++; else p.bx--;
+  return p;
+}
+function planShove(dragGid, target, dir) {
+  const pos = currentPos(dragGid);
+  const moves = new Map();
+  const eff = (gid) => moves.get(gid) || pos.get(gid);
+  const targetCells = new Set(halfCells(target));
+  if (!inBoundsPl(target)) return { ok: false, moves };
+  const pairPartner = (gid) => {
+    const pl = eff(gid);
+    if (pl.size !== "S") return null;
+    const want = `${pl.bx},${pl.by},${(pl.half || "top") === "top" ? "bottom" : "top"}`;
+    for (const [ogid] of pos) { if (ogid === gid) continue;
+      const op = eff(ogid); if (op.size === "S" && halfCells(op)[0] === want) return ogid; }
+    return null;
   };
-  mates.sort((a, b) => lateral(a) - lateral(b) || a.seq - b.seq);
-  const k = mates.indexOf(w);
-  return (k - (mates.length - 1) / 2) * (CELL / 2);
-}
-function routeWire(w, grid) {
-  const [nx1, ny1] = portNormal(w.from.port);
-  const [nx2, ny2] = portNormal(w.to.port);
-  let [x1, y1] = portXY(w.from.node, w.from.port);
-  let [x2, y2] = portXY(w.to.node, w.to.port);
-  const o1 = attachOffset(w, w.from.port), o2 = attachOffset(w, w.to.port);
-  x1 += -ny1 * o1; y1 += nx1 * o1;
-  x2 += -ny2 * o2; y2 += nx2 * o2;
-  const S = 16;
-  const s = [x1 + nx1 * S, y1 + ny1 * S], t = [x2 + nx2 * S, y2 + ny2 * S];
-  const sc = [Math.round(s[0] / CELL), Math.round(s[1] / CELL)];
-  const tc = [Math.round(t[0] / CELL), Math.round(t[1] / CELL)];
-  let pts = astar(sc[0], sc[1], tc[0], tc[1], grid);
-  if (!pts && grid && grid !== obst) pts = astar(sc[0], sc[1], tc[0], tc[1], obst);
-  if (!pts) pts = fallbackRoute(sc, tc);
-  const j1 = ny1 !== 0 ? [pts[0][0], s[1]] : [s[0], pts[0][1]];
-  const j2 = ny2 !== 0 ? [pts[pts.length - 1][0], t[1]] : [t[0], pts[pts.length - 1][1]];
-  pts = dedupe([[x1, y1], s, j1, ...pts, j2, t, [x2, y2]]);
-  pts = alignPortRun(dejag(pts));
-  w.pts = pts;
-  w.o1 = o1; w.o2 = o2;
-}
-// sealed-route fallback: NEVER draw a blind L through cards. Try both Ls,
-// then detour via the nearest free column/row (checked against `core`, the
-// actual card bodies), so even desperation routes circumscribe every module.
-function segClearCore(x0, y0, x1, y1) {
-  if (x0 === x1) {
-    for (let y = Math.min(y0, y1); y <= Math.max(y0, y1); y++)
-      if (core[y * COLS + x0]) return false;
-  } else {
-    for (let x = Math.min(x0, x1); x <= Math.max(x0, x1); x++)
-      if (core[y0 * COLS + x]) return false;
-  }
-  return true;
-}
-function fallbackRoute(sc, tc) {
-  const [sx, sy] = sc, [tx, ty] = tc;
-  const P = (cells) => cells.map(([x, y]) => [x * CELL, y * CELL]);
-  if (segClearCore(sx, sy, tx, sy) && segClearCore(tx, sy, tx, ty))
-    return P([[sx, sy], [tx, sy], [tx, ty]]);
-  if (segClearCore(sx, sy, sx, ty) && segClearCore(sx, ty, tx, ty))
-    return P([[sx, sy], [sx, ty], [tx, ty]]);
-  const midX = Math.round((sx + tx) / 2), midY = Math.round((sy + ty) / 2);
-  for (let r = 0; r < COLS; r++) for (const x of (r ? [midX - r, midX + r] : [midX])) {
-    if (x < 0 || x >= COLS) continue;
-    if (segClearCore(sx, sy, x, sy) && segClearCore(x, sy, x, ty) &&
-        segClearCore(x, ty, tx, ty))
-      return P([[sx, sy], [x, sy], [x, ty], [tx, ty]]);
-  }
-  for (let r = 0; r < ROWS; r++) for (const y of (r ? [midY - r, midY + r] : [midY])) {
-    if (y < 0 || y >= ROWS) continue;
-    if (segClearCore(sx, sy, sx, y) && segClearCore(sx, y, tx, y) &&
-        segClearCore(tx, y, tx, ty))
-      return P([[sx, sy], [sx, y], [tx, y], [tx, ty]]);
-  }
-  // truly sealed (endpoint buried under an overlapping card): last-resort L
-  return P([[sx, sy], [tx, sy], [tx, ty]]);
-}
-function alignPortRun(pts) {
-  const fix = (p) => {
-    if (p.length < 5) return p;
-    const [x0, y0] = p[0];
-    const vert = p[1][0] === x0 && p[1][1] !== y0;
-    if (vert) {
-      if (p[2][1] === p[1][1] && Math.abs(p[2][0] - x0) <= CELL * 0.75 &&
-          p[3][0] === p[2][0] && p.length > 4) {
-        p[2] = [x0, p[2][1]]; p[3] = [x0, p[3][1]];
+  const queue = [{ gid: null, cells: targetCells, size: target.size }];
+  let guard = 0;
+  while (queue.length) {
+    if (++guard > 500) return { ok: false, moves };
+    const cur = queue.shift();
+    for (const [ogid] of pos) {
+      if (ogid === cur.gid) continue;
+      const op = eff(ogid);
+      const oCells = halfCells(op);
+      if (!oCells.some(c => cur.cells.has(c))) continue;
+      const movers = [ogid];
+      let gran = "block";
+      if (op.size === "S") {
+        if (cur.size === "S") gran = "half";
+        else { const pp = pairPartner(ogid); if (pp !== null) movers.push(pp); }
       }
-    } else {
-      if (p[2][0] === p[1][0] && Math.abs(p[2][1] - y0) <= CELL * 0.75 &&
-          p[3][1] === p[2][1] && p.length > 4) {
-        p[2] = [p[2][0], y0]; p[3] = [p[3][0], y0];
+      for (const mid of movers) {
+        const np = shiftPlace(eff(mid), dir, gran);
+        if (!inBoundsPl(np)) return { ok: false, moves };
+        moves.set(mid, np);
+      }
+      for (const mid of movers)
+        queue.push({ gid: mid, cells: new Set(halfCells(eff(mid))), size: eff(mid).size });
+    }
+    if (cur.gid !== null) {
+      const op = eff(cur.gid);
+      if (halfCells(op).some(c => targetCells.has(c))) {
+        const np = shiftPlace(op, dir, op.size === "S" && target.size === "S" ? "half" : "block");
+        if (!inBoundsPl(np)) return { ok: false, moves };
+        moves.set(cur.gid, np);
+        queue.push({ gid: cur.gid, cells: new Set(halfCells(np)), size: np.size });
       }
     }
-    return p;
-  };
-  let out = fix(pts.map(q => [...q]));
-  out = fix(out.reverse()).reverse();
-  return dedupe(out);
+  }
+  const seen = new Set();
+  for (const [gid] of pos) {
+    for (const c of halfCells(eff(gid))) {
+      if (seen.has(c) || targetCells.has(c)) return { ok: false, moves };
+      seen.add(c);
+    }
+  }
+  return { ok: true, moves };
 }
-function dejag(pts) {
-  for (let pass = 0; pass < 4; pass++) {
-    let changed = false;
-    for (let i = 2; i + 2 <= pts.length - 3; i++) {
-      const a = pts[i - 1], b = pts[i], c = pts[i + 1], d = pts[i + 2];
-      const midLen = Math.abs(c[0] - b[0]) + Math.abs(c[1] - b[1]);
-      if (midLen === 0 || midLen > CELL + 0.5) continue;
-      const prevH = a[1] === b[1], nextH = c[1] === d[1];
-      if (prevH !== nextH) continue;
-      const lp = Math.abs(b[0] - a[0]) + Math.abs(b[1] - a[1]);
-      const ln = Math.abs(d[0] - c[0]) + Math.abs(d[1] - c[1]);
-      if (prevH) {
-        const y = lp >= ln ? a[1] : d[1];
-        if (y === a[1]) pts[i + 2] = [d[0], y]; else pts[i - 1] = [a[0], y];
-      } else {
-        const x = lp >= ln ? a[0] : d[0];
-        if (x === a[0]) pts[i + 2] = [x, d[1]]; else pts[i - 1] = [x, a[1]];
+function quadrantOf(fx, fy) {
+  const dTop = fy, dBot = 1 - fy, dL = fx, dR = 1 - fx;
+  const m = Math.min(dTop, dBot, dL, dR);
+  if (m === dTop) return "down";
+  if (m === dBot) return "up";
+  if (m === dL) return "right";
+  return "left";
+}
+function blockAt(x, y) {
+  const ux = x / U, uy = y / U;
+  let bx = Math.floor((ux - GUT) / PITCH), by = Math.floor((uy - GUT) / PITCH);
+  bx = Math.max(0, Math.min(BX - 1, bx)); by = Math.max(0, Math.min(BY - 1, by));
+  const fx = (ux - GUT - bx * PITCH) / BLK, fy = (uy - GUT - by * PITCH) / BLK;
+  return { bx, by, fx: Math.max(0, Math.min(1, fx)), fy: Math.max(0, Math.min(1, fy)) };
+}
+// first free slot that fits `size`, scanning column-major from a preferred col
+function findFreeSlot(size, prefCol = 0, prefRow = 0) {
+  const occ = occOf(currentPos(null));
+  const fits = (pl) => inBoundsPl(pl) && !halfCells(pl).some(c => occ.get(c) !== undefined);
+  for (let dx = 0; dx < BX; dx++) for (const sgn of dx ? [1, -1] : [1]) {
+    const bx = prefCol + dx * sgn;
+    if (bx < 0 || bx >= BX) continue;
+    for (let by = prefRow; by < BY; by++) {
+      if (size === "S") {
+        for (const half of ["top", "bottom"])
+          if (fits({ size, bx, by, half })) return { size, bx, by, half };
+      } else if (fits({ size, bx, by, half: null })) return { size, bx, by, half: null };
+    }
+    for (let by = 0; by < prefRow; by++) {
+      if (size === "S") {
+        for (const half of ["top", "bottom"])
+          if (fits({ size, bx, by, half })) return { size, bx, by, half };
+      } else if (fits({ size, bx, by, half: null })) return { size, bx, by, half: null };
+    }
+  }
+  return { size, bx: 0, by: 0, half: size === "S" ? "top" : null };  // saturated board
+}
+
+// ---------- gutter-lattice router (half-unit resolution, Dijkstra + turn) ----
+const VSTEP = 2 * PITCH, CL0 = GUT;
+function buildRouteCtx(posMap) {
+  const split = new Set();
+  const rects = [];
+  for (const [, pl] of posMap) {
+    if (pl.size === "S") split.add(`${pl.bx},${pl.by}`);
+    rects.push(unitRect(pl));
+  }
+  const MID0 = 2 * (GUT + SH + MIDG / 2);
+  // mid-block gutters are NARROW (1u) — wires are biased away from them
+  // unless a route genuinely needs one (port stubs, no alternative)
+  const isMid = (i, j) => (j - MID0) % VSTEP === 0 && (i - CL0) % VSTEP !== 0
+    && (j - CL0) % VSTEP !== 0;
+  const open = (i, j) => {
+    if (i < 0 || j < 0 || i > UW * 2 || j > UH * 2) return false;
+    let g = (i - CL0) % VSTEP === 0 || (j - CL0) % VSTEP === 0;
+    if (!g && (j - MID0) % VSTEP === 0) {
+      const by = Math.round((j - MID0) / VSTEP);
+      const bx = Math.round((i - (CL0 + PITCH)) / VSTEP);
+      if (by >= 0 && by < BY && bx >= 0 && bx < BX &&
+          i >= CL0 + bx * VSTEP && i <= CL0 + (bx + 1) * VSTEP &&
+          split.has(`${bx},${by}`)) g = true;
+    }
+    if (!g) return false;
+    const cx = i / 2, cy = j / 2;
+    for (const r of rects)
+      if (cx > r.x && cx < r.x + r.w && cy > r.y && cy < r.y + r.h) return false;
+    return true;
+  };
+  return { open, isMid };
+}
+const BDIRS = [[1,0],[-1,0],[0,1],[0,-1]];
+function routeGutter(ctx, from, to) {
+  if (!ctx.open(from.i, from.j) || !ctx.open(to.i, to.j)) return null;
+  const W = UW * 2 + 1, key = (i, j, d) => (j * W + i) * 4 + d;
+  const dist = new Map(), prev = new Map();
+  const heap = [];
+  const push = (c, i, j, d) => { heap.push([c, i, j, d]);
+    let n = heap.length - 1;
+    while (n > 0) { const p = (n - 1) >> 1;
+      if (heap[p][0] <= heap[n][0]) break;
+      [heap[p], heap[n]] = [heap[n], heap[p]]; n = p; } };
+  const pop = () => { const top = heap[0], last = heap.pop();
+    if (heap.length) { heap[0] = last; let n = 0;
+      for (;;) { let l = 2*n+1, r = l+1, s = n;
+        if (l < heap.length && heap[l][0] < heap[s][0]) s = l;
+        if (r < heap.length && heap[r][0] < heap[s][0]) s = r;
+        if (s === n) break; [heap[s], heap[n]] = [heap[n], heap[s]]; n = s; } }
+    return top; };
+  for (let d = 0; d < 4; d++) { dist.set(key(from.i, from.j, d), 0); push(0, from.i, from.j, d); }
+  let endK = null;
+  while (heap.length) {
+    const [c, i, j, d] = pop();
+    const k = key(i, j, d);
+    if (dist.get(k) < c) continue;
+    if (i === to.i && j === to.j) { endK = k; break; }
+    for (let nd = 0; nd < 4; nd++) {
+      const ni = i + BDIRS[nd][0], nj = j + BDIRS[nd][1];
+      if (!ctx.open(ni, nj)) continue;
+      // bias away from the narrow mid-block gutters: 3x cost per step, so a
+      // wire only runs a centerline when the detour would be far longer (or
+      // its own handle sits there)
+      const midPen = ctx.isMid && ctx.isMid(ni, nj) ? 2 : 0;
+      const nc = c + 1 + midPen + (nd === d ? 0 : 0.9);
+      const nk = key(ni, nj, nd);
+      if (!dist.has(nk) || dist.get(nk) > nc) {
+        dist.set(nk, nc); prev.set(nk, k); push(nc, ni, nj, nd);
       }
-      pts.splice(i, 2);
-      changed = true; i--;
+    }
+  }
+  if (endK === null) return null;
+  const pts = [];
+  for (let k = endK; k !== undefined; k = prev.get(k)) {
+    const cell = Math.floor(k / 4);
+    pts.push({ i: cell % W, j: Math.floor(cell / W) });
+    if (cell === from.j * W + from.i && !prev.has(k)) break;
+  }
+  pts.reverse();
+  return pts;
+}
+function reducePoly(P) {
+  const D = [P[0]];
+  for (let n = 1; n < P.length; n++) {
+    const a = D[D.length - 1], b = P[n];
+    if (Math.abs(a[0] - b[0]) > 0.01 || Math.abs(a[1] - b[1]) > 0.01) D.push(b);
+  }
+  if (D.length < 3) return D;
+  const Q = [D[0]];
+  for (let n = 1; n < D.length - 1; n++) {
+    const a = Q[Q.length - 1], b = D[n], c = D[n + 1];
+    if ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]) !== 0 ||
+        (b[0]-a[0])*(c[0]-b[0]) + (b[1]-a[1])*(c[1]-b[1]) < 0) Q.push(b);
+  }
+  Q.push(D[D.length - 1]);
+  return Q;
+}
+
+// ============================================================================
+// BLOCKS ENGINE part 2 — port layout, bundle lanes, crossing repair, tags, draw
+// ============================================================================
+const FAN_PITCH = 0.78, T_LEAD = 1.1, PORT_GAP = 0.8;
+const PRIM_MOD_GAP = 1.2, END_MARGIN = 0.7;
+const LANE_W = 4, LANE_MAX = 3;
+const PRIMARY_SIGS = new Set(["audio", "ctl", "tonic"]);
+// + handle rules: outputs branch; FAN-IN inputs combine (audio mix, ctl
+// merge into voice/deck/keyshift/tonic); SINGLE-INPUT ports never grow a + —
+// param (mod) ins, a source's "play" in (a drop RE-TARGETS the voice, it
+// doesn't add), and a drone's tonic in (one root source).
+function portAllowsPlus(port) {
+  if (port.dir === "out") return true;
+  if (port.sig === "mod") return false;                     // param ins
+  if (port.label === "play" || port.label === "tonic") return false;
+  return true;
+}
+function wiresAt(node, port) {
+  const end = port.dir === "out" ? "from" : "to";
+  return wires.filter(w => w[end].node === node && w[end].port === port)
+              .sort((a, b) => a.seq - b.seq);
+}
+function computeLayout(n) {
+  const r = nodeUnitRect(n);
+  const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+  const ports = [];
+  for (const port of n.ports) {
+    const ws = wiresAt(n, port);
+    const isMod = port.sig === "mod";          // quiet param-ins AND lfo mod-outs
+    ports.push({ port, ws, isMod, side: port.dir });
+  }
+  // primary edge auto-pick: face the average direction of wired neighbours
+  for (const p of ports) {
+    if (p.isMod) { p.edge = p.side === "in" ? "L" : "R"; continue; }
+    let dx = 0, dy = 0, k = 0;
+    for (const w of p.ws) {
+      const other = (w.from.port === p.port && w.from.node === n) ? w.to.node : w.from.node;
+      if (!other) continue;
+      const orr = nodeUnitRect(other);
+      dx += (orr.x + orr.w / 2) - cx; dy += (orr.y + orr.h / 2) - cy; k++;
+    }
+    // hard rule: INS live on Top/Left only, OUTS on Bottom/Right only —
+    // never both I and O on the same top edge. Flow direction still picks
+    // WHICH allowed edge (vertical-dominant neighbours → T/B, else L/R).
+    if (!k) p.edge = p.side === "in" ? "L" : "R";
+    else if (p.side === "in") p.edge = (dy < 0 && Math.abs(dy) > Math.abs(dx)) ? "T" : "L";
+    else p.edge = (dy > 0 && Math.abs(dy) > Math.abs(dx)) ? "B" : "R";
+  }
+  // primary/mod separation: if both share an L/R side and can't fit as two
+  // clean bands, primaries relocate to T (ins) / B (outs); mods keep the side
+  const slotCount = (p) => p.ws.length ? p.ws.length + (portAllowsPlus(p.port) ? 1 : 0) : 1;
+  const groupExtent = (ps) => ps.length
+    ? ps.reduce((a, p) => a + slotCount(p) * FAN_PITCH, 0) + PORT_GAP * (ps.length - 1) : 0;
+  for (const edge of ["L", "R"]) {
+    const here = ports.filter(p => p.edge === edge);
+    const prim = here.filter(p => !p.isMod), mod = here.filter(p => p.isMod);
+    if (!prim.length || !mod.length) continue;
+    // HARD RULE: a quiet param handle sits exactly in line with its param row.
+    // If the primary band would reach the topmost param row (typical on S
+    // cards), the PRIMARY leaves for Top/Bottom — alignment never bends.
+    let topRow = Infinity;
+    for (const p of mod)
+      if (p.port.rowEl && p.port.rowEl.isConnected)
+        topRow = Math.min(topRow,
+          (p.port.rowEl.offsetTop + p.port.rowEl.offsetHeight / 2) / U);
+    const primEnd = T_LEAD + groupExtent(prim);
+    const need = primEnd + PRIM_MOD_GAP + groupExtent(mod) + END_MARGIN;
+    if (need > r.h || (topRow !== Infinity && primEnd + 0.4 > topRow))
+      for (const p of prim) p.edge = p.side === "in" ? "T" : "B";
+  }
+  const byEdge = { L: [], R: [], T: [], B: [] };
+  for (const p of ports) byEdge[p.edge].push(p);
+  const handles = [];
+  const slotsOf = (p) => p.ws.length
+    ? [...p.ws.map(w => ({ role: "wire", wire: w })),
+       ...(portAllowsPlus(p.port) ? [{ role: "plus" }] : [])]
+    : [{ role: "empty" }];
+  for (const edge of ["L", "R", "T", "B"]) {
+    const prim = byEdge[edge].filter(p => !p.isMod);
+    const mod  = byEdge[edge].filter(p => p.isMod);
+    let t = T_LEAD;
+    for (const p of prim) {
+      for (const s of slotsOf(p)) { handles.push(mkHandle(n, r, p, s, edge, t)); t += FAN_PITCH; }
+      t += PORT_GAP - FAN_PITCH;
+    }
+    if (mod.length) {
+      const edgeLen = (edge === "L" || edge === "R") ? r.h : r.w;
+      // param-ins sit IN LINE with the param row they modulate (rowEl offset);
+      // others (lfo outs) drop into the parameter band below the primaries.
+      // L cards flow rows into TWO columns, so different params can share a
+      // row Y — order by visual position (column, then top) and enforce a
+      // minimum separation so quiet handles never pile on each other.
+      const QUIET_SEP = 0.72;                       // units between quiet handles
+      const rowPos = (p) => (p.port.rowEl && p.port.rowEl.isConnected)
+        ? [p.port.rowEl.offsetLeft, p.port.rowEl.offsetTop] : [1e9, 1e9];
+      const ordered = mod.slice().sort((a, b) => {
+        const A = rowPos(a), B = rowPos(b);
+        return A[0] - B[0] || A[1] - B[1];
+      });
+      let mt = Math.max(prim.length ? t + PRIM_MOD_GAP : t, edgeLen * 0.35);
+      let lastT = -QUIET_SEP;
+      for (const p of ordered) {
+        let tt = null;
+        if (p.port.rowEl && p.port.rowEl.isConnected) {
+          const py = (p.port.rowEl.offsetTop + p.port.rowEl.offsetHeight / 2) / U;
+          tt = Math.max(T_LEAD, py);            // EXACTLY in line with the row
+          if (tt < lastT + QUIET_SEP) tt = lastT + QUIET_SEP;   // 2-col collision only
+          tt = Math.min(edgeLen - END_MARGIN, tt);
+        }
+        for (const s of slotsOf(p)) {
+          handles.push(mkHandle(n, r, p, s, edge, tt !== null ? tt : mt));
+          if (tt !== null) { lastT = tt; tt += FAN_PITCH; } else mt += FAN_PITCH;
+        }
+        if (tt === null) mt += PORT_GAP - FAN_PITCH;
+      }
+    }
+  }
+  const byOut = new Map(), byIn = new Map();
+  for (const H of handles) if (H.role === "wire") (H.side === "out" ? byOut : byIn).set(H.wire, H);
+  n.lay = { handles, byOut, byIn };
+  return n.lay;
+}
+function mkHandle(n, r, p, s, edge, t) {
+  // half-unit distance from a module edge OUT to its gutter's centerline:
+  // standard gutters = GUT; the narrow 1u MID-BLOCK gutter (an S edge facing
+  // its block-mate) = 1 — using GUT there overshoots into the neighbour
+  const midT = n.size === "S" && (n.half || "top") === "bottom";  // top edge on mid
+  const midB = n.size === "S" && (n.half || "top") === "top";    // bottom edge on mid
+  let x, y, ni, nj;
+  if (edge === "L")      { x = r.x;       y = r.y + t;   ni = 2*r.x - GUT;       nj = Math.round(2*(r.y + t)); }
+  else if (edge === "R") { x = r.x + r.w; y = r.y + t;   ni = 2*(r.x+r.w) + GUT; nj = Math.round(2*(r.y + t)); }
+  else if (edge === "T") { x = r.x + t;   y = r.y;       nj = Math.round(2*r.y) - (midT ? 1 : GUT);       ni = Math.round(2*(r.x + t)); }
+  else                   { x = r.x + t;   y = r.y + r.h; nj = Math.round(2*(r.y+r.h)) + (midB ? 1 : GUT); ni = Math.round(2*(r.x + t)); }
+  return { node: n, port: p.port, side: p.side, sig: p.port.sig, quiet: !!p.port.quiet,
+           role: s.role, wire: s.wire || null, edge, x: x * U, y: y * U, gnode: { i: ni, j: nj } };
+}
+function buildLayouts() { for (const n of nodes.values()) computeLayout(n); }
+
+// ---------- bundle lanes: nesting order, centring, crossing repair, radii ----
+function assignLanes(routed) {
+  const lines = new Map();
+  for (const r of routed) {
+    r.offs = new Array(Math.max(0, r.poly.length - 1)).fill(0);
+    if (r.noroute) continue;
+    const bkey = `${r.w.from.node.gid}|${r.sH ? r.sH.edge : "?"}`;
+    for (let k = 1; k < r.poly.length - 2; k++) {
+      const [a, b] = [r.poly[k], r.poly[k + 1]];
+      const vert = a[0] === b[0];
+      const key = vert ? "v" + a[0] : "h" + a[1];
+      const lo = Math.min(vert ? a[1] : a[0], vert ? b[1] : b[0]);
+      const hi = Math.max(vert ? a[1] : a[0], vert ? b[1] : b[0]);
+      const far = r.sH ? (vert ? r.sH.y : r.sH.x) : 0;
+      const dfar = r.dH ? (vert ? r.dH.y : r.dH.x) : 0;
+      const dkey = `${r.w.to.node.gid}|${r.dH ? r.dH.edge : "?"}`;
+      if (!lines.has(key)) lines.set(key, []);
+      lines.get(key).push({ r, k, lo, hi, bkey, dkey, far, dfar, vert });
+    }
+  }
+  for (const [, entries] of lines) {
+    const oneSrc = entries.every(e => e.bkey === entries[0].bkey);
+    const oneDst = entries.every(e => e.dkey === entries[0].dkey);
+    if (oneSrc) {
+      const dirDown = entries.length && entries[0].vert
+        ? (entries[0].r.poly[entries[0].k + 1][1] > entries[0].r.poly[entries[0].k][1]) : true;
+      entries.sort((x, y) => dirDown ? x.far - y.far : y.far - x.far);
+    } else if (oneDst) {
+      entries.sort((x, y) => x.dfar - y.dfar);
+    } else {
+      entries.sort((x, y) => (y.hi - y.lo) - (x.hi - x.lo));
+    }
+    const done = [];
+    for (const e of entries) {
+      const clash = done.filter(o => o.lo < e.hi - 0.5 && e.lo < o.hi - 0.5);
+      const taken = new Set(clash.map(o => o.color));
+      let col = 0; while (taken.has(col)) col++;
+      e.color = col;
+      done.push(e);
+    }
+    for (const e of entries) {
+      const grp = entries.filter(o => o.lo < e.hi - 0.5 && e.lo < o.hi - 0.5 || o === e);
+      const cols = grp.map(o => o.color);
+      const mid = (Math.min(...cols) + Math.max(...cols)) / 2;
+      e.n = e.color - mid;
+      e.r.offs[e.k] = e.n * LANE_W;
+    }
+  }
+  for (const r of routed) rebuildLaned(r);
+  reduceCrossings(routed, lines);
+}
+const _nrm = (x, y) => { const m = Math.hypot(x, y) || 1; return [x / m, y / m]; };
+function rebuildLaned(r) {
+  if (r.noroute || r.poly.length < 3) { r.laned = r.poly; r.rad = null; return; }
+  const Q = r.poly, offs = r.offs, out = [Q[0]];
+  for (let n = 1; n < Q.length - 1; n++) {
+    const prevVert = Q[n - 1][0] === Q[n][0];
+    let x, y;
+    if (prevVert) { x = Q[n - 1][0] + offs[n - 1]; } else { y = Q[n - 1][1] + offs[n - 1]; }
+    const nextVert = Q[n][0] === Q[n + 1][0];
+    if (nextVert) { x = Q[n][0] + offs[n]; } else { y = Q[n][1] + offs[n]; }
+    if (x === undefined) x = Q[n][0];
+    if (y === undefined) y = Q[n][1];
+    out.push([x, y]);
+  }
+  out.push(Q[Q.length - 1]);
+  r.laned = out;
+  r.rad = new Array(out.length).fill(null);
+  for (let n = 1; n < out.length - 1; n++) {
+    const a = out[n - 1], b = out[n], c = out[n + 1];
+    const d1 = _nrm(b[0] - a[0], b[1] - a[1]), d2 = _nrm(c[0] - b[0], c[1] - b[1]);
+    const outward = _nrm(d1[0] - d2[0], d1[1] - d2[1]);
+    const disp = [b[0] - Q[n][0], b[1] - Q[n][1]];
+    r.rad[n] = Math.max(3, 5 + (disp[0] * outward[0] + disp[1] * outward[1]));
+  }
+}
+function _segInt(p1, p2, p3, p4) {
+  const d = (p2[0]-p1[0])*(p4[1]-p3[1]) - (p2[1]-p1[1])*(p4[0]-p3[0]);
+  if (Math.abs(d) < 1e-9) return false;
+  const t = ((p3[0]-p1[0])*(p4[1]-p3[1]) - (p3[1]-p1[1])*(p4[0]-p3[0])) / d;
+  const u = ((p3[0]-p1[0])*(p2[1]-p1[1]) - (p3[1]-p1[1])*(p2[0]-p1[0])) / d;
+  return t > 0.02 && t < 0.98 && u > 0.02 && u < 0.98;
+}
+function _crossCount(A, B) {
+  const P = A.laned || A.poly, Q = B.laned || B.poly; let n = 0;
+  for (let i = 0; i < P.length - 1; i++) for (let j = 0; j < Q.length - 1; j++)
+    if (_segInt(P[i], P[i+1], Q[j], Q[j+1])) n++;
+  return n;
+}
+function reduceCrossings(routed, lines) {
+  const live = routed.filter(r => !r.noroute);
+  const involved = (R) => live.reduce((a, o) => a + (o === R ? 0 : _crossCount(R, o)), 0);
+  for (let pass = 0; pass < 3; pass++) {
+    let changed = false;
+    for (const [, entries] of lines) {
+      for (let a = 0; a < entries.length; a++) for (let b = a + 1; b < entries.length; b++) {
+        const ea = entries[a], eb = entries[b];
+        if (ea.r === eb.r || ea.r.noroute || eb.r.noroute) continue;
+        if (_crossCount(ea.r, eb.r) < 2) continue;
+        const base = involved(ea.r) + involved(eb.r) - _crossCount(ea.r, eb.r);
+        const oa = ea.r.offs[ea.k], ob = eb.r.offs[eb.k];
+        ea.r.offs[ea.k] = ob; eb.r.offs[eb.k] = oa;
+        rebuildLaned(ea.r); rebuildLaned(eb.r);
+        const after = involved(ea.r) + involved(eb.r) - _crossCount(ea.r, eb.r);
+        if (after < base) changed = true;
+        else { ea.r.offs[ea.k] = oa; eb.r.offs[eb.k] = ob; rebuildLaned(ea.r); rebuildLaned(eb.r); }
+      }
     }
     if (!changed) break;
   }
-  return dedupe(pts);
 }
-function offsetPath(pts, o) {
-  if (!o || pts.length < 3) return pts.slice();
-  const n = pts.length - 1;
-  const segs = [];
-  for (let i = 0; i < n; i++) {
-    const dx = Math.sign(pts[i + 1][0] - pts[i][0]);
-    const dy = Math.sign(pts[i + 1][1] - pts[i][1]);
-    const horiz = dy === 0;
-    let c = horiz ? pts[i][1] : pts[i][0];
-    if (i > 0 && i < n - 1) c += horiz ? -dx * o : dy * o;
-    segs.push({horiz, c});
+// ---------- layered path build (straights under, I/O spans + curves on top) --
+function layeredPath(Q, radii) {
+  if (Q.length < 2) return { bot: "", top: "", full: "" };
+  if (Q.length < 3) {
+    const d = `M ${Q[0][0]} ${Q[0][1]} L ${Q[1][0]} ${Q[1][1]}`;
+    return { bot: "", top: d, full: d };
   }
-  const out = [pts[0]];
-  for (let i = 0; i < n - 1; i++) {
-    const a = segs[i], b = segs[i + 1];
-    if (a.horiz === b.horiz) continue;
-    out.push(a.horiz ? [b.c, a.c] : [a.c, b.c]);
+  const R = 5;
+  const arcs = [];
+  for (let n = 1; n < Q.length - 1; n++) {
+    const a = Q[n - 1], b = Q[n], c = Q[n + 1];
+    const d1 = Math.hypot(b[0]-a[0], b[1]-a[1]), d2 = Math.hypot(c[0]-b[0], c[1]-b[1]);
+    if (d1 < 0.01 || d2 < 0.01) { arcs.push({ p1: b, b, p2: b }); continue; }
+    const want = radii && radii[n] ? radii[n] : R;
+    const rr = Math.min(want, d1 / 2, d2 / 2);
+    arcs.push({
+      p1: [ b[0] - (b[0]-a[0]) / d1 * rr, b[1] - (b[1]-a[1]) / d1 * rr ],
+      b,
+      p2: [ b[0] + (c[0]-b[0]) / d2 * rr, b[1] + (c[1]-b[1]) / d2 * rr ],
+    });
   }
-  out.push(pts[n]);
-  return dedupe(out);
-}
-function roundedPathNested(pts, o) {
-  if (pts.length < 2) return "";
-  let d = `M${pts[0][0]},${pts[0][1]}`;
-  for (let i = 1; i < pts.length - 1; i++) {
-    const [px, py] = pts[i - 1], [cx, cy] = pts[i], [nx, ny] = pts[i + 1];
-    const u = [Math.sign(cx - px), Math.sign(cy - py)];
-    const v = [Math.sign(nx - cx), Math.sign(ny - cy)];
-    const turn = u[0] * v[1] - u[1] * v[0];
-    let r = BASE_R + turn * o;
-    r = Math.max(1.5, Math.min(r, Math.hypot(cx - px, cy - py) / 2,
-                                  Math.hypot(nx - cx, ny - cy) / 2));
-    const inx = cx - u[0] * r, iny = cy - u[1] * r;
-    const outx = cx + v[0] * r, outy = cy + v[1] * r;
-    d += ` L${inx},${iny} Q${cx},${cy} ${outx},${outy}`;
+  const seg = (a, b) => `M ${a[0]} ${a[1]} L ${b[0]} ${b[1]}`;
+  const arcD = (A) => `M ${A.p1[0]} ${A.p1[1]} Q ${A.b[0]} ${A.b[1]} ${A.p2[0]} ${A.p2[1]}`;
+  let top = "", bot = "";
+  const nSpan = Q.length - 1;
+  for (let k = 0; k < nSpan; k++) {
+    const from = k === 0 ? Q[0] : arcs[k - 1].p2;
+    const to   = k === nSpan - 1 ? Q[Q.length - 1] : arcs[k].p1;
+    if (k === 0 || k === nSpan - 1) top += seg(from, to) + " "; else bot += seg(from, to) + " ";
   }
-  d += ` L${pts[pts.length - 1][0]},${pts[pts.length - 1][1]}`;
-  return d;
-}
-function roundedPath(pts) {
-  if (pts.length < 2) return "";
-  let d = `M${pts[0][0]},${pts[0][1]}`;
-  for (let i = 1; i < pts.length - 1; i++) {
-    const [px, py] = pts[i - 1], [cx, cy] = pts[i], [nx, ny] = pts[i + 1];
-    const r = Math.min(6, Math.hypot(cx - px, cy - py) / 2, Math.hypot(nx - cx, ny - cy) / 2);
-    const inx = cx - Math.sign(cx - px) * r, iny = cy - Math.sign(cy - py) * r;
-    const outx = cx + Math.sign(nx - cx) * r, outy = cy + Math.sign(ny - cy) * r;
-    d += ` L${inx},${iny} Q${cx},${cy} ${outx},${outy}`;
-  }
-  d += ` L${pts[pts.length - 1][0]},${pts[pts.length - 1][1]}`;
-  return d;
-}
-function drawWire(w) {
-  const o = w.lane * LANE;
-  const pts = offsetPath(w.pts, o);
-  w.dpts = pts;
-  const d = roundedPathNested(pts, o);
-  w.el.setAttribute("d", d);
-  w.hitEl.setAttribute("d", d);
-  w.flow.setAttribute("d", d);
-  const ends = [[w.dotA, pts[0], w.o1], [w.dotB, pts[pts.length - 1], w.o2]];
-  for (const [dot, p, off] of ends) {
-    dot.style.display = off ? "" : "none";
-    dot.setAttribute("cx", p[0]); dot.setAttribute("cy", p[1]);
-  }
-}
-function labelGeom(w) {
-  const dst = w.to.port.quiet
-    ? `${w.to.node.short}.${w.to.port.param}` : w.to.node.short;
-  // src/dst kept separate so applyLabel can compose the text to READ WITH the
-  // data flow of the segment it lands on (pts are ordered source → dest)
-  return {src: w.from.node.short, dst, wpx: (w.from.node.short + dst).length * 4.9 + 27};
-}
-function applyLabel(w, mx, my, dx, dy, src, dst, wpx) {
-  // (dx, dy) = the carrying segment's flow direction. Horizontal right-flow
-  // reads "Src → Dst"; left-flow flips to "Dst ← Src" so the arrow still
-  // points along the flow. Vertical rotates -90 for upward flow, +90 for
-  // downward, so the text is read in the direction the signal travels.
-  const horiz = dy === 0;
-  let transform = "", txt = `${src} → ${dst}`;
-  if (horiz) {
-    if (dx < 0) txt = `${dst} ← ${src}`;
-  } else {
-    transform = `rotate(${dy < 0 ? -90 : 90} ${mx} ${my})`;
-  }
-  w.labelG.style.display = "";
-  w.labelG.setAttribute("transform", transform);
-  w.labelT.textContent = txt;
-  w.labelR.setAttribute("x", mx - wpx / 2); w.labelR.setAttribute("width", wpx);
-  w.labelR.setAttribute("y", my - 7);
-  w.labelR.setAttribute("fill", w.color);
-  w.labelT.setAttribute("x", mx); w.labelT.setAttribute("y", my + 2.8);
-}
-function boxHitsWires(box, self) {
-  for (const v of wires) {
-    if (v === self || !v.dpts) continue;
-    for (let i = 0; i < v.dpts.length - 1; i++) {
-      const [a, b] = [v.dpts[i], v.dpts[i + 1]];
-      const x0 = Math.min(a[0], b[0]) - 3, x1 = Math.max(a[0], b[0]) + 3;
-      const y0 = Math.min(a[1], b[1]) - 3, y1 = Math.max(a[1], b[1]) + 3;
-      if (x0 < box[2] && box[0] < x1 && y0 < box[3] && box[1] < y1) return true;
-    }
-  }
-  return false;
-}
-function labelPass() {
-  const placed = [];
-  const PAD = 8;
-  const hit = (a, b) => a[0] < b[2] + PAD && b[0] < a[2] + PAD &&
-                        a[1] < b[3] + PAD && b[1] < a[3] + PAD;
-  for (const w of wires) {
-    const pts = w.dpts || w.pts;
-    const {src, dst, wpx} = labelGeom(w);
-    const segs = [];
-    for (let i = 0; i < pts.length - 1; i++)
-      segs.push({i, len: Math.abs(pts[i + 1][0] - pts[i][0]) + Math.abs(pts[i + 1][1] - pts[i][1])});
-    segs.sort((a, b) => b.len - a.len);
-    w.labelBox = null;
-    outer: for (const strict of [true, false]) {
-      for (const sg of segs.slice(0, 4)) {
-        if (sg.len < wpx + 14) break;
-        const a = pts[sg.i], b = pts[sg.i + 1], horiz = a[1] === b[1];
-        // pts run source → dest, so the segment direction IS the flow direction
-        const dx = Math.sign(b[0] - a[0]), dy = Math.sign(b[1] - a[1]);
-        for (const f of [0.5, 0.35, 0.65, 0.22, 0.78]) {
-          const mx = a[0] + (b[0] - a[0]) * f, my = a[1] + (b[1] - a[1]) * f;
-          const box = horiz ? [mx - wpx / 2, my - 8, mx + wpx / 2, my + 8]
-                            : [mx - 8, my - wpx / 2, mx + 8, my + wpx / 2];
-          if (placed.some(r => hit(r, box))) continue;
-          if (strict && boxHitsWires(box, w)) continue;
-          applyLabel(w, mx, my, dx, dy, src, dst, wpx);
-          w.labelBox = box; placed.push(box);
-          break outer;
-        }
-      }
-    }
-    if (!w.labelBox) w.labelG.style.display = "none";
-  }
-}
-function stampRect(g, box, pad) {
-  const x0 = Math.max(0, (box[0] - pad) / CELL | 0), y0 = Math.max(0, (box[1] - pad) / CELL | 0);
-  const x1 = Math.min(COLS - 1, Math.ceil((box[2] + pad) / CELL));
-  const y1 = Math.min(ROWS - 1, Math.ceil((box[3] + pad) / CELL));
-  for (let cy = y0; cy <= y1; cy++)
-    for (let cx = x0; cx <= x1; cx++) g[cy * COLS + cx] = 1;
+  for (const A of arcs) top += arcD(A) + " ";
+  let full = `M ${Q[0][0]} ${Q[0][1]}`;
+  for (let k = 0; k < arcs.length; k++)
+    full += ` L ${arcs[k].p1[0]} ${arcs[k].p1[1]} Q ${arcs[k].b[0]} ${arcs[k].b[1]} ${arcs[k].p2[0]} ${arcs[k].p2[1]}`;
+  full += ` L ${Q[Q.length - 1][0]} ${Q[Q.length - 1][1]}`;
+  return { bot: bot.trim(), top: top.trim(), full };
 }
 
-// ---------- corridor-aware coloring (prototype verbatim) ----------
-function hueOf(hex) {
-  const n = parseInt(hex.slice(1), 16);
-  const r = (n >> 16) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
-  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
-  if (!d) return 0;
-  let h = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
-  return h * 60;
+// ============================================================================
+// BLOCKS ENGINE part 3 — relayout/draw, handles+tags DOM, interactions, aliases
+// ============================================================================
+const blkSvgNS = "http://www.w3.org/2000/svg";
+let HANDLE_LIST = [];
+
+// ---- size assignment: SMALLEST size that fits ALL content (no scrollbars —
+// a card that can't fit S is sized up; L bodies flow params into 2 columns) ----
+function sizeFor(n) {
+  if (n.size && n.sizeLocked) return n.size;
+  if (n.montype) return n.size || "S";                    // monitors: chip-adjustable
+  if (n.wideCfg && n.expanded) return "L";                // drums expanded: full seq
+  // deck & every other card: measured — no special cases, no overflow
+  const el = n.el;
+  const pw = el.style.width, ph = el.style.height, ds = el.dataset.size;
+  el.classList.add("measuring");                           // pins canvas viz height
+  el.style.width = SIZE_PX.S[0] + "px"; el.style.height = "auto";
+  el.dataset.size = "S";                                   // slim-head styling
+  const hS = el.offsetHeight || 64;
+  el.dataset.size = "M";
+  const hM = el.offsetHeight || 64;
+  if (ds) el.dataset.size = ds; else delete el.dataset.size;
+  el.classList.remove("measuring");
+  el.style.width = pw; el.style.height = ph;
+  // comfort fit: content must clear the bottom edge with real slack — the
+  // 4.5u S (72px) takes up to 3 param rows comfortably, more sizes up
+  if (hS <= SIZE_PX.S[1] - 6) return "S";
+  if (hM <= SIZE_PX.M[1] - 6) return "M";
+  return "L";                                              // 2-column body
 }
-const HUES = Object.fromEntries(Object.entries(LINES).map(([k, v]) => [k, v.map(hueOf)]));
-function hueDist(a, b) { const d = Math.abs(a - b) % 360; return Math.min(d, 360 - d); }
-function segsOf(w) {
-  const out = [];
-  for (let i = 0; i < (w.pts?.length || 1) - 1; i++) {
-    const [ax, ay] = w.pts[i], [bx, by] = w.pts[i + 1];
-    if (ay === by) out.push({h: 1, c: ay, a: Math.min(ax, bx), b: Math.max(ax, bx)});
-    else out.push({h: 0, c: ax, a: Math.min(ay, by), b: Math.max(ay, by)});
+function applySize(n) {
+  n.size = n.size || sizeFor(n);
+  const [w, h] = SIZE_PX[n.size];
+  n.w = w;
+  n.el.style.width = w + "px";
+  n.el.style.height = h + "px";
+  n.el.dataset.size = n.size;
+  // titles occupy ONE line and show WHOLE: shrink the font until it fits
+  const ttl = n.el.querySelector(".title");
+  if (ttl && n._ttlSized !== n.size && ttl.clientWidth > 0) {
+    n._ttlSized = n.size;
+    ttl.style.fontSize = "";
+    for (let fs = 11.5; fs >= 9 && ttl.scrollWidth > ttl.clientWidth; fs -= 0.5)
+      ttl.style.fontSize = fs + "px";
   }
-  return out;
 }
-function sharesCorridor(sa, sb) {
-  for (const x of sa) for (const y of sb) {
-    if (x.h !== y.h || Math.abs(x.c - y.c) > 9) continue;
-    if (Math.min(x.b, y.b) - Math.max(x.a, y.a) >= 24) return true;
+function place(n) {
+  if (n.bx === undefined || n.bx === null) return;        // not placed yet
+  applySize(n);
+  const r = nodeUnitRect(n);
+  n.x = r.x * U; n.y = r.y * U;
+  n.el.style.left = n.x + "px";
+  n.el.style.top = n.y + "px";
+}
+function snap(v) { return v; }                             // legacy shim
+function validMem(m) {
+  return Array.isArray(m) && m.length >= 3 && Number.isInteger(m[0]) &&
+         m[0] >= 0 && m[0] < BX && Number.isInteger(m[1]) && m[1] >= 0 && m[1] < BY;
+}
+function applyMem(n) {
+  const m = posMem[n.gid];
+  if (!validMem(m)) return false;
+  // remembered size binds MONITORS only (chip-set); every other card
+  // re-measures — a stale saved size must never clip newly-added content
+  if (n.montype && (m[3] === "S" || m[3] === "M" || m[3] === "L")) { n.size = m[3]; n.sizeLocked = true; }
+  applySize(n);
+  const pl = { size: n.size, bx: m[0], by: m[1], half: n.size === "S" ? (m[2] || "top") : null };
+  // occupied or out of bounds → fall through to auto-placement
+  const occ = occOf(currentPos(n.gid));
+  if (!inBoundsPl(pl) || halfCells(pl).some(c => occ.get(c) !== undefined)) return false;
+  n.bx = pl.bx; n.by = pl.by; n.half = pl.half;
+  place(n);
+  return true;
+}
+function autoPlace(n, prefCol, prefRow = 0) {
+  applySize(n);
+  // FULLY-VISIBLE-FIRST: auto-placed (click-spawned) modules must land in a
+  // block the user can currently see — never just off-screen
+  let slot = null;
+  const vb = (typeof visBlockBounds === "function") ? visBlockBounds() : null;
+  if (vb) {
+    const occ = occOf(currentPos(n.gid));
+    const fits = (pl) => inBoundsPl(pl) && !halfCells(pl).some(c => occ.get(c) !== undefined);
+    const cMax = vb.c1 - (n.size === "L" ? 1 : 0);
+    const start = Math.max(vb.c0, Math.min(prefCol, cMax));
+    const cols = [];
+    for (let c = vb.c0; c <= cMax; c++) cols.push(c);
+    cols.sort((a, b) => Math.abs(a - start) - Math.abs(b - start));
+    outer: for (const bx of cols)
+      for (let by = vb.r0; by <= vb.r1; by++) {
+        if (n.size === "S") {
+          for (const half of ["top", "bottom"])
+            if (fits({ size: "S", bx, by, half })) { slot = { size: "S", bx, by, half }; break outer; }
+        } else if (fits({ size: n.size, bx, by, half: null })) {
+          slot = { size: n.size, bx, by, half: null }; break outer;
+        }
+      }
+  }
+  if (!slot) {
+    slot = findFreeSlot(n.size, prefCol, prefRow);
+    // visible area is full → the spawn lands off-view: unlock panning so it
+    // is reachable rather than silently hidden
+    if (vb && typeof panLocked !== "undefined" && panLocked
+        && (slot.bx < vb.c0 || slot.bx > vb.c1 || slot.by < vb.r0 || slot.by > vb.r1)) {
+      panLocked = false; applyView(); saveView();
+    }
+  }
+  n.bx = slot.bx; n.by = slot.by; n.half = slot.half;
+  place(n);
+}
+function memOf(n) { return [n.bx | 0, n.by | 0, n.half || null, n.size || "S"]; }
+function enforceSeparation(n) {
+  // valid, non-overlapping placement or find one
+  const occ = occOf(currentPos(n.gid));
+  const pl = placeOf(n);
+  if (n.bx !== undefined && n.bx !== null && inBoundsPl(pl) &&
+      !halfCells(pl).some(c => occ.get(c) !== undefined)) { place(n); return; }
+  autoPlace(n, n.prefCol || 0);
+}
+function pxToSlotMem(wx, wy, size = "S") {
+  const blk = blockAt(wx, wy);
+  const occ = occOf(currentPos(null));
+  let half = null;
+  if (size === "S") {
+    half = blk.fy < 0.5 ? "top" : "bottom";
+    if (occ.get(`${blk.bx},${blk.by},${half}`) !== undefined)
+      half = half === "top" ? "bottom" : "top";
+  }
+  const pl = { size, bx: blk.bx, by: blk.by, half };
+  if (!halfCells(pl).some(c => occ.get(c) !== undefined)) return [pl.bx, pl.by, pl.half, size];
+  const slot = findFreeSlot(size, blk.bx, blk.by);
+  return [slot.bx, slot.by, slot.half, size];
+}
+function resizeNode(n, size) {
+  if (size === n.size) return;
+  let target;
+  if (size === "S") target = { size: "S", bx: n.bx, by: n.by, half: "top" };
+  else if (size === "M") target = { size: "M", bx: n.bx, by: n.by, half: null };
+  else { let bx = n.bx; if (bx + 2 > BX) bx = BX - 2; target = { size: "L", bx, by: n.by, half: null }; }
+  const plan = planShove(n.gid, target, size === "L" ? "right" : "down");
+  if (!plan.ok) {
+    n.el.classList.remove("flash"); void n.el.offsetWidth; n.el.classList.add("flash");
+    return false;
+  }
+  for (const [gid, pl] of plan.moves) {
+    const o = nodes.get(gid);
+    if (!o) continue;
+    o.size = pl.size; o.bx = pl.bx; o.by = pl.by; o.half = pl.half || null;
+    place(o);
+  }
+  n.size = target.size; n.bx = target.bx; n.by = target.by; n.half = target.half || null;
+  if (n.montype) n.sizeLocked = true;
+  place(n);
+  rerouteAll();
+  saveLayout();
+  return true;
+}
+function addSizeChips(n) {
+  const head = n.el.querySelector(".head");
+  const box = document.createElement("div");
+  box.className = "szchips";
+  for (const s of ["S", "M", "L"]) {
+    const b = document.createElement("button");
+    b.textContent = s; b.dataset.sz = s;
+    b.addEventListener("pointerdown", (e) => e.stopPropagation());
+    b.addEventListener("click", () => { resizeNode(n, s); syncChips(); });
+    box.appendChild(b);
+  }
+  const syncChips = () => box.querySelectorAll("button")
+    .forEach(b => b.classList.toggle("on", b.dataset.sz === n.size));
+  head.insertBefore(box, head.querySelector(".kill"));
+  n.syncChips = syncChips;
+  requestAnimationFrame(syncChips);
+}
+// tidy: compact into a tight ordered grid — columns follow the signal-chain
+// cascade (rank = distance from sources), each cascade packs left→right with
+// no gaps inside and exactly ONE empty column between separate cascades.
+function compactLayout() {
+  const all = [...nodes.values()];
+  if (!all.length) return;
+  for (const n of all) applySize(n);
+  const has = new Map(all.map(n => [n.gid, n]));
+  const touch = (m, k, mk) => { if (!m.has(k)) m.set(k, mk()); return m.get(k); };
+  // adjacency over every wire kind (audio/ctl/tonic/mod)
+  const outs = new Map(), ins = new Map(), und = new Map();
+  const modOnly = new Map();          // gid -> all outgoing wires are mod
+  for (const w of wires) {
+    const a = w.from.node, b = w.to.node;
+    if (!a || !b || a === b || !has.has(a.gid) || !has.has(b.gid)) continue;
+    touch(outs, a.gid, () => new Set()).add(b.gid);
+    touch(ins, b.gid, () => new Set()).add(a.gid);
+    touch(und, a.gid, () => new Set()).add(b.gid);
+    touch(und, b.gid, () => new Set()).add(a.gid);
+    const isMod = !!(w.from.port && w.from.port.sig === "mod");
+    if (!modOnly.has(a.gid)) modOnly.set(a.gid, true);
+    if (!isMod) modOnly.set(a.gid, false);
+  }
+  // connected components (undirected)
+  const comp = new Map(); let nc = 0;
+  for (const n of all) {
+    if (comp.has(n.gid)) continue;
+    const st = [n.gid]; comp.set(n.gid, nc);
+    while (st.length) {
+      const c = st.pop();
+      for (const nb of (und.get(c) || []))
+        if (!comp.has(nb)) { comp.set(nb, nc); st.push(nb); }
+    }
+    nc++;
+  }
+  // rank: longest path from sources, relaxation capped (cycle-safe)
+  const rank = new Map(all.map(n => [n.gid, 0]));
+  const cap = all.length;
+  for (let it = 0; it < cap; it++) {
+    let changed = false;
+    for (const [a, tos] of outs) for (const b of tos) {
+      const nr = Math.min(rank.get(a) + 1, cap);
+      if (nr > rank.get(b)) { rank.set(b, nr); changed = true; }
+    }
+    if (!changed) break;
+  }
+  // pure mod sources (LFOs etc.) sit one column LEFT of their nearest target
+  for (const [g, only] of modOnly) {
+    if (!only || (ins.get(g) || { size: 0 }).size) continue;
+    let best = Infinity;
+    for (const t of (outs.get(g) || [])) best = Math.min(best, rank.get(t));
+    if (best !== Infinity) rank.set(g, Math.max(0, best - 1));
+  }
+  // component order: keys' cascade leads, then bigger cascades, singles last
+  const groups = [];
+  for (let c = 0; c < nc; c++) groups.push(all.filter(n => comp.get(n.gid) === c));
+  groups.sort((A, B) => {
+    const ak = A.some(n => n.gid === "keys") ? 0 : 1;
+    const bk = B.some(n => n.gid === "keys") ? 0 : 1;
+    if (ak !== bk) return ak - bk;
+    if (A.length !== B.length) return B.length - A.length;
+    return A[0].gid < B[0].gid ? -1 : 1;
+  });
+  // pour modules in cascade order down columns of the default (4-row) view:
+  // fill a column top→bottom, then the next — tight, no gaps inside a cascade,
+  // exactly ONE empty column between cascades. S halves pair up in blocks.
+  const H = 4;                             // default 6x4 viewport height
+  for (const n of all) n.bx = null;
+  const rows = new Array(BX).fill(0);      // next free block row per column
+  const halfAt = new Array(BX).fill(-1);   // block row with an open bottom half
+  let cur = 0, maxUsed = -1;
+  const put = (n) => {
+    const wide = n.size === "L" ? 2 : 1;
+    let c = cur;
+    while (c < BX) {
+      const room = n.size === "L" ? (c + 1 < BX && Math.max(rows[c], rows[c + 1]) < H)
+        : n.size === "S" ? (halfAt[c] >= 0 || rows[c] < H)
+        : rows[c] < H;
+      if (room) break;
+      c++;
+    }
+    if (c >= BX) { autoPlace(n, BX - 1); return; }   // board genuinely full
+    cur = c;
+    if (n.size === "S") {
+      if (halfAt[c] >= 0) { n.bx = c; n.by = halfAt[c]; n.half = "bottom"; halfAt[c] = -1; }
+      else { n.bx = c; n.by = rows[c]; n.half = "top"; halfAt[c] = rows[c]; rows[c]++; }
+    } else if (n.size === "M") {
+      n.bx = c; n.by = rows[c]; n.half = null; rows[c]++;
+    } else {
+      const r = Math.max(rows[c], rows[c + 1]);
+      n.bx = c; n.by = r; n.half = null; rows[c] = rows[c + 1] = r + 1;
+    }
+    maxUsed = Math.max(maxUsed, c + wide - 1);
+    place(n);
+  };
+  // IN at the top-left of a cascade's grid; OUT parked at the bottom of the
+  // cascade's FIRST column (monitors sort before the output so it stays last)
+  const sortKey = (n) => (n.gid === "keys" ? "a0" : n.montype ? "y0"
+    : n.gid === "master" ? "z0" : "a5") + n.gid;
+  for (const G of groups) {
+    const list = G.slice().sort((a, b) => {
+      const ra = rank.get(a.gid), rb = rank.get(b.gid);
+      if (ra !== rb) return ra - rb;
+      const ka = sortKey(a), kb = sortKey(b);
+      return ka < kb ? -1 : ka > kb ? 1 : 0;
+    });
+    const groupBase = cur;
+    const putOutBottom = (n) => {
+      // OUT: the BOTTOM row of the leftmost cascade column with a free bottom
+      for (let c = Math.max(0, groupBase); c < BX; c++) {
+        if (rows[c] > H - 1) continue;
+        if (n.size === "L" && (c + 1 >= BX || rows[c + 1] > H - 1)) continue;
+        n.bx = c; n.by = H - 1; n.half = n.size === "S" ? "top" : null;
+        rows[c] = H;
+        if (n.size === "L") rows[c + 1] = H;
+        maxUsed = Math.max(maxUsed, c + (n.size === "L" ? 1 : 0));
+        place(n);
+        return;
+      }
+      put(n);                              // saturated: normal pour
+    };
+    for (const n of list) {
+      if (n.gid === "master") putOutBottom(n);
+      else put(n);
+    }
+    cur = maxUsed + 2;                     // ONE empty column between cascades
+  }
+  rerouteAll();
+  saveLayout();
+}
+
+// ---- relayout: route everything, draw layered, rebuild handles + tags -------
+let _relayoutReq = 0;
+function rerouteAll() {          // name kept from flex — coalesced to one rAF
+  if (_relayoutReq) return;
+  _relayoutReq = requestAnimationFrame(() => { _relayoutReq = 0; relayoutNow(); });
+}
+function rerouteFor() { rerouteAll(); }
+function rebuildObstacles() {}   // obstacle map is derived per relayout now
+function layoutPorts() {}        // port DOM replaced by the handles layer
+function relayoutNow() {
+  buildLayouts();
+  const ctx = buildRouteCtx(currentPos(null));
+  const routed = [];
+  for (const w of wires) {
+    const sH = w.from.node.lay && w.from.node.lay.byOut.get(w);
+    const dH = w.to.node.lay && w.to.node.lay.byIn.get(w);
+    if (!sH || !dH) { routed.push({ w, poly: [[0,0],[0,0]], noroute: true }); continue; }
+    const pts = routeGutter(ctx, sH.gnode, dH.gnode);
+    let poly;
+    if (pts) {
+      const lat = pts.map(p => [p.i * HU, p.j * HU]);
+      const L = lat.length - 1;
+      if (sH.edge === "L" || sH.edge === "R") lat[0][1] = sH.y; else lat[0][0] = sH.x;
+      if (dH.edge === "L" || dH.edge === "R") lat[L][1] = dH.y; else lat[L][0] = dH.x;
+      poly = reducePoly([[sH.x, sH.y], ...lat, [dH.x, dH.y]]);
+    } else poly = [[sH.x, sH.y], [dH.x, dH.y]];
+    routed.push({ w, poly, noroute: !pts, sH, dH });
+  }
+  assignLanes(routed);
+  placeTags(routed);
+  for (const r of routed) {
+    const w = r.w;
+    const { bot, top, full } = layeredPath(r.laned || r.poly, r.rad);
+    w.el.setAttribute("d", bot || "M 0 0");
+    w.topEl.setAttribute("d", top || full || "M 0 0");
+    w.hitEl.setAttribute("d", full || "M 0 0");
+    w.flow.setAttribute("d", full || "M 0 0");
+    w.el.classList.toggle("noroute", !!r.noroute);
+    w.topEl.classList.toggle("noroute", !!r.noroute);
+    w.pathD = full;
+    w.dpts = (r.laned || r.poly).map(p => [p[0], p[1]]);   // wireNearPoint + tests
+  }
+  renderHandles();
+  renderTags(routed);
+  window._routedDebug = routed;
+}
+// ---- tag placement: clear of corners, crossings, other tags -----------------
+function placeTags(routed) {
+  const CORNER_CLR = 17, TAG_SEP = 17;
+  const avoid = [];
+  for (const r of routed) { if (r.noroute) continue; const Q = r.laned || r.poly;
+    for (let n = 1; n < Q.length - 1; n++) avoid.push(Q[n]); }
+  for (let i = 0; i < routed.length; i++) { const A = routed[i]; if (A.noroute) continue;
+    const QA = A.laned || A.poly;
+    for (let j = i + 1; j < routed.length; j++) { const B = routed[j]; if (B.noroute) continue;
+      const QB = B.laned || B.poly;
+      for (let a = 0; a < QA.length - 1; a++) for (let b = 0; b < QB.length - 1; b++) {
+        const d = (QA[a+1][0]-QA[a][0])*(QB[b+1][1]-QB[b][1]) - (QA[a+1][1]-QA[a][1])*(QB[b+1][0]-QB[b][0]);
+        if (Math.abs(d) < 1e-9) continue;
+        const t = ((QB[b][0]-QA[a][0])*(QB[b+1][1]-QB[b][1]) - (QB[b][1]-QA[a][1])*(QB[b+1][0]-QB[b][0])) / d;
+        const u = ((QB[b][0]-QA[a][0])*(QA[a+1][1]-QA[a][1]) - (QB[b][1]-QA[a][1])*(QA[a+1][0]-QA[a][0])) / d;
+        if (t > 0.02 && t < 0.98 && u > 0.02 && u < 0.98)
+          avoid.push([QA[a][0] + t*(QA[a+1][0]-QA[a][0]), QA[a][1] + t*(QA[a+1][1]-QA[a][1])]);
+      } } }
+  const placed = [];
+  for (const r of routed) {
+    const Q = r.laned || r.poly;
+    const segs = [];
+    for (let k = 0; k < Q.length - 1; k++)
+      segs.push({ k, len: Math.hypot(Q[k+1][0]-Q[k][0], Q[k+1][1]-Q[k][1]) });
+    segs.sort((a, b) => b.len - a.len);
+    r.tagPt = null; r.tagRot = 0; r.tagFlip = false;
+    const orient = (a, b) => {
+      const horiz = Math.abs(a[1] - b[1]) < 0.5;
+      if (horiz) r.tagFlip = b[0] < a[0]; else r.tagRot = b[1] < a[1] ? -90 : 90;
+    };
+    outer: for (const sg of segs) {
+      const a = Q[sg.k], b = Q[sg.k + 1], L = sg.len;
+      if (L < 2 * CORNER_CLR + 4) continue;
+      const ux = (b[0]-a[0]) / L, uy = (b[1]-a[1]) / L, mid = L / 2;
+      const cands = [mid];
+      for (let off = 8; off <= mid - CORNER_CLR; off += 8) { cands.push(mid + off); cands.push(mid - off); }
+      for (const d of cands) {
+        if (d < CORNER_CLR || d > L - CORNER_CLR) continue;
+        const x = a[0] + ux * d, y = a[1] + uy * d;
+        if (avoid.some(p => Math.hypot(p[0]-x, p[1]-y) < CORNER_CLR)) continue;
+        if (placed.some(p => Math.hypot(p[0]-x, p[1]-y) < TAG_SEP)) continue;
+        r.tagPt = { x, y }; placed.push([x, y]); orient(a, b);
+        break outer;
+      }
+    }
+    if (!r.tagPt && segs.length) {
+      let best = null, bestClr = -1, bestSeg = null;
+      for (const sg of segs) {
+        const a = Q[sg.k], b = Q[sg.k + 1], L = sg.len; if (L < 1) continue;
+        const ux = (b[0]-a[0]) / L, uy = (b[1]-a[1]) / L, step = Math.max(4, L / 8);
+        for (let d = Math.min(6, L/2); d <= L - Math.min(6, L/2) + 0.01; d += step) {
+          const x = a[0] + ux * d, y = a[1] + uy * d;
+          let clr = 1e9;
+          for (const p of avoid) clr = Math.min(clr, Math.hypot(p[0]-x, p[1]-y));
+          for (const p of placed) clr = Math.min(clr, Math.hypot(p[0]-x, p[1]-y));
+          if (clr > bestClr) { bestClr = clr; best = { x, y }; bestSeg = [a, b]; }
+        }
+      }
+      if (best) { r.tagPt = best; placed.push([best.x, best.y]); orient(bestSeg[0], bestSeg[1]); }
+    }
+    // label text mirrors flex's labelGeom: quiet targets read "Node.param"
+    const dst = r.w.to.port && r.w.to.port.quiet
+      ? `${r.w.to.node.short}.${r.w.to.port.param}` : r.w.to.node.short;
+    r.labelTxt = r.tagFlip ? `${dst} ← ${r.w.from.node.short}`
+                           : `${r.w.from.node.short} → ${dst}`;
+    r.balloon = false; r.bFlip = false;
+    if (r.tagPt) {
+      const estW = r.labelTxt.length * 5.3 + 18;
+      const dir = r.tagRot ? [0, Math.sign(r.tagRot)] : [1, 0];
+      for (const e of [Q[0], Q[Q.length - 1]]) {
+        const dx = e[0] - r.tagPt.x, dy = e[1] - r.tagPt.y;
+        const along = Math.abs(dx * dir[0] + dy * dir[1]);
+        const perp  = Math.abs(dx * dir[1] - dy * dir[0]);
+        if (along < estW / 2 + 8 && perp < 13) { r.balloon = true; break; }
+      }
+      if (r.balloon) {
+        if (!r.tagRot)            r.bFlip = r.tagPt.y < 40;
+        else if (r.tagRot === 90) r.bFlip = r.tagPt.x > UW * U - 140;
+        else                      r.bFlip = r.tagPt.x < 140;
+      }
+    }
+    r.w.midpt = r.tagPt || null;
+  }
+}
+function renderTags(routed) {
+  const layer = $("wlabels");
+  layer.innerHTML = "";
+  for (const r of routed) {
+    if (!r.tagPt) continue;
+    const tag = document.createElement("div");
+    tag.className = "wtag" + (r.balloon ? " balloon" : "") + (r.bFlip ? " bflip" : "");
+    tag.dataset.seq = r.w.seq;
+    tag.style.left = r.tagPt.x + "px";
+    tag.style.top  = r.tagPt.y + "px";
+    tag.style.background = r.w.color;
+    if (r.tagRot) tag.style.transform = `translate(-50%,-50%) rotate(${r.tagRot}deg)`;
+    tag.title = "drag onto a module to splice · double-click to cut";
+    const span = document.createElement("span");
+    span.textContent = r.labelTxt;
+    tag.appendChild(span);
+    layer.appendChild(tag);
+  }
+}
+function wireBySeq(seq) { return wires.find(w => w.seq === +seq); }
+// ---- handles layer ----------------------------------------------------------
+function renderHandles() {
+  const layer = $("handles");
+  layer.innerHTML = "";
+  HANDLE_LIST = [];
+  for (const n of nodes.values()) {
+    if (!n.lay) continue;
+    for (const H of n.lay.handles) {
+      const el = document.createElement("div");
+      el.className = "bhandle " + (H.role === "empty" ? "empty" :
+                                   H.role === "plus" ? "plus" : "wired") +
+                     (H.quiet ? " quiet" : "");
+      el.style.left = (H.x - 5.5) + "px";
+      el.style.top  = (H.y - 5.5) + "px";
+      el.style.background = H.role === "wire" ? H.wire.color : "";
+      el.style.borderColor = "";
+      if (H.role !== "wire") el.style.setProperty("--hc", SIG_CSS[H.sig] || "var(--mod)");
+      const pn = H.port.param ? ` · ${H.port.param}` : "";
+      el.title = `${n.name}${pn} (${H.sig})` +
+        (H.role === "wire" ? " — drag to repatch" : H.quiet ? " — single source" : "");
+      el.dataset.hidx = HANDLE_LIST.length;
+      H.el = el;
+      HANDLE_LIST.push(H);
+      layer.appendChild(el);
+    }
+  }
+}
+
+// ============================================================================
+// BLOCKS ENGINE part 4 — interactions: block drag/shove, handle patching,
+// tag hover/splice/delete, wire hover highlight
+// ============================================================================
+const fpGhost = $("fpghost");
+let drag = null, hdrag = null, tagDrag = null, dragRaf = 0;
+
+function setGhost(target, ok, sEmpty) {
+  if (!target) { fpGhost.style.display = "none"; return; }
+  const r = unitRect(target);
+  fpGhost.style.display = "block";
+  fpGhost.className = ok ? "" : "bad";
+  const half = fpGhost.querySelector(".halfline");
+  if (target.size === "S" && sEmpty && ok) {
+    fpGhost.style.left = (r.x * U) + "px";
+    fpGhost.style.top  = ((target.by * PITCH + GUT) * U) + "px";
+    fpGhost.style.width  = (BLK * U) + "px";
+    fpGhost.style.height = (BLK * U) + "px";
+    half.style.top = (SH * U) + "px";
+    half.style.height = (MIDG * U) + "px";
+    half.style.display = "block";
+  } else {
+    fpGhost.style.left = (r.x * U) + "px";
+    fpGhost.style.top = (r.y * U) + "px";
+    fpGhost.style.width = (r.w * U) + "px";
+    fpGhost.style.height = (r.h * U) + "px";
+    half.style.display = "none";
+  }
+}
+function previewMoves(moves) {
+  for (const n of nodes.values()) {
+    if (drag && n === drag.node) continue;
+    const pl = moves.get(n.gid) || placeOf(n);
+    const r = unitRect(pl);
+    n.el.style.left = (r.x * U) + "px";
+    n.el.style.top  = (r.y * U) + "px";
+  }
+}
+function worldXYev(e) {
+  // clientX is ALWAYS visual px and world.style.zoom is ALWAYS the true
+  // scale; rect coords vary by Chrome version — so divide by OUR zoom,
+  // never by a rect-derived factor (pre/post-128 CSS-zoom conventions)
+  const b = world.getBoundingClientRect();
+  const s = parseFloat(world.style.zoom) || 1;
+  return { x: (e.clientX - b.left) / s, y: (e.clientY - b.top) / s };
+}
+function bindNode(node) {
+  const head = node.el.querySelector(".head");
+  head.addEventListener("pointerdown", (e) => {
+    if (e.target.classList.contains("kill") || e.target.classList.contains("onoff") ||
+        e.target.classList.contains("expander") || e.target.closest(".szchips")) return;
+    const p = worldXYev(e);
+    drag = { node, offX: p.x - node.x, offY: p.y - node.y,
+             plan: null, target: null, valid: false, prevKey: "" };
+    node.el.classList.add("dragging");
+    $("wires").style.opacity = 0.35;
+    $("wlabels").style.opacity = 0.35;
+    $("handles").style.opacity = 0.35;
+    head.setPointerCapture(e.pointerId);
+  });
+  head.addEventListener("pointermove", (e) => {
+    if (!drag || drag.node !== node) return;
+    const p = worldXYev(e);
+    node.el.style.left = (p.x - drag.offX) + "px";
+    node.el.style.top  = (p.y - drag.offY) + "px";
+    const blk = blockAt(p.x, p.y);
+    const dir = quadrantOf(blk.fx, blk.fy);
+    let target, sEmpty = false;
+    if (node.size === "S") {
+      const occ = occOf(currentPos(node.gid));
+      sEmpty = occ.get(`${blk.bx},${blk.by},top`) === undefined &&
+               occ.get(`${blk.bx},${blk.by},bottom`) === undefined;
+      const half = sEmpty ? "top" : (blk.fy < 0.5 ? "top" : "bottom");
+      target = { size: "S", bx: blk.bx, by: blk.by, half };
+    } else if (node.size === "M") {
+      target = { size: "M", bx: blk.bx, by: blk.by, half: null };
+    } else {
+      let bx = blk.fx < 0.5 ? blk.bx : blk.bx - 1;
+      bx = Math.max(0, Math.min(BX - 2, bx));
+      target = { size: "L", bx, by: blk.by, half: null };
+    }
+    const key = `${target.size},${target.bx},${target.by},${target.half},${dir}`;
+    if (key !== drag.prevKey) {
+      drag.prevKey = key;
+      const plan = planShove(node.gid, target, dir);
+      drag.plan = plan; drag.target = target; drag.valid = plan.ok;
+      setGhost(target, plan.ok, sEmpty);
+      previewMoves(plan.ok ? plan.moves : new Map());
+    }
+  });
+  head.addEventListener("pointerup", () => {
+    if (!drag || drag.node !== node) return;
+    node.el.classList.remove("dragging");
+    setGhost(null);
+    $("wires").style.opacity = 1;
+    $("wlabels").style.opacity = 1;
+    $("handles").style.opacity = 1;
+    if (drag.valid && drag.target) {
+      for (const [gid, pl] of drag.plan.moves) {
+        const o = nodes.get(gid);
+        if (!o) continue;
+        o.size = pl.size; o.bx = pl.bx; o.by = pl.by; o.half = pl.half || null;
+        place(o);
+      }
+      const t = drag.target;
+      node.bx = t.bx; node.by = t.by; node.half = t.half || null;
+      place(node);
+    } else {
+      previewMoves(new Map());
+      place(node);
+    }
+    drag = null;
+    rerouteAll();
+    saveLayout();
+    flushRebuild();
+  });
+}
+
+// ---- handle patch/repatch gesture ------------------------------------------
+function handleEnds(H) { return { node: H.node, port: H.port }; }
+function beginHandleDrag(e, H) {
+  let fixed, wire = null, grabbedDir = null;
+  if (H.role === "wire") {                      // repatch: this end moves
+    wire = H.wire;
+    grabbedDir = H.side;                        // "in" | "out"
+    const fixedEnd = H.side === "in" ? wire.from : wire.to;
+    fixed = { node: fixedEnd.node, port: fixedEnd.port };
+  } else {
+    fixed = handleEnds(H);
+  }
+  const fixedH = fixed.node.lay &&
+    [...fixed.node.lay.handles].find(hh =>
+      hh.port === fixed.port && (wire ? hh.wire === wire
+        : (hh.role === "empty" || hh.role === "plus")));
+  const ctx = buildRouteCtx(currentPos(null));
+  // candidates: every handle whose (node, port) forms a REAL connection with
+  // the fixed end (connectAction semantics), on empty/plus slots — or, for
+  // single-source param inputs, the occupied slot itself (drop = REPLACE)
+  const candidates = [];
+  for (const cH of HANDLE_LIST) {
+    if (cH.node === fixed.node && cH.port === fixed.port) continue;
+    if (wire && cH.wire === wire) continue;
+    if (cH.role === "wire" && !(cH.quiet && cH.side === "in")) continue; // only param-ins replace
+    if (cH.port.dir === fixed.port.dir) continue;
+    const a = { node: fixed.node, port: fixed.port }, b = handleEnds(cH);
+    if (!compatEnds(a, b)) continue;
+    candidates.push(cH);
+    cH.el.classList.add("hl");
+  }
+  hdrag = { fixed, fixedH, wire, grabbedDir, candidates, active: null, ctx };
+  if (H.el) H.el.classList.add("hot");
+}
+function hdragMove(e) {
+  if (!hdrag) return;
+  const p = worldXYev(e);
+  let best = null, bestD = Infinity;
+  for (const cH of hdrag.candidates) {
+    const d = Math.hypot(cH.x - p.x, cH.y - p.y);
+    if (d < bestD) { bestD = d; best = cH; }
+  }
+  if (bestD > 220) best = null;
+  if (best !== hdrag.active) {
+    if (hdrag.active) hdrag.active.el.classList.remove("active");
+    hdrag.active = best;
+    if (best) best.el.classList.add("active");
+    const top = $("wiretop");
+    top.innerHTML = "";
+    if (best && hdrag.fixedH) {
+      const pts = routeGutter(hdrag.ctx, hdrag.fixedH.gnode, best.gnode);
+      const path = document.createElementNS(blkSvgNS, "path");
+      path.setAttribute("class", "ghostw");
+      path.setAttribute("stroke", SIG_CSS[hdrag.fixed.port.sig] || SIG_CSS.mod);
+      if (pts) {
+        const lat = pts.map(q => [q.i * HU, q.j * HU]);
+        path.setAttribute("d", layeredPath(reducePoly(
+          [[hdrag.fixedH.x, hdrag.fixedH.y], ...lat, [best.x, best.y]]), null).full);
+      } else {
+        path.setAttribute("d",
+          `M ${hdrag.fixedH.x} ${hdrag.fixedH.y} L ${best.x} ${best.y}`);
+      }
+      top.appendChild(path);
+    }
+  }
+}
+function hdragUp() {
+  if (!hdrag) return;
+  const { fixed, wire, active, candidates } = hdrag;
+  for (const cH of candidates) cH.el.classList.remove("hl", "active");
+  $("wiretop").innerHTML = "";
+  hdrag = null;
+  if (active) {
+    // single-source param input: replace whatever occupies it first
+    if (active.quiet) {
+      for (const w2 of wires)
+        if (w2 !== wire && w2.to.node === active.node && w2.to.port === active.port &&
+            w2.cutAction) w2.cutAction(w2);
+    }
+    const a = { node: fixed.node, port: fixed.port }, b = handleEnds(active);
+    const [out, inn] = a.port.dir === "out" ? [a, b] : [b, a];
+    const action = connectAction(out, inn);
+    if (action) {
+      if (wire && wire.cutAction) wire.cutAction(wire);   // break the old contact
+      action();
+    }
+  } else if (wire && wire.cutAction) {
+    wire.cutAction(wire);                                  // released in space: cut
+  }
+  flushRebuild();
+}
+$("handles").addEventListener("pointerdown", (e) => {
+  const el = e.target.closest(".bhandle");
+  if (!el) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const H = HANDLE_LIST[+el.dataset.hidx];
+  if (H) beginHandleDrag(e, H);
+});
+document.addEventListener("pointermove", (e) => { if (hdrag) hdragMove(e); });
+document.addEventListener("pointerup", () => { if (hdrag) hdragUp(); });
+
+// ---- wire hover: front + white outline + handle rings; dblclick = cut -------
+function tagOfSeq(seq) { return document.querySelector(`.wtag[data-seq="${seq}"]`); }
+function hlWire(seq) {
+  unhlWire();
+  const w = wireBySeq(seq);
+  if (!w || !w.pathD) return;
+  const g = document.createElementNS(blkSvgNS, "g");
+  g.id = "whover";
+  const casing = document.createElementNS(blkSvgNS, "path");
+  casing.setAttribute("d", w.pathD);
+  casing.setAttribute("fill", "none");
+  casing.setAttribute("stroke", "rgba(255,255,255,0.92)");
+  casing.setAttribute("stroke-width", "3.8");
+  casing.setAttribute("stroke-linecap", "round");
+  const core2 = document.createElementNS(blkSvgNS, "path");
+  core2.setAttribute("d", w.pathD);
+  core2.setAttribute("fill", "none");
+  core2.setAttribute("stroke", w.color);
+  core2.setAttribute("stroke-width", "2.4");
+  core2.setAttribute("stroke-linecap", "round");
+  g.appendChild(casing); g.appendChild(core2);
+  $("wiretop").appendChild(g);
+  for (const H of HANDLE_LIST)
+    if (H.wire === w && H.el) H.el.classList.add("whl");
+}
+function unhlWire() {
+  document.getElementById("whover")?.remove();
+  document.querySelectorAll(".bhandle.whl").forEach(h => h.classList.remove("whl"));
+}
+$("wires").addEventListener("pointerover", (e) => {
+  const g = e.target.closest(".hit");
+  if (!g || tagDrag || hdrag || drag) return;
+  const w = wires.find(x => x.hitEl === g);
+  if (!w) return;
+  tagOfSeq(w.seq)?.classList.add("open");
+  hlWire(w.seq);
+});
+$("wires").addEventListener("pointerout", (e) => {
+  const g = e.target.closest(".hit");
+  if (!g || tagDrag) return;
+  const w = wires.find(x => x.hitEl === g);
+  if (w) tagOfSeq(w.seq)?.classList.remove("open");
+  unhlWire();
+});
+$("wires").addEventListener("dblclick", (e) => {
+  const g = e.target.closest(".hit");
+  if (!g) return;
+  const w = wires.find(x => x.hitEl === g);
+  if (w && w.cutAction) { e.preventDefault(); unhlWire(); w.cutAction(w); flushRebuild(); }
+});
+
+// ---- tags: hover expand, drag = splice (real actions), double-tap = cut -----
+let lastTagTap = { seq: null, t: -1e9 };
+$("wlabels").addEventListener("pointerover", (e) => {
+  const t = e.target.closest(".wtag");
+  if (t && !tagDrag && !hdrag && !drag) hlWire(t.dataset.seq);
+});
+$("wlabels").addEventListener("pointerout", (e) => {
+  const t = e.target.closest(".wtag");
+  if (t && !tagDrag) unhlWire();
+});
+$("wlabels").addEventListener("pointerdown", (e) => {
+  const t = e.target.closest(".wtag");
+  if (!t) return;
+  e.preventDefault();
+  const w = wireBySeq(t.dataset.seq);
+  if (!w) return;
+  const now = performance.now();
+  if (lastTagTap.seq === w.seq && now - lastTagTap.t < 320) {  // double-tap = cut
+    lastTagTap = { seq: null, t: -1e9 };
+    unhlWire();
+    if (w.cutAction) { w.cutAction(w); flushRebuild(); }
+    return;
+  }
+  lastTagTap = { seq: w.seq, t: now };
+  tagDrag = { w, target: null, action: null };
+  t.classList.remove("open");
+  document.body.style.cursor = "grabbing";
+});
+document.addEventListener("pointermove", (e) => {
+  if (!tagDrag) return;
+  const el = document.elementFromPoint(e.clientX, e.clientY);
+  const cardEl = el && el.closest ? el.closest(".mod") : null;
+  let target = null;
+  if (cardEl) for (const n of nodes.values()) if (n.el === cardEl) { target = n; break; }
+  const action = target ? labelSpliceAction(tagDrag.w, target) : null;
+  if (tagDrag.target && (tagDrag.target !== target || !action))
+    tagDrag.target.el.classList.remove("splice-target");
+  tagDrag.target = action ? target : null;
+  tagDrag.action = action;
+  if (tagDrag.target) tagDrag.target.el.classList.add("splice-target");
+});
+document.addEventListener("pointerup", () => {
+  if (!tagDrag) return;
+  const { target, action } = tagDrag;
+  tagDrag = null;
+  document.body.style.cursor = "";
+  unhlWire();
+  if (target) target.el.classList.remove("splice-target");
+  if (action) action();
+  flushRebuild();
+});
+
+// ---- board chrome: block placeholders + world sizing ------------------------
+(function initBoard() {
+  world.style.width = (UW * U) + "px";
+  world.style.height = (UH * U) + "px";
+  world.style.backgroundSize = `${U}px ${U}px`;
+  const holder = $("blocks");
+  for (let x = 0; x < BX; x++) for (let y = 0; y < BY; y++) {
+    const d = document.createElement("div");
+    d.className = "blockbg";
+    d.style.left = ((x * PITCH + GUT) * U) + "px";
+    d.style.top  = ((y * PITCH + GUT) * U) + "px";
+    d.style.width = (BLK * U) + "px";
+    d.style.height = (BLK * U) + "px";
+    holder.appendChild(d);
+  }
+})();
+
+// ---- viewport: default 6x4 blocks (whole top gutter shown), +/- zoom,
+// pan lock (default LOCKED; zoom-in that hides modules auto-unlocks) --------
+let viewCols = 6, viewRows = 4, panLocked = true;
+const boardEl = $("board");
+function viewScale() {
+  const bw = boardEl.clientWidth || 1, bh = boardEl.clientHeight || 1;
+  return Math.min(bw / ((viewCols * PITCH + GUT) * U),
+                  bh / ((viewRows * PITCH + GUT) * U));
+}
+function applyView() {
+  world.style.zoom = viewScale();
+  boardEl.style.overflow = panLocked ? "hidden" : "auto";
+  const pl = $("panlock");
+  if (pl) { pl.textContent = panLocked ? "🔒" : "🔓"; pl.classList.toggle("on", panLocked); }
+}
+function visibleWorldRect() {
+  const s = viewScale();
+  return { x: boardEl.scrollLeft / s / U, y: boardEl.scrollTop / s / U,
+           w: boardEl.clientWidth / s / U, h: boardEl.clientHeight / s / U };
+}
+function visBlockBounds() {
+  // block-grid range whose blocks are FULLY inside the current viewport
+  const v = visibleWorldRect();
+  const c0 = Math.max(0, Math.ceil((v.x - GUT) / PITCH));
+  const r0 = Math.max(0, Math.ceil((v.y - GUT) / PITCH));
+  const c1 = Math.min(BX - 1, Math.floor((v.x + v.w - GUT - BLK) / PITCH));
+  const r1 = Math.min(BY - 1, Math.floor((v.y + v.h - GUT - BLK) / PITCH));
+  return (c1 >= c0 && r1 >= r0) ? { c0, c1, r0, r1 } : null;
+}
+function modulesHidden() {
+  const v = visibleWorldRect();
+  for (const n of nodes.values()) {
+    if (n.bx === undefined || n.bx === null) continue;
+    const r = nodeUnitRect(n);
+    if (r.x < v.x - 0.01 || r.y < v.y - 0.01 ||
+        r.x + r.w > v.x + v.w + 0.01 || r.y + r.h > v.y + v.h + 0.01) return true;
   }
   return false;
 }
-function assignLayout() {
-  const seg = new Map(wires.map(w => [w, segsOf(w)]));
-  const conflict = new Map(wires.map(w => [w, []]));
-  for (let i = 0; i < wires.length; i++)
-    for (let j = i + 1; j < wires.length; j++)
-      if (sharesCorridor(seg.get(wires[i]), seg.get(wires[j]))) {
-        conflict.get(wires[i]).push(wires[j]);
-        conflict.get(wires[j]).push(wires[i]);
-      }
-  const order = [...wires].sort((a, b) =>
-    conflict.get(b).length - conflict.get(a).length || a.seq - b.seq);
-  const done = new Set();
-  for (const w of order) {
-    const nbs = conflict.get(w).filter(n => done.has(n));
-    const usedLanes = new Set(nbs.map(n => n.lane));
-    w.lane = LANE_SEQ.find(l => !usedLanes.has(l)) ?? ((w.seq % 7) - 3);
-    const sig = w.from.port.sig, pal = LINES[sig], hues = HUES[sig];
-    let bestI = w.famIndex % pal.length, bestScore = -1;
-    for (let i = 0; i < pal.length; i++) {
-      let minD = 999;
-      for (const nb of nbs) minD = Math.min(minD, hueDist(hues[i], nb.hue));
-      const score = minD + (i === w.famIndex % pal.length ? 0.5 : 0);
-      if (score > bestScore) { bestScore = score; bestI = i; }
+function saveView() {
+  try { localStorage.setItem("blocksView", JSON.stringify([viewCols, viewRows, panLocked ? 1 : 0])); }
+  catch (e) {}
+}
+function zoomStep(dir) {
+  if (dir > 0) {   // zoom OUT: +1 row at the bottom, +1 column on the right
+    viewCols = Math.min(BX, viewCols + 1); viewRows = Math.min(BY, viewRows + 1);
+  } else {         // zoom IN
+    viewCols = Math.max(3, viewCols - 1); viewRows = Math.max(2, viewRows - 1);
+  }
+  applyView();
+  if (dir < 0 && panLocked && modulesHidden()) { panLocked = false; applyView(); }
+  saveView();
+}
+let _viewChecked = false;
+function viewAutoUnlockOnce() {   // first state load: off-view modules → unlock
+  if (_viewChecked) return;
+  _viewChecked = true;
+  requestAnimationFrame(() => {
+    if (panLocked && modulesHidden()) { panLocked = false; applyView(); saveView(); }
+  });
+}
+(function initView() {
+  const tidy = $("tidy");
+  const mk = (id, txt, title) => {
+    const b = document.createElement("button");
+    b.id = id; b.textContent = txt; b.title = title;
+    return b;
+  };
+  const zo = mk("zoomout", "−", "zoom out (+1 row, +1 column)");
+  const zi = mk("zoomin", "+", "zoom in");
+  const pl = mk("panlock", "🔒", "pan lock — click to toggle");
+  // one grouped cluster: [−][+][⇱ tidy][🔒] where tidy used to sit
+  const box = document.createElement("div");
+  box.id = "viewctl";
+  tidy.parentNode.insertBefore(box, tidy);
+  box.append(zo, zi, tidy, pl);
+  zo.addEventListener("click", (e) => { zoomStep(1); e.target.blur(); });
+  zi.addEventListener("click", (e) => { zoomStep(-1); e.target.blur(); });
+  pl.addEventListener("click", (e) => { panLocked = !panLocked; applyView(); saveView(); e.target.blur(); });
+  window.addEventListener("resize", applyView);
+  try {
+    const v = JSON.parse(localStorage.getItem("blocksView") || "null");
+    if (Array.isArray(v) && v.length === 3) {
+      viewCols = Math.min(BX, Math.max(3, v[0] | 0));
+      viewRows = Math.min(BY, Math.max(2, v[1] | 0));
+      panLocked = !!v[2];
     }
-    w.color = pal[bestI]; w.hue = hues[bestI];
-    w.el.setAttribute("stroke", w.color);
-    done.add(w);
-  }
-}
-function dedupe(pts) {
-  const out = [pts[0]];
-  for (const p of pts.slice(1)) {
-    const q = out[out.length - 1];
-    if (p[0] !== q[0] || p[1] !== q[1]) out.push(p);
-  }
-  return simplify(out);
-}
+  } catch (e) {}
+  applyView();
+})();
+
 
 // ---------- wires ----------
 // opts.cut: the click-to-cut callback. Every cut is REAL in v3: audio cuts
@@ -1075,251 +2180,39 @@ function addWire(from, to, opts = {}) {
   const sig = from.port.sig;
   const n = lineCount[sig]++;
   const color = LINES[sig][n % LINES[sig].length];
-  const seq = wires.length;
+  const seq = wireSeq++;
   const NS = "http://www.w3.org/2000/svg";
-  const el = document.createElementNS(NS, "path");
-  el.setAttribute("fill", "none");
-  el.setAttribute("stroke", color);
-  el.setAttribute("stroke-width", "2.6");
-  el.setAttribute("stroke-linecap", "round");
-  const hit = document.createElementNS(NS, "path");
-  hit.setAttribute("fill", "none"); hit.setAttribute("stroke", "transparent");
-  hit.setAttribute("stroke-width", "13"); hit.classList.add("hit");
+  const mk = (cls, width) => {
+    const p = document.createElementNS(NS, "path");
+    p.setAttribute("fill", "none");
+    p.setAttribute("stroke", cls === "hit" ? "transparent" : color);
+    p.setAttribute("stroke-width", width);
+    p.setAttribute("stroke-linecap", "round");
+    if (cls) p.classList.add(cls);
+    return p;
+  };
+  const el = mk(null, "2.4"), topEl = mk(null, "2.4"), hit = mk("hit", "13");
   const flow = document.createElementNS(NS, "path");
   flow.classList.add("flow");
   flow.style.display = "none";
-  const dotA = document.createElementNS(NS, "circle");
-  const dotB = document.createElementNS(NS, "circle");
-  for (const d of [dotA, dotB]) {
-    d.setAttribute("r", 2.8); d.setAttribute("fill", color);
-    d.setAttribute("stroke", "#0d0d0d"); d.setAttribute("stroke-width", 1);
-    d.style.display = "none";
-  }
-  const labelG = document.createElementNS(NS, "g");
-  const labelR = document.createElementNS(NS, "rect");
-  labelR.setAttribute("height", 14); labelR.setAttribute("rx", 7);
-  labelR.setAttribute("fill-opacity", "0.82");
-  const labelT = document.createElementNS(NS, "text");
-  labelT.setAttribute("fill", "#0d0d0d");
-  labelG.appendChild(labelR); labelG.appendChild(labelT);
-  $("wire-labels").appendChild(labelG);
-  const w = {from, to, sig, color, hue: hueOf(color), famIndex: n, seq,
-             lane: 0, el, hitEl: hit, flow, dotA, dotB, labelG, labelR, labelT,
-             lfoId: opts.lfoId || null};
-  if (opts.cut) {
-    hit.classList.add("cuttable");
-    hit.addEventListener("click", () => opts.cut(w));
-  }
-  bindLabelHandle(w);   // v8: the label badge is a splice drag handle
-  wiresPerm.appendChild(el); wiresPerm.appendChild(hit);
+  const w = {from, to, sig, color, seq, el, topEl, hitEl: hit, flow,
+             lfoId: opts.lfoId || null, cutAction: opts.cut || null};
+  wiresPerm.appendChild(el);
+  $("wire-topc").appendChild(topEl);
   wiresPerm.appendChild(flow);
-  const top = $("wiretop");
-  top.appendChild(dotA); top.appendChild(dotB);
+  wiresPerm.appendChild(hit);
   wires.push(w);
-  // ports get their offsets in layoutPorts — a wire added mid-rebuild (before
-  // the rAF layout pass) must wait for rerouteAll or it paints NaN paths
-  if (from.port.ox !== undefined && to.port.ox !== undefined) {
-    routeWire(w); drawWire(w);
-  }
   return w;
 }
+let wireSeq = 1;
 function removeWire(w) {
-  w.el.remove(); w.hitEl.remove(); w.labelG.remove();
-  w.flow.remove(); w.dotA.remove(); w.dotB.remove();
+  w.el.remove(); w.topEl.remove(); w.hitEl.remove(); w.flow.remove();
   const i = wires.indexOf(w);
   if (i >= 0) wires.splice(i, 1);
 }
-function rerouteAll() {
-  rebuildObstacles();
-  for (const w of wires) routeWire(w);
-  assignLayout();
-  for (const w of wires) drawWire(w);
-  labelPass();
-  // pass 2: contour around other lines' labels (walls only in open space)
-  const stampable = new Map();
-  for (const v of wires) {
-    if (!v.labelBox) continue;
-    const b = v.labelBox, vert = (b[3] - b[1]) > (b[2] - b[0]);
-    let clear = 0;
-    for (const side of [-1, 1]) {
-      let ok = true;
-      if (vert) {
-        const cx = ((side < 0 ? b[0] : b[2]) / CELL | 0) + side * 2;
-        for (let cy = (b[1] / CELL | 0); cy <= Math.ceil(b[3] / CELL); cy++)
-          if (cx < 0 || cx >= COLS || obst[cy * COLS + cx]) { ok = false; break; }
-      } else {
-        const cy = ((side < 0 ? b[1] : b[3]) / CELL | 0) + side * 2;
-        for (let cx = (b[0] / CELL | 0); cx <= Math.ceil(b[2] / CELL); cx++)
-          if (cy < 0 || cy >= ROWS || obst[cy * COLS + cx]) { ok = false; break; }
-      }
-      if (ok) clear++;
-    }
-    stampable.set(v, clear === 2);
-  }
-  for (const w of wires) {
-    const g = obst.slice();
-    for (const v of wires) {
-      if (v === w || !v.labelBox || !stampable.get(v)) continue;
-      if (v.from.node === w.from.node || v.to.node === w.from.node ||
-          v.from.node === w.to.node || v.to.node === w.to.node) continue;
-      stampRect(g, v.labelBox, 2);
-    }
-    routeWire(w, g);
-  }
-  for (const w of wires) drawWire(w);
-  labelPass();
-}
-function rerouteFor(node) {
-  for (const w of wires)
-    if (w.from.node === node || w.to.node === node) { routeWire(w); drawWire(w); }
-  labelPass();
-}
-
-// ---------- min separation / make-space / tidy (prototype verbatim) ----------
-function cardRect(n) { const h = n.el.offsetHeight || 64; return [n.x, n.y, n.x + (n.w || CARD_W), n.y + h]; }
-function overlapsAny(node) {
-  const [ax0, ay0, ax1, ay1] = cardRect(node);
-  for (const o of nodes.values()) {
-    if (o === node) continue;
-    const [bx0, by0, bx1, by1] = cardRect(o);
-    if (ax0 < bx1 + GRID && bx0 < ax1 + GRID && ay0 < by1 + GRID && by0 < ay1 + GRID)
-      return true;
-  }
-  return false;
-}
-const rectsClose = (a, b, m) => a[0] < b[2] + m && b[0] < a[2] + m &&
-                                a[1] < b[3] + m && b[1] < a[3] + m;
-const rcenter = (r) => [(r[0] + r[2]) / 2, (r[1] + r[3]) / 2];
-function makeSpacePreview(node) {
-  if (!drag) return;
-  drag.shifted = drag.shifted || new Map();
-  for (const [n, [ox, oy]] of drag.shifted) { n.x = ox; n.y = oy; }
-  const orig = new Map([...nodes.values()].map(n => [n, [n.x, n.y]]));
-  const pos = new Map(orig);
-  const rectOf = (n) => {
-    const [px, py] = pos.get(n), h = n.el.offsetHeight || 64;
-    return [px, py, px + (n.w || CARD_W), py + h];
-  };
-  const victims = [...nodes.values()].filter(n =>
-    n !== node && rectsClose(rectOf(n), rectOf(node), GRID - 1));
-  if (victims.length) {
-    const c = rcenter(rectOf(node));
-    const vc = rcenter(rectOf(victims.sort((a, b) =>
-      Math.hypot(...rcenter(rectOf(a)).map((v, i) => v - c[i])) -
-      Math.hypot(...rcenter(rectOf(b)).map((v, i) => v - c[i])))[0]));
-    const axis = Math.abs(vc[0] - c[0]) > Math.abs(vc[1] - c[1]) ? 0 : 1;
-    const pushers = new Set([node]);
-    for (let iter = 0; iter < 12; iter++) {
-      let any = false;
-      for (const p of [...pushers]) {
-        const rp = rectOf(p);
-        for (const n of nodes.values()) {
-          if (n === p || n === node) continue;
-          const rn = rectOf(n);
-          if (!rectsClose(rp, rn, GRID - 1)) continue;
-          const s = rcenter(rn)[axis] >= rcenter(rp)[axis] ? 1 : -1;
-          let d = axis === 1
-            ? (s > 0 ? rp[3] + GRID - rn[1] : -(rn[3] + GRID - rp[1]))
-            : (s > 0 ? rp[2] + GRID - rn[0] : -(rn[2] + GRID - rp[0]));
-          d = Math.sign(d) * Math.ceil(Math.abs(d) / GRID) * GRID;
-          if (!d) continue;
-          const [px, py] = pos.get(n);
-          pos.set(n, axis === 1 ? [px, py + d] : [px + d, py]);
-          pushers.add(n);
-          any = true;
-        }
-      }
-      if (!any) break;
-    }
-  }
-  const newShift = new Map();
-  for (const n of nodes.values()) {
-    if (n === node) continue;
-    const [ox, oy] = orig.get(n), [nx2, ny2] = pos.get(n);
-    if (nx2 !== ox || ny2 !== oy) {
-      newShift.set(n, [ox, oy]);
-      n.x = nx2; n.y = ny2;
-      n.el.classList.add("shifting"); place(n);
-    } else if (drag.shifted.has(n)) {
-      place(n);
-    }
-  }
-  drag.shifted = newShift;
-}
-// splice targeting: while a card is dragged over an audio wire, that wire
-// highlights; dropping performs a LIVE splice via graph_wire (see
-// spliceExistingIntoWire). A Note Monitor targets CTL wires instead — it
-// rides them visually (spliceMonitorIntoCtl).
-function updateSpliceTarget(node) {
-  if (!drag) return;
-  const wantSig = node.montype === "notes" ? "ctl" : "audio";
-  const R = cardRect(node);
-  let best = null, bestD = 1e9;
-  for (const w of wires) {
-    if (w.from.node === node || w.to.node === node) continue;
-    if (w.sig !== wantSig) continue;
-    const pts = w.dpts || w.pts;
-    for (let i = 0; i < pts.length - 1; i++) {
-      const x0 = Math.min(pts[i][0], pts[i + 1][0]), x1 = Math.max(pts[i][0], pts[i + 1][0]);
-      const y0 = Math.min(pts[i][1], pts[i + 1][1]), y1 = Math.max(pts[i][1], pts[i + 1][1]);
-      if (x0 < R[2] && R[0] < x1 && y0 < R[3] && R[1] < y1) {
-        const c = rcenter(R);
-        const d = Math.abs((x0 + x1) / 2 - c[0]) + Math.abs((y0 + y1) / 2 - c[1]);
-        if (d < bestD) { bestD = d; best = w; }
-      }
-    }
-  }
-  if (drag.spliceTarget && drag.spliceTarget !== best)
-    drag.spliceTarget.el.classList.remove("splice-hi");
-  drag.spliceTarget = best;
-  if (best) best.el.classList.add("splice-hi");
-}
-function compactLayout() {
-  const list = [...nodes.values()];
-  const gap = 2 * GRID;
-  const fits = (node, x, y, placed) => {
-    const h = node.el.offsetHeight || 64, w = node.w || CARD_W;
-    return !placed.some(p => {
-      const ph = p.el.offsetHeight || 64, pw = p.w || CARD_W;
-      return rectsClose([x, y, x + w, y + h], [p.x, p.y, p.x + pw, p.y + ph], gap - 1);
-    });
-  };
-  let placed = [];
-  for (const n of [...list].sort((a, b) => a.y - b.y || a.x - b.x)) {
-    while (n.y - GRID >= MIN_Y && fits(n, n.x, n.y - GRID, placed)) n.y -= GRID;
-    placed.push(n);
-  }
-  placed = [];
-  for (const n of [...list].sort((a, b) => a.x - b.x || a.y - b.y)) {
-    while (n.x - GRID >= MIN_X && fits(n, n.x - GRID, n.y, placed)) n.x -= GRID;
-    placed.push(n);
-  }
-  for (const n of list) {
-    n.el.classList.add("shifting");
-    place(n);
-    setTimeout(() => n.el.classList.remove("shifting"), 220);
-  }
-  requestAnimationFrame(() => {
-    for (const n of nodes.values()) layoutPorts(n);
-    rerouteAll();
-    saveLayout();
-  });
-}
+// rerouteAll/rerouteFor/enforceSeparation/compactLayout live in the engine
 $("tidy").addEventListener("click", (e) => { compactLayout(); e.target.blur(); });
-function enforceSeparation(node) {
-  if (!overlapsAny(node)) return;
-  const ox = node.x, oy = node.y;
-  for (let r = 1; r < 40; r++)
-    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
-      if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
-      // clamp BEFORE the overlap test — place() clamps too, and a candidate
-      // that only looked free outside the workspace would snap back onto
-      // whatever card it was fleeing
-      node.x = Math.max(MIN_X, ox + dx * GRID); node.y = Math.max(MIN_Y, oy + dy * GRID);
-      if (!overlapsAny(node)) { place(node); return; }
-    }
-  node.x = ox; node.y = oy; place(node);
-}
+// enforceSeparation: engine version (block slots)
 
 // ---------- rewiring: cut / connect semantics ----------
 // v3: ctl wires are SERVER TRUTH (state.ctl_wires) — the old client-side
@@ -1410,7 +2303,8 @@ function connectAction(out, inn) {
     return () => {
       // park the LFO card's position where it was drawn so the server-born
       // card (id "<key>.<param>") appears in place
-      posMem["lfo:" + inn.node.chainKey + "." + pi.param] = [src.x, src.y];
+      if (src.bx !== undefined && src.bx !== null)
+        posMem["lfo:" + inn.node.chainKey + "." + pi.param] = memOf(src);
       if (src.armed) { removeNode(src); rerouteAll(); }
       else if (src.gid.startsWith("lfo:"))
         send({type: "lfo_unassign", id: src.gid.slice(4)});  // re-target a live LFO
@@ -1479,8 +2373,7 @@ function spliceNewIntoWire(w, key, kind, wx, wy) {
   const toKey = B.gid === "master" ? "master" : B.chainKey;
   if (!toKey) return;
   const id = nextId(key);
-  posMem["m:" + id] = [snap(Math.max(MIN_X, wx - CARD_W / 2)),
-                       snap(Math.max(MIN_Y, wy - GRID))];
+  posMem["m:" + id] = pxToSlotMem(wx, wy, "S");
   send({type: "spawn_module", key});
   if (kind === "effect" && fromKey) {
     if (fromKey === "drums") send({type: "set_drums", target: id});
@@ -1575,144 +2468,20 @@ function labelSpliceAction(w, n) {
   }
   return null;
 }
-function bindLabelHandle(w) {
-  w.labelG.addEventListener("pointerdown", (e) => {
-    e.stopPropagation();
-    e.preventDefault();
-    labelDrag = {w, target: null, action: null};
-    w.labelG.style.pointerEvents = "none";  // hit-test the cards underneath
-    document.body.style.cursor = "grabbing";
-  });
-}
-document.addEventListener("pointermove", (e) => {
-  if (!labelDrag) return;
-  const el = document.elementFromPoint(e.clientX, e.clientY);
-  const cardEl = el && el.closest ? el.closest(".mod") : null;
-  let target = null;
-  if (cardEl) for (const n of nodes.values()) if (n.el === cardEl) { target = n; break; }
-  const action = target ? labelSpliceAction(labelDrag.w, target) : null;
-  if (labelDrag.target && (labelDrag.target !== target || !action))
-    labelDrag.target.el.classList.remove("splice-target");
-  labelDrag.target = action ? target : null;
-  labelDrag.action = action;
-  if (labelDrag.target) labelDrag.target.el.classList.add("splice-target");
-});
-document.addEventListener("pointerup", () => {
-  if (!labelDrag) return;
-  const {w, target, action} = labelDrag;
-  labelDrag = null;
-  document.body.style.cursor = "";
-  try { w.labelG.style.pointerEvents = ""; } catch (_) {}
-  if (target) target.el.classList.remove("splice-target");
-  if (action) action();
-  flushRebuild();
-});
+// label splice drags are bound to the mid-wire tags (engine part 4)
 
-// ---------- card drag + port-to-port patching gesture ----------
-let drag = null, patchDrag = null, dragRaf = 0;
-function bindNode(node) {
-  const head = node.el.querySelector(".head");
-  head.addEventListener("pointerdown", (e) => {
-    if (e.target.classList.contains("kill") || e.target.classList.contains("onoff") ||
-        e.target.classList.contains("expander")) return;
-    drag = {node, dx: e.pageX - node.x, dy: e.pageY - node.y};
-    node.el.classList.add("dragging");
-    head.setPointerCapture(e.pointerId);
-  });
-  head.addEventListener("pointermove", (e) => {
-    if (!drag || drag.node !== node) return;
-    node.x = snap(e.pageX - drag.dx); node.y = snap(e.pageY - drag.dy);
-    place(node);
-    makeSpacePreview(node);
-    updateSpliceTarget(node);
-    cancelAnimationFrame(dragRaf);
-    dragRaf = requestAnimationFrame(() => {
-      rebuildObstacles(node);   // wires flow UNDER the hovering card
-      rerouteFor(node);
-      if (drag) for (const n of drag.shifted?.keys() || []) rerouteFor(n);
-    });
-  });
-  head.addEventListener("pointerup", () => {
-    if (!drag || drag.node !== node) return;
-    node.el.classList.remove("dragging");
-    const spliced = drag.spliceTarget;
-    if (spliced) spliced.el.classList.remove("splice-hi");
-    for (const n of drag.shifted?.keys() || []) n.el.classList.remove("shifting"); // BAKE
-    drag = null;
-    enforceSeparation(node);
-    layoutPorts(node);
-    rerouteAll();
-    saveLayout();
-    if (spliced) {
-      if (node.montype === "notes") spliceMonitorIntoCtl(spliced, node);
-      else if (node.montype === "wave") spliceWaveIntoAudio(spliced, node);
-      else spliceExistingIntoWire(spliced, node);        // live server rewire
-    }
-    flushRebuild();
-  });
-  // patch gesture: EVERY port can start a wire drag. Targets are filtered by
-  // signal type + direction (in↔out only) via connectAction(); the drop end
-  // decides what actually gets sent (graph_wire / set_drums / lfo_assign /
-  // set_voice_target / ctl_wire).
-  for (const port of node.ports) {
-    port.el.addEventListener("pointerdown", (e) => {
-      e.stopPropagation();
-      patchDrag = {node, port};
-      wireLive.style.display = "";
-      wireLive.setAttribute("stroke", SIG_CSS[port.sig] || SIG_CSS.mod);
-      port.el.classList.add("hot");
-    });
-  }
-}
-document.addEventListener("pointermove", (e) => {
-  if (!patchDrag) return;
-  const r = world.getBoundingClientRect();
-  const [x1, y1] = portXY(patchDrag.node, patchDrag.port);
-  const x2 = e.clientX - r.left, y2 = e.clientY - r.top;
-  const [nx, ny] = portNormal(patchDrag.port);
-  const mid = ny !== 0
-    ? [[x1, y1], [x1, (y1 + y2) / 2], [x2, (y1 + y2) / 2], [x2, y2]]
-    : [[x1, y1], [(x1 + x2) / 2, y1], [(x1 + x2) / 2, y2], [x2, y2]];
-  wireLive.setAttribute("d", roundedPath(dedupe(mid)));
-  for (const n of nodes.values()) for (const p of n.ports) {
-    // highlight every COMPATIBLE landing spot: opposite direction, same
-    // signal, and a connection the system can actually (or honestly) make
-    const ok = compatEnds(patchDrag, {node: n, port: p});
-    p.el.classList.toggle("hot", ok || p === patchDrag.port);
-  }
-});
-document.addEventListener("pointerup", (e) => {
-  if (!patchDrag) return;
-  const src = patchDrag;
-  patchDrag = null;
-  wireLive.style.display = "none";
-  for (const n of nodes.values()) for (const p of n.ports) p.el.classList.remove("hot");
-  const t = document.elementFromPoint(e.clientX, e.clientY);
-  if (t && t.classList.contains("port")) {
-    outer: for (const n of nodes.values()) for (const p of n.ports) {
-      if (p.el !== t) continue;
-      const cand = {node: n, port: p};
-      if (compatEnds(src, cand)) {
-        const [out, inn] = src.port.dir === "out" ? [src, cand] : [cand, src];
-        connectAction(out, inn)();
-      }
-      break outer;
-    }
-  }
-  flushRebuild();
-});
-
+// card drag (block shove) + handle patch gesture live in the engine
 // ============================================================================
 // GRAPH FROM STATE
 // ============================================================================
 let pendingRebuild = false;
 function flushRebuild() {
-  if (pendingRebuild && !drag && !patchDrag && !sliderDrag) {
+  if (pendingRebuild && !busy()) {
     pendingRebuild = false;
     rebuildGraph();
   }
 }
-function busy() { return !!(drag || patchDrag || sliderDrag || labelDrag); }
+function busy() { return !!(drag || hdrag || sliderDrag || tagDrag); }
 
 // fallback for servers that predate state.wires: the old linear derivation
 function deriveLinearWires() {
@@ -1785,6 +2554,10 @@ function buildChainCard(mod) {
   // NEVER use the raw instance id as a type (v5 regression: broke scope/drone
   // card detection for suffixed instances)
   const mtype = mod.type || String(mod.key).split(".")[0];
+  if (mtype === "audio_in")
+    rows.push(rowDevSelect("input", ((state.devices || {}).inputs) || [],
+      state.current_input,
+      (name) => send({type: "set_devices", input: name})));
   const isDrone = mtype === "drone";
   if (isDrone) {
     // the drone's ctl-plane presence: a follow toggle for its tonic-in
@@ -1807,10 +2580,12 @@ function buildChainCard(mod) {
   // IO handles (spawn/splice/wire it like any other), plus a live trace of
   // its out bus (polled via the existing {"type":"scope"} message)
   const isScope = mtype === "scope_tap";
+  const isPsine = mtype.startsWith("power_sine");
   const n = addCard({
-    gid, name: mod.name, sub: `${mtype} · ${mod.family}`, fam: mod.family,
+    gid, name: mod.name, sub: isPsine ? "" : `${mtype} · ${mod.family}`, fam: mod.family,
     seed: mod.kind === "source" && !mod.service,
-    vizHTML: isScope ? `<canvas class="vz" data-viz="scope" height="44"></canvas>` : null,
+    vizHTML: isScope ? `<canvas class="vz" data-viz="scope" height="44"></canvas>`
+      : isPsine ? `<canvas class="vz" data-viz="psine" height="44"></canvas>` : null,
     headCheck: {
       checked: mod.enabled,
       onChange: (on) => send({type: "set_enabled", key: mod.key, enabled: on}),
@@ -1829,6 +2604,24 @@ function buildChainCard(mod) {
       onUnit: (u) => { n.zoom = u; },
     }));
   }
+  if (isPsine) {
+    // static preview (computed from the module's own coefficient law, morphs
+    // with p/freq/amp) — toggleable to a LIVE zero-cross-synced scope trace
+    n.psineType = mtype;
+    n.psineLive = false;
+    const b = document.createElement("button");
+    b.className = "pslive";
+    b.textContent = "\u223f static";
+    b.title = "toggle static preview / live scope";
+    b.addEventListener("pointerdown", (e) => e.stopPropagation());
+    b.addEventListener("click", (e) => {
+      n.psineLive = !n.psineLive;
+      b.textContent = n.psineLive ? "\u25cf live" : "\u223f static";
+      b.classList.toggle("on", n.psineLive);
+      e.target.blur();
+    });
+    n.el.querySelector(".viz-sec").appendChild(b);
+  }
   n.chainKey = mod.key;
   if (!mod.enabled) n.el.classList.add("bypassed");
   return n;
@@ -1837,6 +2630,8 @@ function buildChainCard(mod) {
 function buildKeysCard() {
   const gid = "keys";
   const rows = [
+    rowDevSelect("midi in", state.midi_inputs || [], state.midi_port,
+      (name) => send({type: "set_midi", port: name, enabled: true})),
     rowChip({gid}, "octave", {text: `C${octave}`, static: true}),
     rowChip({gid}, "transpose", {
       text: String(state.transpose ?? 0),
@@ -2067,9 +2862,7 @@ function buildKeyshiftCard(k) {
         });
         grid.appendChild(b);
       }
-      requestAnimationFrame(() => {
-        layoutPorts(node); rebuildObstacles(); rerouteAll();
-      });
+      requestAnimationFrame(() => rerouteAll());
     }
     for (const b of grid.children) {
       const i = parseInt(b.dataset.s, 10);
@@ -2178,6 +2971,36 @@ function buildDrumsCard() {
   return n;
 }
 
+// device/port picker row: a dropdown when several options exist, a quiet
+// label when there is only one (or none)
+function rowDevSelect(label, opts, current, onPick) {
+  const row = document.createElement("div");
+  row.className = "mini";
+  const lab = document.createElement("label");
+  lab.title = label; lab.textContent = label;
+  row.appendChild(lab);
+  const names = opts.map(o => (typeof o === "string" ? o : o.name));
+  if (names.length > 1) {
+    const sel = document.createElement("select");
+    sel.className = "devsel";
+    for (const nm of names) {
+      const op = document.createElement("option");
+      op.value = nm; op.textContent = nm;
+      if (nm === current) op.selected = true;
+      sel.appendChild(op);
+    }
+    if (current && !names.includes(current)) sel.value = names[0];
+    sel.addEventListener("pointerdown", (e) => e.stopPropagation());
+    sel.addEventListener("change", (e) => { onPick(sel.value); e.target.blur(); });
+    row.appendChild(sel);
+  } else {
+    const span = document.createElement("span");
+    span.className = "devname";
+    span.textContent = current || names[0] || "system default";
+    row.appendChild(span);
+  }
+  return row;
+}
 function buildMasterCard() {
   const gid = "master";
   const rows = [rowSlider({gid}, "volume", {
@@ -2185,8 +3008,30 @@ function buildMasterCard() {
     valText: (u) => Math.round(u * 100) + "%",
     onUnit: (u) => throttled("vol", () => send({type: "set_volume", volume: u})),
   })];
+  rows.push(rowDevSelect("output", (state.devices || {}).outputs || [],
+    state.current_output,
+    (name) => send({type: "set_devices", output: name})));
   return addCard({gid, name: "Master Out", short: "Master", sub: "volume · meters",
                   fam: "io", rows, ports: [["in", "audio", "in"]]});
+}
+// corner toast: input+output sample-rate mismatch (only matters when BOTH
+// hardware ends are in play — output-only rigs never see it)
+function checkSrMismatch() {
+  const d = (state && state.devices) || {inputs: [], outputs: []};
+  const inp = (d.inputs || []).find(x => x.name === state.current_input);
+  const out = (d.outputs || []).find(x => x.name === state.current_output);
+  const bad = state.input_enabled && inp && out && inp.sample_rate &&
+              out.sample_rate && inp.sample_rate !== out.sample_rate;
+  let el = document.getElementById("srwarn");
+  if (bad) {
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "srwarn";
+      document.body.appendChild(el);
+    }
+    el.textContent = `\u26a0 sample-rate mismatch: ${inp.name} @ ${inp.sample_rate} Hz `
+      + `vs ${out.name} @ ${out.sample_rate} Hz \u2014 match them in Audio MIDI Setup`;
+  } else if (el) el.remove();
 }
 
 function buildLfoCard(l) {
@@ -2238,13 +3083,8 @@ function buildArmedLfo() {
     fam: "service", rows: [], ports: [["out", "mod", "mod"]], persistent: true,
     kill: (nd) => { removeNode(nd); rerouteAll(); }});
   n.armed = true;
-  const board = $("board");
-  n.x = snap(board.scrollLeft + 300 + Math.random() * 120);
-  n.y = snap(board.scrollTop + 160 + Math.random() * 160);
-  place(n);
-  requestAnimationFrame(() => {
-    enforceSeparation(n); layoutPorts(n); rebuildObstacles(); rerouteAll();
-  });
+  autoPlace(n, 1);
+  rerouteAll();
   return n;
 }
 
@@ -2271,15 +3111,8 @@ function buildMonitor(type, gid, x, y, expanded) {
       vizHTML: `<canvas class="vz" data-viz="notes" height="54"></canvas>`,
       kill: (nd) => { monRide.delete(nd.gid); removeNode(nd); rerouteAll(); saveLayout(); }});
   }
-  const p = posMem[gid];
-  if (p) { n.x = p[0]; n.y = p[1]; place(n); }
-  else {
-    const board = $("board");
-    n.x = snap(board.scrollLeft + 340 + Math.random() * 140);
-    n.y = snap(board.scrollTop + 160 + Math.random() * 180);
-    place(n);
-    enforceSeparation(n);   // fresh monitors must not stack on existing cards
-  }
+  if (!applyMem(n)) autoPlace(n, 4);
+  addSizeChips(n);          // monitors are size-adjustable (S/M/L)
   return n;
 }
 
@@ -2295,15 +3128,15 @@ function rebuildGraph() {
     for (const n of [...nodes.values()]) if (n.montype) removeNode(n);
     currentPatch = state.patch;
     const mons = loadLayout(currentPatch);
-    for (const [gid, type, x, y, exp] of mons) {
+    for (const [gid, type, bx, by, half, size, exp] of mons) {
       if (type === "scope") continue;   // pre-v3 layout: scope is a module now
-      posMem[gid] = [x, y];
-      buildMonitor(type, gid, x, y, exp);
+      if (validMem([bx, by, half, size])) posMem[gid] = [bx, by, half, size];
+      buildMonitor(type, gid, 0, 0, exp);
     }
   }
   // remember card positions + expansion, then drop all derived nodes & wires
   for (const n of nodes.values()) {
-    posMem[n.gid] = [n.x, n.y];
+    if (n.bx !== undefined && n.bx !== null) posMem[n.gid] = memOf(n);
     if (n.gid === "deck") expandMem.deck = n.expanded;
     if (n.gid === "drums") expandMem.drums = n.expanded;
     if (n.ks) expandMem[n.gid] = n.expanded;
@@ -2332,38 +3165,24 @@ function rebuildGraph() {
   const drums = buildDrumsCard();
   const lfoNodes = (state.lfos || []).map(buildLfoCard);
 
-  // ---- placement: stored position wins; new nodes flow into columns ----
-  const CTL_X = MIN_X + GRID;               // controllers cascade on the left
-  const CHAIN_X = CTL_X + 11 * GRID;        // audio chain drops top-down beside it
-  const RIGHT_X = CHAIN_X + 11 * GRID;      // drums (and spill) to the right
-  const placeCol = (list, x, y0) => {
-    let y = y0;
+  // ---- placement: stored BLOCK position wins; new nodes fill free slots ----
+  const placeGroup = (list, prefCol) => {
     for (const n of list) {
       if (!n) continue;
-      const p = posMem[n.gid];
-      if (p) { n.x = p[0]; n.y = p[1]; place(n); continue; }
-      n.x = x; n.y = y;
-      place(n);
-      enforceSeparation(n);
-      y = n.y + Math.ceil((n.el.offsetHeight || 64) / GRID) * GRID + GRID;
+      n.prefCol = prefCol;
+      if (!applyMem(n)) autoPlace(n, prefCol);
     }
   };
-  placeCol([keys, arp, deck, ...voiceNodes], CTL_X, MIN_Y);
-  placeCol([...chainNodes, master], CHAIN_X, MIN_Y);
-  // derivers + services sit left of the chain, below the controller cascade
-  const svcY = Math.max(...[keys, arp, deck, ...voiceNodes].filter(Boolean)
-    .map(n => n.y + (n.el.offsetHeight || 64))) + 2 * GRID;
-  placeCol([...tonicNodes, ...ksNodes, ...services], CTL_X, snap(svcY));
-  placeCol([drums], RIGHT_X, MIN_Y);
-  // each LFO lands left of its target module
+  placeGroup([keys, arp, deck, ...voiceNodes], 0);
+  placeGroup([...chainNodes, master], 2);
+  placeGroup([...tonicNodes, ...ksNodes, ...services], 1);
+  placeGroup([drums], 5);
   for (let i = 0; i < lfoNodes.length; i++) {
     const n = lfoNodes[i], l = state.lfos[i];
-    if (posMem[n.gid]) { n.x = posMem[n.gid][0]; n.y = posMem[n.gid][1]; place(n); continue; }
+    if (applyMem(n)) continue;
     const tgt = nodes.get("m:" + l.key);
-    n.x = tgt ? tgt.x - CARD_W - 3 * GRID : CTL_X;
-    n.y = tgt ? tgt.y : MIN_Y;
-    place(n);
-    enforceSeparation(n);
+    autoPlace(n, tgt && tgt.bx != null ? Math.max(0, tgt.bx - 1) : 1,
+              tgt && tgt.by != null ? tgt.by : 0);
   }
 
   // ---- wires (derived, exactly mirroring server truth) ----
@@ -2447,15 +3266,30 @@ function rebuildGraph() {
     if (!tgt) continue;
     addWire({node: lfoNodes[i], port: port(lfoNodes[i], "out", "mod")},
             {node: tgt, port: tgt.ports.find(p => p.quiet && p.param === l.param)},
-            {lfoId: l.id, cut: () => send({type: "lfo_unassign", id: l.id})});
+            {lfoId: l.id, cut: () => {
+              // cut the WIRE, not the module: the assignment dies, but an
+              // armed (unwired) LFO card takes the old card's slot
+              const old = lfoNodes[i];
+              _lfoRespawn = old ? { bx: old.bx, by: old.by, half: old.half || "top" } : {};
+              send({type: "lfo_unassign", id: l.id});
+            }});
   }
 
-  requestAnimationFrame(() => {
-    for (const n of nodes.values()) layoutPorts(n);
-    rebuildObstacles();
-    rerouteAll();
-    refreshActivity();
-  });
+  rerouteAll();
+  requestAnimationFrame(() => refreshActivity());
+  if (typeof viewAutoUnlockOnce === "function") viewAutoUnlockOnce();
+  if (_lfoRespawn) {              // wire-cut on an LFO: re-arm in its old slot
+    const k = _lfoRespawn; _lfoRespawn = null;
+    const a = buildArmedLfo();
+    if (k.bx !== undefined && k.bx !== null) {
+      const occ = occOf(currentPos(a.gid));
+      const pl = { size: a.size, bx: k.bx, by: k.by,
+                   half: a.size === "S" ? (k.half || "top") : null };
+      if (inBoundsPl(pl) && !halfCells(pl).some(c => occ.get(c) !== undefined)) {
+        a.bx = pl.bx; a.by = pl.by; a.half = pl.half; place(a); rerouteAll();
+      }
+    }
+  }
   saveLayout();
 }
 
@@ -2483,7 +3317,7 @@ function renderPalette() {
   const avail = (state && state.available) || [];
   for (const [label, kind] of [["sources", "source"], ["effects", "effect"]]) {
     h3(label);
-    for (const a of avail.filter(x => x.kind === kind)) {
+    for (const a of avail.filter(x => x.kind === kind && x.key !== "scope_tap")) {
       const b = document.createElement("button");
       b.innerHTML = `<i style="background:${FAMILY[a.family] || "#888"}"></i>${esc(a.name)}`;
       b.addEventListener("pointerdown", (e) => startPaletteDrag(e, b, a));
@@ -2491,16 +3325,17 @@ function renderPalette() {
     }
   }
   h3("monitors");
-  // the oscilloscope lives under effects now (Scope Tap — a real module)
+  const scopeAv = avail.find(x => x.key === "scope_tap");
+  if (scopeAv) {
+    const b = document.createElement("button");
+    b.innerHTML = `<i style="background:${FAMILY[scopeAv.family] || "#888"}"></i>${esc(scopeAv.name)}`;
+    b.addEventListener("pointerdown", (e) => startPaletteDrag(e, b, scopeAv));
+    pal.appendChild(b);
+  }
   btn("Waveform", FAMILY.io, () => { buildMonitor("wave"); afterMonitor(); });
   btn("Note Monitor", FAMILY.io, () => { buildMonitor("notes"); afterMonitor(); });
 }
-function afterMonitor() {
-  requestAnimationFrame(() => {
-    for (const n of nodes.values()) layoutPorts(n);
-    rebuildObstacles(); rerouteAll(); saveLayout();
-  });
-}
+function afterMonitor() { rerouteAll(); saveLayout(); }
 
 // palette CLICK-vs-DRAG: a plain click spawns the module UNCONNECTED at a
 // free spot; a drag (>6px) grows a ghost card that follows the cursor —
@@ -2531,8 +3366,9 @@ function startPaletteDrag(e, btn, a) {
     pd.ghost.style.left = (ev.clientX - 60) + "px";
     pd.ghost.style.top = (ev.clientY - 16) + "px";
     const r = world.getBoundingClientRect();
+    const zs = parseFloat(world.style.zoom) || 1;
     const hit = overBoard(ev)
-      ? wireNearPoint(ev.clientX - r.left, ev.clientY - r.top, 18) : null;
+      ? wireNearPoint((ev.clientX - r.left) / zs, (ev.clientY - r.top) / zs, 18) : null;
     if (pd.hover && pd.hover !== hit) pd.hover.el.classList.remove("splice-hi");
     pd.hover = hit;
     if (hit) hit.el.classList.add("splice-hi");
@@ -2546,14 +3382,14 @@ function startPaletteDrag(e, btn, a) {
     if (pd.hover) pd.hover.el.classList.remove("splice-hi");
     if (cancelled) return;
     const r = world.getBoundingClientRect();
-    const wx = ev.clientX - r.left, wy = ev.clientY - r.top;
+    const zs = parseFloat(world.style.zoom) || 1;
+    const wx = (ev.clientX - r.left) / zs, wy = (ev.clientY - r.top) / zs;
     if (!pd.moved) {
       send({type: "spawn_module", key: a.key});           // click → unconnected
     } else if (pd.hover) {
       spliceNewIntoWire(pd.hover, a.key, a.kind, wx, wy); // drop on wire → splice
     } else if (overBoard(ev)) {
-      posMem["m:" + nextId(a.key)] = [snap(Math.max(MIN_X, wx - CARD_W / 2)),
-                                      snap(Math.max(MIN_Y, wy))];
+      posMem["m:" + nextId(a.key)] = pxToSlotMem(wx, wy, "S");
       send({type: "spawn_module", key: a.key});           // empty drop → unconnected here
     }
   };
@@ -2565,6 +3401,7 @@ function startPaletteDrag(e, btn, a) {
 // ---------- state → toolbar ----------
 function onState() {
   renderPalette();
+  checkSrMismatch();
   $("patch-sel").innerHTML = (state.patches || []).map(p =>
     `<option ${p === state.patch ? "selected" : ""}>${esc(p)}</option>`).join("");
   $("preset-sel").innerHTML = (state.presets || []).map(p =>
@@ -2648,7 +3485,8 @@ function onMidi(e) {
     while (tapNotes.length > 400) tapNotes.shift();
   } else if (e.kind === "voiced") {
     const deck = !!e.deck;
-    if (e.on) rollNotes.push({note: e.note, t0: performance.now(), t1: null, deck});
+    if (e.on) { rollNotes.push({note: e.note, t0: performance.now(), t1: null, deck});
+                pokeScopes(); }   // MIDI/arp/deck notes: first trace ASAP
     else for (let i = rollNotes.length - 1; i >= 0; i--)
       if (rollNotes[i].note === e.note && rollNotes[i].t1 === null &&
           rollNotes[i].deck === deck) { rollNotes[i].t1 = performance.now(); break; }
@@ -2735,7 +3573,183 @@ function refreshActivity() {
 }
 
 // ---------- monitors: scope polling + canvas painting ----------
+let _lfoRespawn = null;   // slot to re-arm an LFO into after an unassign-cut
 let scopeData = {};   // key -> samples
+// ---- psine preview: JS mirror of the modules' coefficient laws ----------
+function psineCoeffs(mtype, p) {
+  const co = [];
+  if (mtype === "power_sine_additive") {
+    const a = 2 / p;
+    let c = 1, n = 1;
+    for (let k = 0; k < 24; k++) { co.push([n, c]); c *= (n - a) / (n + a + 2); n += 2; }
+  } else {  // blend: 2-frame sine<->square crossfade
+    const u = Math.min(1, Math.max(0, 1 - 2 / p));
+    let n = 1;
+    for (let k = 0; k < 24; k++) { co.push([n, n === 1 ? 1 : u / n]); n += 2; }
+  }
+  return co;
+}
+function psineWave(mtype, p, freqHz, N) {
+  const out = new Float32Array(N), TWO = Math.PI * 4;   // two cycles
+  if (mtype === "power_sine_shaper") {
+    const a = 2 / p;
+    for (let i = 0; i < N; i++) {
+      const s = Math.sin(TWO * i / N);
+      out[i] = Math.sign(s) * Math.pow(Math.abs(s), a);
+    }
+    return out;
+  }
+  const act = psineCoeffs(mtype, p).filter(([h]) => h * freqHz < 21000);
+  let sumsq = 1e-9;
+  for (const [, c] of act) sumsq += c * c;
+  const inv = 0.5 / Math.sqrt(0.5 * sumsq);        // bank's RMS-normalize + headroom
+  for (let i = 0; i < N; i++) {
+    const th = TWO * i / N;
+    let v = 0;
+    for (const [h, c] of act) v += c * Math.sin(h * th);
+    out[i] = v * inv;
+  }
+  return out;
+}
+// ---- LFO visualization: the target slider MOVES with the oscillation ------
+// (client-side mirror of synthbase's _lfo: unit = clip(center + osc*depth/2))
+const _lfoAnim = new Map();      // assignment id -> {t0, seed, lastStep, stepV}
+const _lfoRows = new Set();      // rows currently decorated
+function lfoOscV(shape, ph, st) {
+  switch (shape | 0) {
+    case 0: return Math.sin(2 * Math.PI * ph);                      // sine
+    case 1: return 4 * Math.abs(ph - Math.floor(ph + 0.5)) - 1;     // tri
+    case 2: return 2 * (ph - Math.floor(ph)) - 1;                   // saw
+    case 3: return (ph - Math.floor(ph)) < 0.5 ? 1 : -1;            // square
+    default: {                                                      // noise0
+      const k = Math.floor(ph);
+      if (st.lastStep !== k) {
+        st.lastStep = k;
+        const f = Math.sin(k * 12.9898 + st.seed) * 43758.5453;
+        st.stepV = (f - Math.floor(f)) * 2 - 1;
+      }
+      return st.stepV;
+    }
+  }
+}
+function animateLfos(now) {
+  const lfos = (state && state.lfos) || [];
+  const live = new Set();
+  for (const l of lfos) {
+    const n = nodes.get("m:" + l.key) || nodes.get(l.key);
+    if (!n) continue;
+    const port = (n.ports || []).find(p => p.quiet && p.param === l.param);
+    const row = port && port.rowEl;
+    if (!row || !row.isConnected) continue;
+    let st = _lfoAnim.get(l.id);
+    if (!st) { st = { t0: now, seed: Math.random() * 100, lastStep: -1, stepV: 0 };
+               _lfoAnim.set(l.id, st); }
+    if (!row._lfoBand) {           // decorate: amplitude band + center marker
+      const track = row.querySelector(".track");
+      if (!track) continue;
+      row._lfoBand = document.createElement("b");
+      row._lfoBand.className = "lfoband";
+      row._lfoCenter = document.createElement("u");
+      row._lfoCenter.className = "lfocenter";
+      track.append(row._lfoBand, row._lfoCenter);
+    }
+    row._lfoRef = { gid: n.gid, key: l.key, param: l.param };
+    _lfoRows.add(row);
+    live.add(row);
+    const lo = Math.max(0, l.center - l.depth / 2);
+    const hi = Math.min(1, l.center + l.depth / 2);
+    row._lfoBand.style.left = (lo * 100) + "%";
+    row._lfoBand.style.width = (Math.max(0.01, hi - lo) * 100) + "%";
+    row._lfoCenter.style.left = (Math.min(1, Math.max(0, l.center)) * 100) + "%";
+    const ph = ((now - st.t0) / 1000) * (l.rate || 1);
+    const u = Math.min(1, Math.max(0, l.center + lfoOscV(l.shape, ph, st) * l.depth * 0.5));
+    if (sliderDrag === `${n.gid}.${l.param}`) continue;   // never fight the user
+    const thumb = row.querySelector(".track i"), vEl = row.querySelector(".v");
+    if (thumb) {
+      thumb.style.left = (u * 100) + "%";
+      thumb.classList.toggle("zero", u <= 0.02);
+    }
+    const m = ((state && state.chain) || []).find(x => x.key === l.key);
+    const p = m && m.params && m.params[l.param];
+    if (p && vEl) vEl.textContent = fmt(fromUnit(p, u));  // rolling numbers
+    (n._lfoU = n._lfoU || {})[l.param] = u;               // psine preview hook
+  }
+  for (const row of [..._lfoRows]) {
+    if (live.has(row)) continue;               // assignment gone: undecorate
+    if (row._lfoBand) { row._lfoBand.remove(); row._lfoCenter.remove(); }
+    row._lfoBand = row._lfoCenter = null;
+    const ref = row._lfoRef;
+    _lfoRows.delete(row);
+    if (!ref) continue;
+    const n = nodes.get(ref.gid);
+    if (n && n._lfoU) delete n._lfoU[ref.param];
+    const m = ((state && state.chain) || []).find(x => x.key === ref.key);
+    const p = m && m.params && m.params[ref.param];
+    if (p && row.isConnected) {                // settle back on the real value
+      const thumb = row.querySelector(".track i"), vEl = row.querySelector(".v");
+      const u = toUnit(p, p.value);
+      if (thumb) { thumb.style.left = (Math.min(1, Math.max(0, u)) * 100) + "%";
+                   thumb.classList.toggle("zero", u <= 0.02); }
+      if (vEl) vEl.textContent = fmt(p.value);
+    }
+  }
+}
+function drawPsineViz(n, ctx, W, H, style) {
+  const m = ((state && state.chain) || []).find(x => x.key === n.chainKey);
+  if (!m) return;
+  // when p rides an LFO, the static preview morphs with the modulated value
+  const P = (n._lfoU && n._lfoU.p !== undefined && m.params.p)
+    ? fromUnit(m.params.p, n._lfoU.p)
+    : (m.params.p ? m.params.p.value : 2);
+  const F = m.params.freq ? m.params.freq.value : 220;
+  const A = m.params.amp ? m.params.amp.value : 0.3;
+  const mid = H / 2;
+  ctx.strokeStyle = style.getPropertyValue("--hairline");
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(W, mid); ctx.stroke();
+  ctx.strokeStyle = "#22b8d4";
+  ctx.lineWidth = 1.5;
+  if (n.psineLive) {
+    const s = scopeData[n.chainKey];
+    if (!s || !s.length) {
+      ctx.fillStyle = "rgba(255,255,255,0.4)";
+      ctx.font = "8px system-ui";
+      ctx.fillText("waiting for signal\u2026", 6, 10);
+      return;
+    }
+    let start = 0;                                  // zero-cross sync
+    for (let i = 1; i < s.length / 2; i++)
+      if (s[i - 1] <= 0 && s[i] > 0) { start = i; break; }
+    const win = Math.min(512, s.length - start);
+    let peak = 0.05;
+    for (let i = start; i < start + win; i++) peak = Math.max(peak, Math.abs(s[i]));
+    ctx.beginPath();
+    for (let i = 0; i < win; i++) {
+      const x = (i / win) * W;
+      const y = mid - (s[start + i] / peak) * (mid - 4);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    return;
+  }
+  const key = `${n.psineType}|${P.toFixed(3)}|${F.toFixed(1)}`;
+  if (n._psKey !== key) {
+    const w = psineWave(n.psineType, P, F, 256);
+    let pk = 1e-6;
+    for (let i = 0; i < w.length; i++) pk = Math.max(pk, Math.abs(w[i]));
+    n._psWave = w; n._psPeak = pk; n._psKey = key;
+  }
+  // shape-normalized; amp modulates display gain so the knob still reads
+  const data = n._psWave, N = data.length;
+  const g = (mid - 4) * (0.25 + 0.75 * Math.min(1, A)) / n._psPeak;
+  ctx.beginPath();
+  for (let i = 0; i < N; i++) {
+    const x = (i / (N - 1)) * W;
+    const y = mid - data[i] * g;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
 function onScopeData(m) { scopeData[m.key] = m.samples; }
 // a scope_tap with NO incoming audio wire falls back to the master feed:
 // poll the first module wired to master instead (global), else nothing
@@ -2745,16 +3759,33 @@ function scopePollKey(n) {
   const m = aw.find(w => w.to === "master" && w.from !== n.scopeKey);
   return m ? m.from : null;
 }
+function pokeScopes() {       // instant poll of every scope consumer
+  if (document.hidden) return;
+  const asked = new Set();
+  for (const n of nodes.values()) {
+    if (n.scopeKey) {
+      const key = scopePollKey(n);
+      if (key && !asked.has(key)) { asked.add(key); send({type: "scope", key}); }
+    } else if (n.psineLive && n.chainKey && !asked.has(n.chainKey)) {
+      asked.add(n.chainKey);
+      send({type: "scope", key: n.chainKey});
+    }
+  }
+}
 setInterval(() => {
   if (document.hidden) return;   // poll only while the canvas is visible
   const asked = new Set();
-  for (const n of nodes.values())
+  for (const n of nodes.values()) {
     if (n.scopeKey) {            // scope_tap module cards
       const key = scopePollKey(n);
       if (!key || asked.has(key)) continue;
       asked.add(key);
       send({type: "scope", key});
+    } else if (n.psineLive && n.chainKey && !asked.has(n.chainKey)) {
+      asked.add(n.chainKey);     // psine cards in live-scope mode
+      send({type: "scope", key: n.chainKey});
     }
+  }
 }, 250);
 // Waveform monitors riding an audio wire A→B poll A's out bus every 300ms
 // and keep a peak-envelope history (unwired monitors use the master meters)
@@ -2809,6 +3840,7 @@ function monSources(gid) {
 }
 
 function drawVizLoop(now) {
+  animateLfos(now);
   const style = getComputedStyle(document.body);
   for (const n of nodes.values()) {
     const cv = n.el.querySelector("canvas.vz");
@@ -2818,6 +3850,8 @@ function drawVizLoop(now) {
       continue;   // collapsed expandable → hidden canvas
     if (!cv.clientWidth) continue;
     if (cv.width !== cv.clientWidth) cv.width = cv.clientWidth;
+    const _ch = cv.clientHeight;
+    if (_ch && cv.height !== _ch) cv.height = _ch;
     const ctx = cv.getContext("2d"), W = cv.width, H = cv.height;
     ctx.clearRect(0, 0, W, H);
     try {   // one bad card must never kill the shared rAF loop (all viz dies)
@@ -2825,6 +3859,7 @@ function drawVizLoop(now) {
       else if (viz === "scope") drawScopeViz(n, ctx, W, H, style);
       else if (viz === "wave") drawWaveViz(n, ctx, W, H, style);
       else if (viz === "notes") drawNotesViz(n, ctx, W, H, now, style);
+      else if (viz === "psine") drawPsineViz(n, ctx, W, H, style);
     } catch (err) { console.warn("viz", viz, err); }
   }
   requestAnimationFrame(drawVizLoop);
@@ -3069,7 +4104,8 @@ window.addEventListener("keydown", (e) => {
   else if (k === "x") { octave = Math.min(7, octave + 1); noteOffAll(); }
   else if (k in KEYMAP) {
     const note = 12 * (octave + 1) + KEYMAP[k];
-    if (!held.has(note)) { held.add(note); send({type: "note_on", note}); }
+    if (!held.has(note)) { held.add(note); send({type: "note_on", note});
+      requestAnimationFrame(pokeScopes); }
     e.preventDefault();
   }
   $("oct").textContent = `C${octave}`;
@@ -3114,8 +4150,6 @@ setTimeout(fitHeader, 50);
 if (document.fonts && document.fonts.ready)
   document.fonts.ready.then(() => requestAnimationFrame(() => {
     if (busy()) return;
-    for (const n of nodes.values()) layoutPorts(n);
-    rebuildObstacles();
     rerouteAll();
   }));
 

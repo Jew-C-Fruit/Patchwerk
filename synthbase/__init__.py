@@ -10,7 +10,9 @@ Layers:
 """
 
 from .engine import Engine
+from .harmonics import odd_harmonic_bank, power_law_coeffs, square_blend_coeffs
 from .module import Module, Param, module, param
 from .rack import Rack
 
-__all__ = ["Engine", "Module", "Param", "Rack", "module", "param"]
+__all__ = ["Engine", "Module", "Param", "Rack", "module", "param",
+           "odd_harmonic_bank", "power_law_coeffs", "square_blend_coeffs"]

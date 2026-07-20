@@ -1,0 +1,207 @@
+{
+  "version": 2,
+  "patch": "pad_space",
+  "modules": {
+    "pulse_pad": {
+      "type": "pulse_pad",
+      "settings": {
+        "freq": 329.6275569128699,
+        "wave": 1.0,
+        "detune": 12.0,
+        "porta": 0,
+        "glide": 0.15,
+        "pwm": 0.2,
+        "attack": 0.15,
+        "release": 0.8,
+        "amp": 0.58
+      },
+      "enabled": true,
+      "service": false
+    },
+    "drive": {
+      "type": "drive",
+      "settings": {
+        "gain": 2.5,
+        "tone": 4000,
+        "mix": 0.6
+      },
+      "enabled": true,
+      "service": false
+    },
+    "lowpass": {
+      "type": "lowpass",
+      "settings": {
+        "cutoff": 2200,
+        "resonance": 0.5
+      },
+      "enabled": true,
+      "service": false
+    },
+    "echo": {
+      "type": "echo",
+      "settings": {
+        "time": 0.45,
+        "feedback": 0.35,
+        "mix": 0.25
+      },
+      "enabled": true,
+      "service": false
+    },
+    "reverb": {
+      "type": "reverb",
+      "settings": {
+        "room": 0.8,
+        "damp": 0.5,
+        "mix": 0.35
+      },
+      "enabled": true,
+      "service": false
+    },
+    "autopan": {
+      "type": "autopan",
+      "settings": {
+        "rate": 0.25,
+        "depth": 0.6
+      },
+      "enabled": true,
+      "service": false
+    },
+    "bitcrush": {
+      "type": "bitcrush",
+      "settings": {
+        "srate": 2388.712370312248,
+        "bits": 10.96,
+        "mix": 0.78
+      },
+      "enabled": true,
+      "service": false
+    },
+    "flanger": {
+      "type": "flanger",
+      "settings": {
+        "rate": 0.6330292527843462,
+        "depth": 0.48,
+        "feedback": 0.4,
+        "mix": 0.5
+      },
+      "enabled": true,
+      "service": false
+    },
+    "phaser": {
+      "type": "phaser",
+      "settings": {
+        "rate": 0.143123715235813,
+        "depth": 0.56,
+        "mix": 0.44
+      },
+      "enabled": true,
+      "service": false
+    }
+  },
+  "volume": 0.8,
+  "transport": {
+    "bpm": 100.0,
+    "beats_per_bar": 4,
+    "click": false,
+    "accent": true
+  },
+  "arp": {
+    "enabled": true,
+    "division": "1/16",
+    "gate": 0.6,
+    "octaves": 1,
+    "pattern": "played"
+  },
+  "drone": {
+    "enabled": false,
+    "every": "1 bar",
+    "octave": 2
+  },
+  "tonics": [],
+  "keyshifts": [],
+  "drums": {
+    "enabled": true,
+    "patterns": {
+      "kick": [
+        1,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "snare": [
+        0,
+        0,
+        0,
+        0,
+        1,
+        1,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        1
+      ],
+      "hat": [
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        1
+      ],
+      "clap": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "levels": {
+      "kick": 0.8,
+      "snare": 0.7,
+      "hat": 0.6,
+      "clap": 0.7
+    },
+    "target": "bitcrush"
+  },
+  "lfos": {}
+}

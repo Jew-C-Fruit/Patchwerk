@@ -66,6 +66,9 @@ FAMILIES = {
     "compressor": "dyn",
     # pitch / vox
     "pitchshift": "vox", "ringmod": "vox",
+    # power-sine morph family (shared coefficient law + odd_harmonic_bank)
+    "power_sine_shaper": "psine", "power_sine_additive": "psine",
+    "power_sine_blend": "psine",
 }
 
 

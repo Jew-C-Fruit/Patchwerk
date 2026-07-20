@@ -91,7 +91,10 @@ def load_preset(app, name: str) -> None:
     """Apply a preset: switch patch if needed, then restore all state."""
     path = PRESETS_DIR / f"{_safe_name(name)}.json"
     data = json.loads(path.read_text())
+    _apply(app, data)
 
+
+def _apply(app, data: dict) -> None:
     with app._lock:
         # 1. Patch (rebuilds rack, arp, master, router)
         if data.get("patch") and data["patch"] != app.patch_name:
@@ -146,3 +149,92 @@ def load_preset(app, name: str) -> None:
             app.drums.restore(data["drums"])
         if getattr(app, "lfos", None) and "lfos" in data:
             app.lfos.restore(data["lfos"])
+
+
+# -- restart resume: snapshot + wiring, restored automatically on boot --------
+# (the GUI's ⟳ posts /restart; the server writes this file and re-execs)
+
+RESUME_PATH = Path(__file__).resolve().parent.parent / ".resume.json"
+
+
+def write_resume(app) -> None:
+    """Preset snapshot PLUS the graph: audio/ctl wires, voice targets, drums
+    routing — everything a preset alone doesn't carry back across a restart."""
+    with app._lock:
+        data = snapshot(app)
+        data["resume"] = {
+            "graph_wires": (app.graph_wires if app.graph_wires is not None
+                            else (app.rack.audio_wires() if app.rack else [])),
+            "ctl_wires": [dict(w) for w in app.ctl_wires],
+            "voice_targets": {vid: getattr(v, "target_key", None)
+                              for vid, v in app.voices.items()},
+            "drums_target": (app.drums.target
+                             if getattr(app, "drums", None) else None),
+        }
+    RESUME_PATH.write_text(json.dumps(data, indent=2))
+
+
+def apply_resume(app) -> bool:
+    """Boot hook: if a restart left a resume file, restore the module
+    population, params, wiring and voice targets, then delete the file."""
+    if not RESUME_PATH.exists():
+        return False
+    try:
+        data = json.loads(RESUME_PATH.read_text())
+    except Exception:  # noqa: BLE001
+        RESUME_PATH.unlink(missing_ok=True)
+        return False
+    RESUME_PATH.unlink(missing_ok=True)
+
+    # 1. respawn instances the patch itself didn't bring (spawned modules);
+    #    ids are free on a fresh boot, so alloc gives back the same names
+    for key, ms in data.get("modules", {}).items():
+        if ms.get("service"):
+            continue
+        try:
+            app.rack.find(key)
+        except KeyError:
+            try:
+                app.edit_chain("add", key if "." in key else ms.get("type", key))
+            except Exception:  # noqa: BLE001
+                pass
+
+    # 2. params / enabled / transport / arp / drums / lfos / volume
+    try:
+        _apply(app, data)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 3. the graph itself
+    r = data.get("resume", {})
+    for w in r.get("graph_wires", []):
+        try:
+            if w.get("to") is None:
+                app.graph_wire("remove", w["from"], None)
+            else:
+                app.graph_wire("add", w["from"], w["to"])
+        except Exception:  # noqa: BLE001
+            pass
+    for w in r.get("ctl_wires", []):
+        try:
+            app.set_ctl_wire("add", w.get("from"), w.get("to"))
+        except Exception:  # noqa: BLE001
+            pass
+    for vid, tgt in (r.get("voice_targets") or {}).items():
+        if not tgt:
+            continue
+        if vid != "voice" and vid not in app.voices:
+            try:
+                app.spawn_voice()
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            app.set_voice_target(tgt, vid)
+        except Exception:  # noqa: BLE001
+            pass
+    if r.get("drums_target") and getattr(app, "drums", None):
+        try:
+            app.set_drums(target=r["drums_target"])
+        except Exception:  # noqa: BLE001
+            pass
+    return True

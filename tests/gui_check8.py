@@ -23,8 +23,8 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 REPO = Path(__file__).resolve().parent.parent
-FLEX = REPO / "gui" / "flex.html"
-LEGACY = REPO / "gui" / "index.html"
+FLEX = REPO / "gui" / "legacy" / "flex.html"
+LEGACY = REPO / "gui" / "legacy" / "index.html"
 # Prefer a chromium already unpacked in the dev sandbox's browser dir; if it
 # isn't there (e.g. GitHub Actions, where `playwright install` lays the browser
 # out under its own versioned path), fall back to None and let Playwright
