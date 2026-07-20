@@ -138,6 +138,12 @@ def cmd_gui(args) -> None:
         hardware_buffer_size=getattr(args, "hw_buffer", None) or 256,
     )
     app.start(args.patch)
+    try:  # a ⟳-restart leaves a resume file: restore modules/wiring/settings
+        from .presets import apply_resume
+        if apply_resume(app):
+            print("[resume] restored pre-restart modules, wiring and settings")
+    except Exception as exc:  # noqa: BLE001
+        print("[resume] restore failed:", exc)
     server = GuiServer(app, port=args.port)
     if not args.no_browser:
         threading.Timer(0.8, webbrowser.open, [f"http://127.0.0.1:{args.port}"]).start()

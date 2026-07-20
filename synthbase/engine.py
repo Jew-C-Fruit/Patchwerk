@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import sys
+import tempfile
 from pathlib import Path
 
 from supriya import AddAction, Options, Server, find_free_port
@@ -126,6 +127,21 @@ class Engine:
         fresh = [m for m in modules if _name(m) not in self._sent]
         if not fresh:
             return  # every synthdef already live — no send, no sync, instant
-        self.server.add_synthdefs(*(m.synthdef for m in fresh))
+        # /d_recv rides a UDP datagram; scsynth silently DROPS oversized ones
+        # (~8k), and the sync() below then blocks forever. Big synthdefs
+        # (e.g. additive banks) go to disk and load via /d_load instead.
+        MAX_DGRAM = 8000
+        small, big = [], []
+        for m in fresh:
+            (big if len(m.synthdef.compile()) > MAX_DGRAM else small).append(m)
+        if small:
+            self.server.add_synthdefs(*(m.synthdef for m in small))
+        if big:
+            ddir = Path(tempfile.gettempdir()) / "patchwerk_synthdefs"
+            ddir.mkdir(exist_ok=True)
+            for m in big:
+                path = ddir / f"{_name(m)}.scsyndef"
+                path.write_bytes(m.synthdef.compile())  # full SCgf container
+                self.server.send(["/d_load", str(path)])
         self.server.sync()
         self._sent.update(_name(m) for m in fresh)

@@ -315,6 +315,7 @@ class SynthApp:
             self.master.stop()
         if self.rack:
             self.rack.teardown()
+        self.scope.reset()   # ring probes/buffers die with the old rack
 
         self.rack = Rack(self.engine, self.registry)
         self.rack.build(patch["chain"])
@@ -604,6 +605,21 @@ class SynthApp:
                 # a parked module is wired to nothing and silent — NO reorder,
                 # NO wire reapply, NO voice rebuild. This is the whole point:
                 # adding a module must not touch the running rack.
+                # ONE exception: voices that died for lack of a target (their
+                # last source was removed) come back aimed at this new source —
+                # otherwise remove-source → add-source leaves the rack mute.
+                missing = [vid for vid in self._voice_targets
+                           if vid not in self.voices]
+                if missing:
+                    inst = self.rack.find(new_id)
+                    if inst.module.kind == "source" and "gate" in inst.settings \
+                            and "freq" in inst.settings:
+                        for vid in missing:
+                            v = MonoVoice(self.rack, inst.key)
+                            v.transpose = self._transpose
+                            v.on_voiced = self._emit_voiced
+                            self.voices[vid] = v
+                            self._voice_targets[vid] = inst.key
 
             elif action == "remove":
                 if key not in keys:
@@ -718,17 +734,29 @@ class SynthApp:
             return self.edit_chain("add", key)
 
     def set_voice_target(self, key: str, voice: str = "voice") -> None:
-        """Re-aim a mono voice at another playable source (GUI wire re-drag)."""
+        """Re-aim a mono voice at another playable source (GUI wire re-drag).
+
+        A voice whose last target was removed no longer EXISTS (_make_voices
+        skips targetless ids) — retargeting must resurrect it, not refuse,
+        or the rack is unrecoverably silent until a patch reload."""
         with self._lock:
-            v = self.voices.get(voice)
-            if not (self.rack and v):
-                raise RuntimeError(f"no voice {voice!r} to retarget")
+            if not self.rack:
+                raise RuntimeError("no rack running")
             inst = self.rack.find(key)
             if inst.module.kind != "source" or "gate" not in inst.settings \
                     or "freq" not in inst.settings:
                 raise ValueError(f"{key} is not a note-playable source")
-            v.all_off()  # silence the old target before switching
-            v.target_key = inst.key
+            v = self.voices.get(voice)
+            if v is None:
+                if voice != "voice" and voice not in self._voice_targets:
+                    raise RuntimeError(f"no voice {voice!r} to retarget")
+                v = MonoVoice(self.rack, inst.key)   # revive the dead voice
+                v.transpose = self._transpose
+                v.on_voiced = self._emit_voiced
+                self.voices[voice] = v
+            else:
+                v.all_off()  # silence the old target before switching
+                v.target_key = inst.key
             self._voice_targets[voice] = inst.key
 
     # -- multiple mono voices ----------------------------------------------------

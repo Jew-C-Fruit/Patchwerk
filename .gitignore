@@ -13,3 +13,6 @@ __pycache__/
 
 # build/deploy artifacts
 *.zip
+nohup.out
+.resume.json
+psine_wavs/

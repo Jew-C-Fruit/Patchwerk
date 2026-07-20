@@ -47,6 +47,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import sys
 from pathlib import Path
 
 from aiohttp import WSMsgType, web
@@ -67,26 +69,45 @@ class GuiServer:
         self._scope_inflight: set[str] = set()  # keys with a capture in flight
         self.web_app = web.Application()
         self.web_app.router.add_get("/", self._index)
-        self.web_app.router.add_get("/legacy", self._legacy)
-        self.web_app.router.add_get("/graph", self._graph)
+        self.web_app.router.add_get("/blocks", self._blocks)
+        self.web_app.router.add_post("/restart", self._restart)
         self.web_app.router.add_get("/ws", self._ws)
 
     # -- http ----------------------------------------------------------------
 
     async def _index(self, request: web.Request) -> web.FileResponse:
-        # flex is the front door
+        # blocks IS the UI. flex + the original are ARCHIVED under gui/legacy/
+        # (kept in the repo for reference, not served, not part of releases)
         return web.FileResponse(
-            GUI_DIR / "flex.html", headers={"Cache-Control": "no-store"},
+            GUI_DIR / "blocks.html", headers={"Cache-Control": "no-store"},
         )
 
-    async def _legacy(self, request: web.Request) -> web.FileResponse:
-        return web.FileResponse(
-            GUI_DIR / "index.html", headers={"Cache-Control": "no-store"},
-        )
+    async def _restart(self, request: web.Request) -> web.Response:
+        """FULL backend reload: snapshot everything performable + the wiring,
+        re-exec this process in place, restore on boot. The GUI's watchdog
+        reconnects by itself; layout lives client-side and survives."""
+        from . import presets
+        try:
+            presets.write_resume(self.synth)
+        except Exception as exc:  # noqa: BLE001
+            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+        loop = asyncio.get_running_loop()
+        loop.call_later(0.4, self._reexec)   # let the response flush first
+        return web.json_response({"ok": True})
 
-    async def _graph(self, request: web.Request) -> web.FileResponse:
+    def _reexec(self) -> None:
+        try:
+            if self.synth.engine and self.synth.engine.server:
+                self.synth.engine.server.quit()   # scsynth dies with us
+        except Exception:  # noqa: BLE001
+            pass
+        os.execv(sys.executable,
+                 [sys.executable, "-u", "-m", "synthbase", *sys.argv[1:]])
+
+    async def _blocks(self, request: web.Request) -> web.FileResponse:
+        # /blocks kept as an alias of / (bookmarks, muscle memory)
         return web.FileResponse(
-            GUI_DIR / "graph.html", headers={"Cache-Control": "no-store"},
+            GUI_DIR / "blocks.html", headers={"Cache-Control": "no-store"},
         )
 
     # -- websocket --------------------------------------------------------------
