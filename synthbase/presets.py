@@ -59,8 +59,13 @@ def snapshot(app) -> dict:
         "drone": {k: v for k, v in app._legacy_drone_settings().items()
                   if k not in ("everies", "root")},
         "tonics": [{k: v for k, v in d.settings().items()
-                    if k in ("id", "every", "octave")}
+                    if k in ("id", "every", "octave", "memory", "stickiness",
+                             "bass", "listening")}
                    for d in app.tonics.values()],
+        "literals": [{k: v for k, v in d.settings().items()
+                      if k in ("id", "every", "extract", "place",
+                               "fold_octave", "transpose", "hold_on_empty")}
+                     for d in getattr(app, "literals", {}).values()],
         "keyshifts": [{k: v for k, v in ks.settings().items()
                        if k in ("id", "key", "length", "steps")}
                       for ks in getattr(app, "keyshifts", {}).values()],
@@ -116,7 +121,18 @@ def _apply(app, data: dict) -> None:
         for t in data.get("tonics", []):
             tid = t.get("id") or "tonic"
             app.spawn_tonic(want_id=tid)
-            app.set_tonic(tid, every=t.get("every"), octave=t.get("octave"))
+            app.set_tonic(tid, every=t.get("every"), octave=t.get("octave"),
+                          memory=t.get("memory"),
+                          stickiness=t.get("stickiness"), bass=t.get("bass"),
+                          listening=t.get("listening"))
+        for t in data.get("literals", []):
+            lid = t.get("id") or "literal"
+            app.spawn_literal(want_id=lid)
+            app.set_literal(lid, every=t.get("every"),
+                            extract=t.get("extract"), place=t.get("place"),
+                            fold_octave=t.get("fold_octave"),
+                            transpose=t.get("transpose"),
+                            hold_on_empty=t.get("hold_on_empty"))
         if "drone" in data:
             app.set_drone(**data["drone"])
         for k in data.get("keyshifts", []):

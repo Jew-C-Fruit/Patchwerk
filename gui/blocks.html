@@ -156,6 +156,25 @@
     font-size: 0; }
   .mod[data-gid^="keyshift"][data-size="S"] .body { padding: 0 8px 3px 10px; }
   .mod[data-gid^="keyshift"][data-size="S"] .mini { margin: 1px 0; }
+  /* estimator card: 12-pitch-class histogram (viz-sec) — bars breathe on
+     the ~5 Hz deriver analysis; committed root amber, leading outlined */
+  .mod[data-gid^="tonic"] .viz-sec { display: flex; flex-direction: column; }
+  .tonicbar { display: flex; justify-content: space-between; align-items: center;
+    padding: 0 12px 1px; font-size: 8.5px; color: var(--ink-2); flex: none; }
+  .tonicbar .tmode { cursor: pointer; background: var(--hairline);
+    border-radius: 4px; padding: 1px 5px; }
+  .tonicbar .tmode:hover { color: var(--ink-1); }
+  .tonic { display: grid; grid-template-columns: repeat(12, 1fr); gap: 2px;
+    flex: 1 1 auto; min-height: 22px; margin: 0 12px 6px; }
+  .tonic div { border-radius: 3px; background: var(--hairline);
+    position: relative; overflow: hidden; }
+  .tonic div span { position: absolute; bottom: 0; left: 0; right: 0;
+    background: var(--ctl); transition: height 120ms linear; height: 0%; }
+  .tonic div.root span { background: var(--ping); }
+  .tonic div.lead { box-shadow: inset 0 0 0 1px rgba(255,255,255,0.55); }
+  .tonic div i { position: absolute; top: 1px; left: 0; right: 0;
+    text-align: center; font-style: normal; font-size: 7.5px;
+    color: var(--ink-2); z-index: 2; }
   /* trigger cards (button/clock): the pad IS the manual fire surface */
   .pingpad { display: flex; align-items: center; justify-content: center;
     height: 100%; font-size: 15px; color: var(--ping); cursor: pointer;
@@ -485,6 +504,7 @@ function connect() {
     else if (m.type === "param") onParam(m);
     else if (m.type === "midi") onMidi(m.event);
     else if (m.type === "beat") onBeat(m);
+    else if (m.type === "deriver") renderDeriverViz(m);
     else if (m.type === "scope_data") onScopeData(m);
     else if (m.type === "error") console.warn("server:", m.message);
   };
@@ -2282,6 +2302,12 @@ function voiceIds() {
 function tonicIds() {
   return new Set(((state && state.tonics) || []).map(t => t.id));
 }
+function literalIds() {
+  return new Set(((state && state.literals) || []).map(t => t.id));
+}
+function deriverIds() {   // both deriver families share the trigger-in
+  return new Set([...tonicIds(), ...literalIds()]);
+}
 function keyshiftIds() {
   return new Set(((state && state.keyshifts) || []).map(k => k.id));
 }
@@ -2307,13 +2333,14 @@ function ctlSrcOk(s) {
   const [b, l] = splitEp(s);
   if (keyshiftIds().has(b)) return laneOk(l);
   return l === undefined &&
-    (b === "keys" || b === "arp" || b === "deck" || tonicIds().has(b));
+    (b === "keys" || b === "arp" || b === "deck" || deriverIds().has(b));
 }
 function ctlDstOk(d) {
   const [b, l] = splitEp(d);
   if (keyshiftIds().has(b)) return laneOk(l);
   return l === undefined &&
-    (b === "arp" || b === "deck" || voiceIds().has(b) || tonicIds().has(b) ||
+    (b === "arp" || b === "deck" || voiceIds().has(b) ||
+     deriverIds().has(b) ||
      droneIds().has(b));   // drones are mono ctl note-sinks (drone rework)
 }
 // backend node id for a canvas node (module cards carry their instance id)
@@ -2357,7 +2384,7 @@ function connectAction(out, inn) {
     // both render as quiet handles
     const from = ctlId(out.node), to = ctlId(inn.node);
     if (!pingSrcIds().has(from)) return null;
-    if (!tonicIds().has(to)) return null;   // trigger-ins: derivers (for now)
+    if (!deriverIds().has(to)) return null;  // trigger-ins: derivers (for now)
     return () => send({type: "ctl_wire", action: "add", from, to});
   }
   // ---- ctl ----
@@ -2748,9 +2775,11 @@ function buildVoiceCard(v) {
                   ports: [["in", "ctl", "notes"], ["out", "ctl", "drive"]]});
 }
 
-// one card per tonic deriver (state.tonics): estimator knobs + root readout.
-// notes in, ONE ctl out — the committed root as a mono note stream (the
-// bespoke tonic signal is retired; a drone is an ordinary ctl sink now).
+// one ESTIMATOR card per state.tonics entry: statistical root derivation
+// (settle-and-land). Notes in are evidence; the committed root is the mono
+// ctl out. Knobs are live; the 12-bar histogram breathes on the ~5 Hz
+// "deriver" analysis broadcast (presence/scores toggle, leading outlined,
+// committed root amber, confidence readout).
 function buildTonicCard(t) {
   const gid = t.id;
   const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
@@ -2773,16 +2802,160 @@ function buildTonicCard(t) {
         send({type: "set_tonic", id: gid, octave: o});
       },
     }),
+    rowChip({gid}, "listening", {
+      text: t.listening || "triadic",
+      onClick: (chip) => {
+        const ls = t.listenings || ["triadic", "root+fifth", "chromatic"];
+        const v = ls[(ls.indexOf(chip.textContent) + 1) % ls.length];
+        chip.textContent = v;
+        send({type: "set_tonic", id: gid, listening: v});
+      },
+    }),
+    rowSlider({gid}, "memory", {   // decay tau, 1..30 s (exp)
+      unit: Math.max(0, Math.min(1, Math.log(t.memory || 6) / Math.log(30))),
+      text: (t.memory || 6).toFixed(1) + " s",
+      valText: (u) => Math.pow(30, u).toFixed(1) + " s",
+      onUnit: (u) => throttled(gid + ".memory", () =>
+        send({type: "set_tonic", id: gid, memory: Math.pow(30, u)}), 80),
+    }),
+    rowSlider({gid}, "stickiness", {   // hysteresis 1.0..2.0
+      unit: Math.max(0, Math.min(1, ((t.stickiness || 1.25) - 1))),
+      text: "+" + Math.round(((t.stickiness || 1.25) - 1) * 100) + "%",
+      valText: (u) => "+" + Math.round(u * 100) + "%",
+      onUnit: (u) => throttled(gid + ".stick", () =>
+        send({type: "set_tonic", id: gid, stickiness: 1 + u}), 80),
+    }),
+    rowSlider({gid}, "bass", {   // bass emphasis 0..0.2
+      unit: Math.max(0, Math.min(1, (t.bass ?? 0.06) / 0.2)),
+      text: (t.bass ?? 0.06).toFixed(2),
+      valText: (u) => (u * 0.2).toFixed(2),
+      onUnit: (u) => throttled(gid + ".bass", () =>
+        send({type: "set_tonic", id: gid, bass: u * 0.2}), 80),
+    }),
     rowChip({gid}, "root", {text: t.root || "listening…", static: true}),
   ];
-  const n = addCard({gid, name: "Tonic Deriver" + suffix, short: "Tonic" + suffix,
-                  sub: "root estimator", fam: "service", rows,
+  const n = addCard({gid, name: "Estimator" + suffix, short: "Est" + suffix,
+                  sub: "root estimator · statistical", fam: "service", rows,
+                  vizHTML: `<div class="tonicbar">`
+                    + `<span class="tmode" title="raw presence / candidate scores">presence</span>`
+                    + `<span class="tconf">conf —</span></div>`
+                    + `<div class="tonic">` + KEY_SHORT.map((k) =>
+                        `<div><i>${k}</i><span></span></div>`).join("")
+                    + `</div>`,
                   kill: () => send({type: "remove_tonic", id: gid}),
                   ports: [["in", "ctl", "notes"], ["out", "ctl", "root"],
                           ["in", "ping", "trigger"]]});
+  n.tonicMode = "presence";
+  const tm = n.el.querySelector(".tmode");
+  tm.addEventListener("pointerdown", (e) => e.stopPropagation());
+  tm.addEventListener("click", (e) => {
+    e.stopPropagation();
+    n.tonicMode = n.tonicMode === "presence" ? "scores" : "presence";
+    tm.textContent = n.tonicMode;
+  });
   // the trigger-in is NODE-SCOPED (commits the whole deriver): a quiet
   // handle on the left edge, pinned below the port list — never in line
   // with a param row. A wired ping overrides the internal `every` timer.
+  const trig = n.ports.find(p => p.sig === "ping");
+  if (trig) trig.quiet = true;
+  return n;
+}
+
+// the estimator histogram: bars from the steady-tick analysis broadcast
+function renderDeriverViz(m) {
+  const n = nodes.get(m.id);
+  if (!n || !n.tonicMode) return;
+  const grid = n.el.querySelector(".tonic");
+  if (!grid) return;
+  const vec = (n.tonicMode === "scores" ? m.scores : m.weights) || [];
+  for (let i = 0; i < 12 && i < grid.children.length; i++) {
+    const cell = grid.children[i];
+    cell.querySelector("span").style.height =
+      Math.round((vec[i] || 0) * 100) + "%";
+    cell.classList.toggle("root", m.root === i);       // committed = amber
+    cell.classList.toggle("lead", m.leading === i && m.leading !== m.root);
+  }
+  const conf = n.el.querySelector(".tconf");
+  if (conf) conf.textContent =
+    "conf " + Math.round((m.confidence || 0) * 100) + "%";
+}
+
+// one LITERAL card per state.literals entry: deterministic, zero-lag —
+// extract (lowest/highest-held, last/first-played) × place (absolute /
+// fold-to-octave / ±N st), hold-on-empty, shared every/ping timing.
+const LIT_TRANSPOSES = [-12, -7, -5, 0, 5, 7, 12];
+function buildLiteralCard(t) {
+  const gid = t.id;
+  const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
+  let valueChip = null;
+  const valueText = () =>
+    t.place === "fold" ? `C${t.fold_octave}` :
+    t.place === "transpose" ? `${t.transpose >= 0 ? "+" : ""}${t.transpose}` : "—";
+  const rows = [
+    rowChip({gid}, "every", {
+      text: t.every,
+      onClick: (chip) => {
+        const es = t.everies || [];
+        if (!es.length) return;
+        const v = es[(es.indexOf(chip.textContent) + 1) % es.length];
+        chip.textContent = v;
+        t.every = v;
+        send({type: "set_literal", id: gid, every: v});
+      },
+    }),
+    rowChip({gid}, "extract", {
+      text: t.extract,
+      onClick: (chip) => {
+        const xs = t.extracts || [];
+        if (!xs.length) return;
+        const v = xs[(xs.indexOf(chip.textContent) + 1) % xs.length];
+        chip.textContent = v;
+        t.extract = v;
+        send({type: "set_literal", id: gid, extract: v});
+      },
+    }),
+    rowChip({gid}, "place", {
+      text: t.place,
+      onClick: (chip) => {
+        const ps = t.places || [];
+        if (!ps.length) return;
+        const v = ps[(ps.indexOf(chip.textContent) + 1) % ps.length];
+        chip.textContent = v;
+        t.place = v;
+        send({type: "set_literal", id: gid, place: v});
+        if (valueChip) valueChip.textContent = valueText();
+      },
+    }),
+    rowChip({gid}, "value", {
+      text: valueText(),
+      onClick: (chip) => {
+        if (t.place === "fold") {
+          t.fold_octave = ((t.fold_octave | 0) + 1) % 8;
+          send({type: "set_literal", id: gid, fold_octave: t.fold_octave});
+        } else if (t.place === "transpose") {
+          const i = LIT_TRANSPOSES.indexOf(t.transpose);
+          t.transpose = LIT_TRANSPOSES[(i + 1) % LIT_TRANSPOSES.length];
+          send({type: "set_literal", id: gid, transpose: t.transpose});
+        }
+        chip.textContent = valueText();
+      },
+    }),
+    rowChip({gid}, "on empty", {
+      text: t.hold_on_empty === false ? "release" : "hold",
+      onClick: (chip) => {
+        const hold = chip.textContent !== "hold";
+        chip.textContent = hold ? "hold" : "release";
+        t.hold_on_empty = hold;
+        send({type: "set_literal", id: gid, hold_on_empty: hold});
+      },
+    }),
+  ];
+  const n = addCard({gid, name: "Literal" + suffix, short: "Lit" + suffix,
+                  sub: "note extractor · zero-lag", fam: "service", rows,
+                  kill: () => send({type: "remove_literal", id: gid}),
+                  ports: [["in", "ctl", "notes"], ["out", "ctl", "note"],
+                          ["in", "ping", "trigger"]]});
+  valueChip = n.el.querySelectorAll(".chip")[3] || null;
   const trig = n.ports.find(p => p.sig === "ping");
   if (trig) trig.quiet = true;
   return n;
@@ -3281,7 +3454,8 @@ function rebuildGraph() {
   const voiceList = (state.voices && state.voices.length)
     ? state.voices : [{id: "voice", target: state.voice_target}];
   const voiceNodes = voiceList.map(buildVoiceCard);
-  const tonicNodes = (state.tonics || []).map(buildTonicCard);
+  const tonicNodes = [...(state.tonics || []).map(buildTonicCard),
+                      ...(state.literals || []).map(buildLiteralCard)];
   const ksNodes = (state.keyshifts || []).map(buildKeyshiftCard);
   const trigNodes = [...(state.buttons || []).map(buildButtonCard),
                      ...(state.clocks || []).map(buildClockCard)];
@@ -3444,7 +3618,8 @@ function renderPalette() {
   btn("Mono Voice", FAMILY.ctl, () => send({type: "spawn_voice"}));
   h3("control");
   btn("LFO ∿", FAMILY.service, () => buildArmedLfo());
-  btn("Tonic Deriver", "#9085e9", () => send({type: "spawn_tonic"}));
+  btn("Estimator", "#9085e9", () => send({type: "spawn_tonic"}));
+  btn("Literal", "#9085e9", () => send({type: "spawn_literal"}));
   btn("Key Shifter", FAMILY.ctl, () => send({type: "spawn_keyshift"}));
   h3("triggers");
   btn("Button ◉", "#f0b37e", () => send({type: "spawn_button"}));
