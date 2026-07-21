@@ -21,6 +21,7 @@ from .drone import NOTE_NAMES, TonicDeriver, midi_to_freq
 from .drums import DrumMachine
 from .keyshift import KeyShifter
 from .lfo import LFOManager
+from .ping import ButtonTrigger, ClockTrigger
 from .scope import Scope
 from .looper import Looper
 from . import presets as presets_mod
@@ -280,6 +281,10 @@ class SynthApp:
         # v6: key shifters (spawnable 4-lane ctl modifiers)
         self.keyshifts: dict[str, KeyShifter] = {}
         self._drone_sinks: dict[str, _DroneSink] = {}  # drone id -> mono sink
+        # ping sources (edge signals; wires ride ctl_wires, kind inferred
+        # from the source endpoint — see synthbase/ping.py)
+        self.buttons: dict[str, ButtonTrigger] = {}
+        self.clocks: dict[str, ClockTrigger] = {}
         self._legacy_drone = False               # set_drone compat pair active
         self._legacy_drone_id: str | None = None
         self.drums = DrumMachine(self)
@@ -478,6 +483,23 @@ class SynthApp:
         except ValueError:
             return base, -1  # malformed lane — never validates
 
+    def _is_ping_src(self, nid) -> bool:
+        """Ping sources (button/clock ids). Their outgoing wires ARE ping
+        wires — the wire kind is inferred from the source endpoint."""
+        return nid in self.buttons or nid in self.clocks
+
+    def _ping_sinks(self, src: str) -> list:
+        """Resolve a ping source's outgoing wires to trigger() sinks, live
+        (mirrors _ctl_sinks — rewires take effect on the very next edge)."""
+        sinks = []
+        for w in self.ctl_wires:
+            if w["from"] != src:
+                continue
+            t = w["to"]
+            if t in self.tonics:
+                sinks.append(self.tonics[t])   # deriver: trigger() = commit
+        return sinks
+
     def _ctl_src_ok(self, src) -> bool:
         base, lane = self._split_ep(src)
         if base in self.keyshifts:
@@ -532,6 +554,22 @@ class SynthApp:
             if src == "drone" and src not in self.tonics and \
                     not self._is_drone_id("drone"):
                 src = "tonic"
+            # PING wires (kind inferred from the source endpoint): ping-out
+            # lands ONLY on trigger-ins; never on note sinks
+            if self._is_ping_src(src):
+                if action == "add":
+                    if dst not in self.tonics:
+                        raise ValueError(
+                            f"{src!r} emits pings — {dst!r} has no trigger input")
+                    w = {"from": src, "to": dst}
+                    if w not in self.ctl_wires:
+                        self.ctl_wires.append(w)
+                elif action == "remove":
+                    self.ctl_wires = [w for w in self.ctl_wires
+                                      if not (w["from"] == src and w["to"] == dst)]
+                else:
+                    raise ValueError(f"unknown ctl_wire action {action!r}")
+                return
             if not self._ctl_src_ok(src):
                 raise ValueError(f"{src!r} has no control output")
             if action == "add":
@@ -625,6 +663,17 @@ class SynthApp:
 
     def _emit_midi_event(self, event: dict) -> None:
         """Forward MIDI events to whoever is listening (GUI). MIDI thread!"""
+        # button triggers ride the CC stream: an ARMED button captures the
+        # next CC (non-tonal by construction — the router never surfaces
+        # note messages as events); a BOUND button fires on its CC's rising
+        # edge. Note-ons can never reach this path, so they can never bind.
+        if event.get("kind") == "cc":
+            for b in list(self.buttons.values()):
+                try:
+                    if b.on_cc(event.get("cc"), float(event.get("unit", 0.0))):
+                        break
+                except Exception:  # noqa: BLE001
+                    pass
         callback = self.on_midi_event
         if callback is not None:
             try:
@@ -901,6 +950,66 @@ class SynthApp:
                 raise KeyError(f"no tonic deriver {tid!r}")
             d.configure(**settings)
 
+    # -- ping trigger sources (button / clock) -----------------------------------
+
+    def spawn_button(self, want_id: str | None = None) -> str:
+        with self._lock:
+            bid = want_id or alloc_id("button", self.buttons.keys())
+            if bid not in self.buttons:
+                self.buttons[bid] = ButtonTrigger(self, bid)
+            return bid
+
+    def remove_button(self, bid: str) -> None:
+        with self._lock:
+            b = self.buttons.pop(bid, None)
+            if b is None:
+                raise KeyError(f"no button trigger {bid!r}")
+            b.shutdown()
+            # a trigger source's wires go with it (no heal: pings have no thru)
+            self.ctl_wires = [w for w in self.ctl_wires
+                              if bid not in (w.get("from"), w.get("to"))]
+
+    def set_button(self, bid: str, **settings) -> None:
+        with self._lock:
+            b = self.buttons.get(bid)
+            if b is None:
+                raise KeyError(f"no button trigger {bid!r}")
+            # arming one button disarms the others — ONE pairing at a time
+            if settings.get("armed"):
+                for other in self.buttons.values():
+                    if other is not b:
+                        other.armed = False
+            b.configure(**settings)
+
+    def fire_button(self, bid: str) -> None:
+        b = self.buttons.get(bid)
+        if b is None:
+            raise KeyError(f"no button trigger {bid!r}")
+        b.fire()
+
+    def spawn_clock(self, want_id: str | None = None) -> str:
+        with self._lock:
+            cid = want_id or alloc_id("clock", self.clocks.keys())
+            if cid not in self.clocks:
+                self.clocks[cid] = ClockTrigger(self, cid)
+            return cid
+
+    def remove_clock(self, cid: str) -> None:
+        with self._lock:
+            c = self.clocks.pop(cid, None)
+            if c is None:
+                raise KeyError(f"no clock trigger {cid!r}")
+            c.shutdown()
+            self.ctl_wires = [w for w in self.ctl_wires
+                              if cid not in (w.get("from"), w.get("to"))]
+
+    def set_clock(self, cid: str, **settings) -> None:
+        with self._lock:
+            c = self.clocks.get(cid)
+            if c is None:
+                raise KeyError(f"no clock trigger {cid!r}")
+            c.configure(**settings)
+
     # -- key shifters -----------------------------------------------------------
 
     def spawn_keyshift(self, want_id: str | None = None) -> str:
@@ -1111,6 +1220,11 @@ class SynthApp:
                     ks.shutdown()
                 except Exception:  # noqa: BLE001
                     pass
+            for trg in (*self.buttons.values(), *self.clocks.values()):
+                try:
+                    trg.shutdown()
+                except Exception:  # noqa: BLE001
+                    pass
             self.transport.shutdown()
             if self.reloader:
                 self.reloader.stop()
@@ -1264,6 +1378,8 @@ class SynthApp:
                            for vid, v in self.voices.items()],
                 "tonics": [d.settings() for d in self.tonics.values()],
                 "keyshifts": [k.settings() for k in self.keyshifts.values()],
+                "buttons": [b.settings() for b in self.buttons.values()],
+                "clocks": [c.settings() for c in self.clocks.values()],
                 "transpose": self._transpose,
                 "midi_inputs": _list_midi_inputs(),
                 "midi_port": self.router.active_port if self.router else None,

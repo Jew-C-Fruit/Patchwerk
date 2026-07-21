@@ -206,6 +206,20 @@ class TonicDeriver:
         """The note this deriver is currently emitting (None = none yet)."""
         return self._out_note
 
+    def trigger(self) -> None:
+        """Ping trigger-in (node-scoped): commit NOW. While any ping source
+        is wired into this deriver its internal grid timer stands down
+        (see _run) — unwire and the timer resumes."""
+        self.decide()
+
+    def _ping_driven(self) -> bool:
+        app = self.app
+        try:
+            return any(w.get("to") == self.id and app._is_ping_src(w.get("from"))
+                       for w in (getattr(app, "ctl_wires", None) or []))
+        except Exception:  # noqa: BLE001
+            return False
+
     def decide(self) -> None:
         """One grid-point decision: estimate, and on a root change emit the
         new root note downstream + the tonic_out event. (The thread calls
@@ -254,4 +268,12 @@ class TonicDeriver:
             _, t = transport.next_grid(self._interval_beats(transport))
             if not self._sleep_until(t):
                 return
+            # a STOPPED transport freezes beats_now — next_grid then returns
+            # a constant past time forever; don't busy-spin decisions
+            if not transport.running:
+                time.sleep(0.1)
+                continue
+            # a wired ping source OWNS the commit timing (timer override)
+            if self._ping_driven():
+                continue
             self.decide()

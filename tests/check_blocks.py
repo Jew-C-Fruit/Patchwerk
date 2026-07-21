@@ -24,6 +24,11 @@ Current coverage:
      ordinary MONO ctl note-sink (play-in, no follow chip); the deriver has
      ONE ctl out; keys→drone and deriver→drone wire as plain ctl; ctl wires
      into drones draw in the ctl family.
+  7. Ping (items 4+5): button/clock trigger cards render; the deriver grows
+     a QUIET node-scoped trigger-in; ping wires draw in their own pastel
+     family; the grammar is strict (ping↮mod/ctl/audio in BOTH directions);
+     the pad click + bound computer key fire; pairing binds only UNASSIGNED
+     keys (note keys can never bind) and the binding chip updates.
 """
 
 import glob
@@ -388,6 +393,120 @@ def main():
         check("drone play-in is single-input (no + handle)", page.evaluate(
             "!portAllowsPlus(nodes.get('m:drone').ports"
             ".find(p => p.sig === 'ctl' && p.dir === 'in'))"))
+
+        # ================================================================
+        # 7 — ping: trigger cards, quiet trigger-in, strict grammar
+        # ================================================================
+        st_p = base_state(
+            [sg, echo],
+            [{"from": "signal_gen", "to": "echo"},
+             {"from": "echo", "to": "master"}],
+            ctl_wires=[{"from": "keys", "to": "arp"},
+                       {"from": "arp", "to": "voice"},
+                       {"from": "keys", "to": "tonic"},
+                       {"from": "button", "to": "tonic"}],
+            tonics=[{"id": "tonic", "every": "1 bar",
+                     "everies": ["1 bar"], "octave": 2, "root": None}],
+            buttons=[{"id": "button", "binding": None, "armed": False}],
+            clocks=[{"id": "clock", "division": "1/4",
+                     "divisions": ["1/4", "1/8"]}])
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st_p)
+        page.wait_for_timeout(500)
+
+        check("PRIMARY_SIGS gained ping",
+              page.evaluate("PRIMARY_SIGS.has('ping')"))
+        check("--ping CSS var present", page.evaluate(
+            "!!getComputedStyle(document.documentElement)"
+            ".getPropertyValue('--ping').trim()"))
+        check("ping legend entry present", page.evaluate(
+            "!!document.querySelector('[data-legend=ping]')"))
+        for gid in ("button", "clock"):
+            check(f"trigger card renders: {gid}",
+                  page.evaluate(f"nodes.has('{gid}')"))
+
+        trig = page.evaluate("""(() => {
+          const n = nodes.get('tonic');
+          const p = n.ports.find(p => p.sig === 'ping');
+          return p ? {dir: p.dir, quiet: !!p.quiet, label: p.label} : null;
+        })()""")
+        check("deriver has a QUIET node-scoped ping trigger-in",
+              trig == {"dir": "in", "quiet": True, "label": "trigger"},
+              str(trig))
+
+        wsig = page.evaluate(
+            "(wires.find(w => w.from.node.gid === 'button') || {}).sig")
+        check("button→deriver wire draws in the ping family",
+              wsig == "ping", str(wsig))
+
+        # strict grammar: every cross-kind combination refused, both ways
+        combos = page.evaluate("""(() => {
+          const p = (node, dir, sig) =>
+            ({node, port: {dir, sig, label: sig + '-' + dir}});
+          const btn = nodes.get('button'), ton = nodes.get('tonic');
+          const sgn = nodes.get('m:signal_gen'), arp = nodes.get('arp');
+          return {
+            ping_to_trig: !!connectAction(p(btn, 'out', 'ping'),
+              {node: ton, port: ton.ports.find(q => q.sig === 'ping')}),
+            ping_to_mod:  !!connectAction(p(btn, 'out', 'ping'), p(sgn, 'in', 'mod')),
+            mod_to_ping:  !!connectAction(p(sgn, 'out', 'mod'),
+              {node: ton, port: ton.ports.find(q => q.sig === 'ping')}),
+            ping_to_ctl:  !!connectAction(p(btn, 'out', 'ping'), p(arp, 'in', 'ctl')),
+            ctl_to_ping:  !!connectAction(p(nodes.get('keys'), 'out', 'ctl'),
+              {node: ton, port: ton.ports.find(q => q.sig === 'ping')}),
+            ping_to_audio: !!connectAction(p(btn, 'out', 'ping'),
+              p(nodes.get('m:echo'), 'in', 'audio')),
+          };
+        })()""")
+        check("ping-out → trigger-in connects", combos["ping_to_trig"],
+              str(combos))
+        for bad in ("ping_to_mod", "mod_to_ping", "ping_to_ctl",
+                    "ctl_to_ping", "ping_to_audio"):
+            check(f"grammar refuses {bad}", not combos[bad], str(combos))
+
+        # pad click fires
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate(
+            "nodes.get('button').el.querySelector('.pingpad').click()")
+        sent = page.evaluate("window.__sent")
+        check("pad click sends fire_button",
+              {"type": "fire_button", "id": "button"} in sent, str(sent))
+
+        # pairing: arm, then an ASSIGNED (note) key must NOT bind…
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("""() => {
+          const chip = [...nodes.get('button').el.querySelectorAll('label')]
+            .find(l => l.title === 'bind').parentElement
+            .querySelector('.chip');
+          chip.click();
+        }""")
+        page.wait_for_timeout(60)
+        sent = page.evaluate("window.__sent")
+        check("arming sends set_button armed",
+              {"type": "set_button", "id": "button", "armed": True} in sent,
+              str(sent))
+        page.keyboard.press("a")   # a note key — tonal, never binds
+        page.wait_for_timeout(60)
+        bound = page.evaluate(
+            "window.__sent.filter(m => m.type === 'set_button' && m.binding)")
+        check("a note key never binds while armed", not bound, str(bound))
+        # …then an unassigned key binds and is consumed
+        page.keyboard.press("n")
+        page.wait_for_timeout(60)
+        bound = page.evaluate(
+            "window.__sent.filter(m => m.type === 'set_button' && m.binding)")
+        check("an unassigned key binds (KeyN)",
+              bound and bound[-1]["binding"] == {"kind": "key",
+                                                 "code": "KeyN"}, str(bound))
+
+        # the bound key now FIRES the ping (binding kept client-side)
+        page.evaluate("window.__sent.length = 0")
+        page.keyboard.press("n")
+        page.wait_for_timeout(60)
+        sent = page.evaluate("window.__sent")
+        check("bound key fires the ping",
+              {"type": "fire_button", "id": "button"} in sent, str(sent))
+        check("bound key does not ALSO play a note",
+              not [m for m in sent if m.get("type") == "note_on"], str(sent))
 
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()

@@ -64,6 +64,12 @@ def snapshot(app) -> dict:
         "keyshifts": [{k: v for k, v in ks.settings().items()
                        if k in ("id", "key", "length", "steps")}
                       for ks in getattr(app, "keyshifts", {}).values()],
+        "buttons": [{k: v for k, v in b.settings().items()
+                     if k in ("id", "binding")}
+                    for b in getattr(app, "buttons", {}).values()],
+        "clocks": [{k: v for k, v in c.settings().items()
+                    if k in ("id", "division")}
+                   for c in getattr(app, "clocks", {}).values()],
     }
     if getattr(app, "drums", None):
         data["drums"] = app.drums.snapshot()
@@ -118,6 +124,14 @@ def _apply(app, data: dict) -> None:
             app.spawn_keyshift(want_id=kid)
             app.set_keyshift(kid, key=k.get("key"), length=k.get("length"),
                              steps=k.get("steps"))
+        for b in data.get("buttons", []):
+            bid = b.get("id") or "button"
+            app.spawn_button(want_id=bid)
+            app.set_button(bid, binding=b.get("binding"))
+        for c in data.get("clocks", []):
+            cid = c.get("id") or "clock"
+            app.spawn_clock(want_id=cid)
+            app.set_clock(cid, division=c.get("division"))
 
         # 4. Arp
         if app.arp and "arp" in data:

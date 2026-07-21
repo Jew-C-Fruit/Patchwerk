@@ -28,6 +28,18 @@ Protocol (JSON messages):
     {"type": "spawn_voice"} / {"type": "remove_voice", "id": "voice.2"}
     {"type": "spawn_tonic"} / {"type": "remove_tonic", "id": "tonic.2"}
     {"type": "set_tonic", "id": "tonic", "every": "1 bar", "octave": 2}
+    {"type": "spawn_button"} / {"type": "remove_button", "id": "button.2"}
+    {"type": "set_button", "id": "button", "binding": {"kind": "key",
+     "code": "KeyN"} | {"kind": "cc", "cc": 20} | null, "armed": true}
+        (armed = pairing mode: the next NON-TONAL input — a MIDI CC server-
+         side, an unassigned computer key client-side — becomes the binding;
+         MIDI note messages can never bind or fire)
+    {"type": "fire_button", "id": "button"}   (manual click / bound key)
+    {"type": "spawn_clock"} / {"type": "remove_clock", "id": "clock.2"}
+    {"type": "set_clock", "id": "clock", "division": "1/4"}
+        (transport-locked ping every division; ping wires ride ctl_wire
+         with the kind inferred from the button/clock source endpoint —
+         ping-outs land ONLY on trigger-ins, e.g. a deriver)
     {"type": "spawn_keyshift"} / {"type": "remove_keyshift", "id": "keyshift.2"}
     {"type": "set_keyshift", "id": "keyshift", "key": 7, "length": 8,
      "steps": [0, null, 7, ...]}   (key/steps = pitch-class distance from C;
@@ -197,6 +209,31 @@ class GuiServer:
             self.synth.set_keyshift(m["id"], key=m.get("key"),
                                     length=m.get("length"), steps=m.get("steps"))
             # clicking client already painted its card — update the others
+            await self._broadcast_state(exclude=sender)
+        elif t == "spawn_button":
+            self.synth.spawn_button()
+            await self._broadcast_state()
+        elif t == "remove_button":
+            self.synth.remove_button(m["id"])
+            await self._broadcast_state()
+        elif t == "set_button":
+            kw = {}
+            if "binding" in m:
+                kw["binding"] = m["binding"]
+            if "armed" in m:
+                kw["armed"] = m["armed"]
+            self.synth.set_button(m["id"], **kw)
+            await self._broadcast_state(exclude=sender)
+        elif t == "fire_button":
+            self.synth.fire_button(m["id"])   # hot path: no state broadcast
+        elif t == "spawn_clock":
+            self.synth.spawn_clock()
+            await self._broadcast_state()
+        elif t == "remove_clock":
+            self.synth.remove_clock(m["id"])
+            await self._broadcast_state()
+        elif t == "set_clock":
+            self.synth.set_clock(m["id"], division=m.get("division"))
             await self._broadcast_state(exclude=sender)
         elif t == "set_voice_target":
             self.synth.set_voice_target(m["key"], m.get("voice", "voice"))

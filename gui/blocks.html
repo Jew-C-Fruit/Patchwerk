@@ -8,7 +8,7 @@
   :root {
     --plane: #0d0d0d; --surface: #1a1a19; --card: #202020; --ink-1: #f2f1ea;
     --ink-2: #a9a89e; --hairline: #2c2c2a; --border: rgba(255,255,255,0.10);
-    --audio: #3987e5; --ctl: #1baf7a; --mod: #9085e9;
+    --audio: #3987e5; --ctl: #1baf7a; --mod: #9085e9; --ping: #f0b37e;
     --danger: #e34948; --meter: #1baf7a; --grid: rgba(255,255,255,0.045);
   }
   * { box-sizing: border-box; }
@@ -156,6 +156,13 @@
     font-size: 0; }
   .mod[data-gid^="keyshift"][data-size="S"] .body { padding: 0 8px 3px 10px; }
   .mod[data-gid^="keyshift"][data-size="S"] .mini { margin: 1px 0; }
+  /* trigger cards (button/clock): the pad IS the manual fire surface */
+  .pingpad { display: flex; align-items: center; justify-content: center;
+    height: 100%; font-size: 15px; color: var(--ping); cursor: pointer;
+    user-select: none; -webkit-user-select: none; }
+  .pingpad:hover { filter: brightness(1.25); }
+  .pingpad.pulse { animation: pingpulse .22s ease; }
+  @keyframes pingpulse { 30% { text-shadow: 0 0 9px var(--ping); transform: scale(1.35); } }
   #keypop { position: fixed; z-index: 80; background: var(--card);
     border: 1px solid var(--ink-2); border-radius: 9px; padding: 6px;
     display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px;
@@ -180,9 +187,14 @@
   .port[data-sig=audio] { background: var(--audio); }
   .port[data-sig=ctl]   { background: var(--ctl); }
   .port[data-sig=mod]   { background: var(--mod); }
+  /* the two QUIET kinds stay visually distinct: mod violet, ping pastel
+     peach — primaries (audio/ctl) keep the saturated colors */
+  .port[data-sig=ping]  { background: var(--ping); }
   .port.quiet { width: 7px; height: 7px; border-width: 1.5px;
     background: #6f6d64; opacity: 0.5; }
   .port.quiet:hover, .port.quiet.hot { opacity: 1; background: var(--mod); }
+  .port.quiet[data-sig=ping]:hover, .port.quiet[data-sig=ping].hot {
+    background: var(--ping); }
   .port.hot { box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 30%, transparent); }
   .legend { display: flex; gap: 12px; font-size: 10px; color: var(--ink-2); }
   .legend b { display: inline-block; width: 18px; height: 3px; border-radius: 2px;
@@ -375,6 +387,7 @@
     <span><b style="background:linear-gradient(90deg,#3987e5,#22b8d4)"></b>audio</span>
     <span><b style="background:linear-gradient(90deg,#1baf7a,#e8c832)"></b>notes</span>
     <span><b style="background:linear-gradient(90deg,#e34948,#9085e9)"></b>mod</span>
+    <span data-legend="ping"><b style="background:linear-gradient(90deg,#f0b37e,#f7d4ae)"></b>ping</span>
   </div>
 
 </header>
@@ -414,14 +427,16 @@ const FAMILY = {
   psine: "#22b8d4",
 };
 // subway line palettes — audio owns the cools, notes/control green→yellow,
-// mod the warm+violet half (the population that grows).
+// mod the warm+violet half (the population that grows), ping pastel peach.
 const LINES = {
   audio: ["#3987e5", "#22b8d4", "#1f9e9e", "#6db1ff", "#4a5fd0", "#7fd4ef"],
   ctl:   ["#1baf7a", "#8cc63f", "#e8c832", "#4fd08c", "#c9d94d", "#0f8f66"],
   mod:   ["#e34948", "#f2842c", "#d446b8", "#9085e9", "#e87ba4", "#ff6b5e", "#7a5fd0"],
+  ping:  ["#f0b37e", "#f7d4ae", "#e59a5c", "#f4c493"],
 };
-const lineCount = {audio: 0, ctl: 0, mod: 0};
-const SIG_CSS = {audio: "var(--audio)", ctl: "var(--ctl)", mod: "var(--mod)"};
+const lineCount = {audio: 0, ctl: 0, mod: 0, ping: 0};
+const SIG_CSS = {audio: "var(--audio)", ctl: "var(--ctl)", mod: "var(--mod)",
+                 ping: "var(--ping)"};
 
 const world = document.getElementById("world");
 const wiresPerm = document.getElementById("wire-perm");
@@ -981,7 +996,7 @@ function reducePoly(P) {
 const FAN_PITCH = 0.78, T_LEAD = 1.1, PORT_GAP = 0.8;
 const PRIM_MOD_GAP = 1.2, END_MARGIN = 0.7;
 const LANE_W = 4, LANE_MAX = 3;
-const PRIMARY_SIGS = new Set(["audio", "ctl"]);
+const PRIMARY_SIGS = new Set(["audio", "ctl", "ping"]);
 // + handle rules: outputs branch; FAN-IN inputs combine (audio mix, ctl
 // merge into voice/deck/keyshift/deriver); SINGLE-INPUT ports never grow
 // a + — param (mod) ins and a source's "play" in (a drop RE-TARGETS the
@@ -1003,7 +1018,11 @@ function computeLayout(n) {
   const ports = [];
   for (const port of n.ports) {
     const ws = wiresAt(n, port);
-    const isMod = port.sig === "mod";          // quiet param-ins AND lfo mod-outs
+    // the QUIET band: mod (param-ins + lfo outs) and ping TRIGGER-INS —
+    // node-scoped, left edge, pinned below the primary port list (never in
+    // line with a param row: a trigger commits the whole node)
+    const isMod = port.sig === "mod" ||
+                  (port.sig === "ping" && port.dir === "in");
     ports.push({ port, ws, isMod, side: port.dir });
   }
   // primary edge auto-pick: face the average direction of wired neighbours
@@ -2272,6 +2291,10 @@ function droneIds() {
     if ((m.type || String(m.key).split(".")[0]) === "drone") s.add(m.key);
   return s;
 }
+function pingSrcIds() {
+  return new Set([...((state && state.buttons) || []).map(b => b.id),
+                  ...((state && state.clocks) || []).map(c => c.id)]);
+}
 // ctl endpoint grammar: "keyshift.2:3" = node "keyshift.2", lane 3. Nodes
 // without lanes are plain ids (unchanged).
 function splitEp(s) {
@@ -2327,6 +2350,15 @@ function connectAction(out, inn) {
         send({type: "lfo_unassign", id: src.gid.slice(4)});  // re-target a live LFO
       send({type: "lfo_assign", key: inn.node.chainKey, name: pi.param});
     };
+  }
+  if (sig === "ping") {
+    // ping-out (button/clock) lands ONLY on a trigger-in — strict grammar:
+    // mod↛ping and ping↛mod are refused by the sig gate above even though
+    // both render as quiet handles
+    const from = ctlId(out.node), to = ctlId(inn.node);
+    if (!pingSrcIds().has(from)) return null;
+    if (!tonicIds().has(to)) return null;   // trigger-ins: derivers (for now)
+    return () => send({type: "ctl_wire", action: "add", from, to});
   }
   // ---- ctl ----
   if (voiceIds().has(out.node.gid) && inn.node.mod && inn.node.mod.kind === "source" &&
@@ -2743,10 +2775,101 @@ function buildTonicCard(t) {
     }),
     rowChip({gid}, "root", {text: t.root || "listening…", static: true}),
   ];
-  return addCard({gid, name: "Tonic Deriver" + suffix, short: "Tonic" + suffix,
+  const n = addCard({gid, name: "Tonic Deriver" + suffix, short: "Tonic" + suffix,
                   sub: "root estimator", fam: "service", rows,
                   kill: () => send({type: "remove_tonic", id: gid}),
-                  ports: [["in", "ctl", "notes"], ["out", "ctl", "root"]]});
+                  ports: [["in", "ctl", "notes"], ["out", "ctl", "root"],
+                          ["in", "ping", "trigger"]]});
+  // the trigger-in is NODE-SCOPED (commits the whole deriver): a quiet
+  // handle on the left edge, pinned below the port list — never in line
+  // with a param row. A wired ping overrides the internal `every` timer.
+  const trig = n.ports.find(p => p.sig === "ping");
+  if (trig) trig.quiet = true;
+  return n;
+}
+
+// ---- ping trigger sources: Button (bindable) + Clock -------------------------
+function bindingLabel(b) {
+  if (!b) return "pair…";
+  if (b.kind === "cc") return "CC " + b.cc;
+  if (b.kind === "key")
+    return "key " + String(b.code).replace(/^(Key|Digit)/, "");
+  return "?";
+}
+let pingArm = null;    // button gid in client-side pairing mode (one at a time)
+function startPingArm(gid) {
+  cancelPingArm();
+  pingArm = gid;
+  send({type: "set_button", id: gid, armed: true});   // MIDI capture server-side
+  const setter = uiParam[gid + ".bind"];
+  if (setter) setter(0, "press a key/CC…");
+}
+function cancelPingArm(silent) {
+  if (pingArm === null) return;
+  const gid = pingArm;
+  pingArm = null;
+  if (!silent) send({type: "set_button", id: gid, armed: false});
+  const b = ((state && state.buttons) || []).find(x => x.id === gid);
+  const setter = uiParam[gid + ".bind"];
+  if (setter) setter(0, bindingLabel(b && b.binding));
+}
+function pingFlash(src) {
+  const n = nodes.get(src);
+  const pad = n && n.el.querySelector(".pingpad");
+  if (!pad) return;
+  pad.classList.remove("pulse");
+  void pad.offsetWidth;
+  pad.classList.add("pulse");
+}
+function buildButtonCard(b) {
+  const gid = b.id;
+  const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
+  const rows = [
+    rowChip({gid}, "bind", {
+      text: (b.armed || pingArm === gid) ? "press a key/CC…"
+                                         : bindingLabel(b.binding),
+      onClick: () => {
+        if (pingArm === gid) cancelPingArm();
+        else startPingArm(gid);
+      },
+    }),
+  ];
+  const n = addCard({gid, name: "Button" + suffix, short: "Btn" + suffix,
+    sub: "trigger · bindable", fam: "service", rows,
+    vizHTML: `<div class="pingpad" title="fire">◉</div>`,
+    kill: () => send({type: "remove_button", id: gid}),
+    ports: [["out", "ping", "ping"]]});
+  const pad = n.el.querySelector(".pingpad");
+  pad.addEventListener("pointerdown", (e) => e.stopPropagation());
+  pad.addEventListener("click", (e) => {
+    e.stopPropagation();
+    send({type: "fire_button", id: gid});
+    pingFlash(gid);
+  });
+  return n;
+}
+function buildClockCard(c) {
+  const gid = c.id;
+  const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
+  const rows = [
+    rowChip({gid}, "division", {
+      text: c.division,
+      onClick: (chip) => {
+        const ds = c.divisions ||
+          ((state && state.transport) || {}).divisions || [];
+        if (!ds.length) return;
+        const v = ds[(ds.indexOf(chip.textContent) + 1) % ds.length];
+        chip.textContent = v;
+        c.division = v;
+        send({type: "set_clock", id: gid, division: v});
+      },
+    }),
+  ];
+  return addCard({gid, name: "Clock" + suffix, short: "Clk" + suffix,
+    sub: "transport trigger", fam: "service", rows,
+    vizHTML: `<div class="pingpad">◔</div>`,
+    kill: () => send({type: "remove_clock", id: gid}),
+    ports: [["out", "ping", "ping"]]});
 }
 
 // ---- key shifter: Grasshopper-ish key popover + progression step strip ----
@@ -3146,7 +3269,7 @@ function rebuildGraph() {
     if (n.gid === "drums") expandMem.drums = n.expanded;
   }
   for (const w of [...wires]) removeWire(w);
-  lineCount.audio = 0; lineCount.ctl = 0; lineCount.mod = 0;
+  lineCount.audio = 0; lineCount.ctl = 0; lineCount.mod = 0; lineCount.ping = 0;
   for (const n of [...nodes.values()]) if (!n.persistent) removeNode(n);
   for (const k of Object.keys(uiParam))
     if (!k.startsWith("mon:")) delete uiParam[k];
@@ -3160,6 +3283,8 @@ function rebuildGraph() {
   const voiceNodes = voiceList.map(buildVoiceCard);
   const tonicNodes = (state.tonics || []).map(buildTonicCard);
   const ksNodes = (state.keyshifts || []).map(buildKeyshiftCard);
+  const trigNodes = [...(state.buttons || []).map(buildButtonCard),
+                     ...(state.clocks || []).map(buildClockCard)];
   const services = [], chainNodes = [];
   for (const mod of state.chain) {
     const n = buildChainCard(mod);
@@ -3179,7 +3304,7 @@ function rebuildGraph() {
   };
   placeGroup([keys, arp, deck, ...voiceNodes], 0);
   placeGroup([...chainNodes, master], 2);
-  placeGroup([...tonicNodes, ...ksNodes, ...services], 1);
+  placeGroup([...tonicNodes, ...ksNodes, ...trigNodes, ...services], 1);
   placeGroup([drums], 5);
   for (let i = 0; i < lfoNodes.length; i++) {
     const n = lfoNodes[i], l = state.lfos[i];
@@ -3192,7 +3317,10 @@ function rebuildGraph() {
   // ---- wires (derived, exactly mirroring server truth) ----
   const port = (n, dir, sig, param, lane) => n && n.ports.find(p =>
     p.dir === dir && p.sig === sig && (!param || p.param === param) &&
-    (!!param === !!p.quiet) && (lane === undefined || p.lane === lane));
+    // quiet↔param pairing binds MOD handles only; a ping trigger-in is
+    // quiet but node-scoped (no param)
+    (sig === "ping" || !!param === !!p.quiet) &&
+    (lane === undefined || p.lane === lane));
   const W = (a, asig, b, bsig, opts) => a && b && addWire(
     {node: a, port: port(a, "out", asig, null, opts && opts.fromLane)},
     {node: b, port: port(b, "in", bsig, opts && opts.param, opts && opts.toLane)},
@@ -3211,6 +3339,12 @@ function rebuildGraph() {
     if (!a || !b) continue;   // e.g. a wired node whose card isn't spawned
     const cut = () => send({type: "ctl_wire", action: "remove",
                             from: cw.from, to: cw.to});
+    // a wire FROM a button/clock is a PING wire (kind inferred from the
+    // source endpoint) — it lands on the target's quiet trigger-in
+    if (pingSrcIds().has(fromBase)) {
+      W(a, "ping", b, "ping", {cut});
+      continue;
+    }
     // a Note Monitor may RIDE this wire (visual splice): draw A→mon→B but
     // keep the backend wire A→B — cutting either half cuts the real wire
     const ride = [...monRide].find(([gid, set]) =>
@@ -3312,6 +3446,9 @@ function renderPalette() {
   btn("LFO ∿", FAMILY.service, () => buildArmedLfo());
   btn("Tonic Deriver", "#9085e9", () => send({type: "spawn_tonic"}));
   btn("Key Shifter", FAMILY.ctl, () => send({type: "spawn_keyshift"}));
+  h3("triggers");
+  btn("Button ◉", "#f0b37e", () => send({type: "spawn_button"}));
+  btn("Clock ◔", "#f0b37e", () => send({type: "spawn_clock"}));
   // the palette NEVER removes placed modules: any entry can be spawned
   // again — every click/drag makes a fresh instance ("lowpass.2", ...)
   const avail = (state && state.available) || [];
@@ -3519,6 +3656,15 @@ function onMidi(e) {
     if (uiParam[id]) uiParam[id](0, e.root);
     const t = (state && state.tonics || []).find(x => x.id === e.id);
     if (t) t.root = e.root;
+  } else if (e.kind === "ping") {
+    pingFlash(e.src);   // a trigger fired (clock tick / MIDI / another client)
+  } else if (e.kind === "ping_bound") {
+    // server-side MIDI capture landed: update the card's chip in place
+    const b = (state && state.buttons || []).find(x => x.id === e.id);
+    if (b) { b.binding = e.binding; b.armed = false; }
+    if (pingArm === e.id) pingArm = null;
+    const setter = uiParam[`${e.id}.bind`];
+    if (setter) setter(0, bindingLabel(e.binding));
   }
 }
 
@@ -4084,8 +4230,48 @@ function syncCaps(e) {
     $("caps-note").textContent = on ? "SUSTAIN" : "";
   }
 }
+// button-trigger keys: pairing capture + bound-key firing. Only UNASSIGNED
+// keys are bindable (app shortcuts, on-screen note keys, and keys bound to
+// other buttons are skipped); tonal inputs (the KEYMAP note keys) can
+// therefore never bind. A captured/bound press is CONSUMED — it must not
+// also perform its normal app action.
+const RESERVED_KEYS = new Set([...Object.keys(KEYMAP), "z", "x", " "]);
+function pingKeyAssigned(code, key, exceptId) {
+  if (RESERVED_KEYS.has(String(key).toLowerCase())) return true;
+  for (const b of (state && state.buttons) || [])
+    if (b.id !== exceptId && b.binding && b.binding.kind === "key" &&
+        b.binding.code === code) return true;
+  return false;
+}
+function handlePingKey(e) {
+  if (keyTarget(e) || e.metaKey || e.ctrlKey || e.altKey) return false;
+  if (pingArm !== null) {
+    if (e.key === "Escape") { cancelPingArm(); return true; }
+    if (e.repeat || pingKeyAssigned(e.code, e.key, pingArm)) return false;
+    const gid = pingArm;
+    pingArm = null;
+    send({type: "set_button", id: gid,
+          binding: {kind: "key", code: e.code}, armed: false});
+    const b = ((state && state.buttons) || []).find(x => x.id === gid);
+    if (b) { b.binding = {kind: "key", code: e.code}; b.armed = false; }
+    const setter = uiParam[gid + ".bind"];
+    if (setter) setter(0, bindingLabel({kind: "key", code: e.code}));
+    e.preventDefault();
+    return true;
+  }
+  if (e.repeat) return false;
+  for (const b of (state && state.buttons) || [])
+    if (b.binding && b.binding.kind === "key" && b.binding.code === e.code) {
+      send({type: "fire_button", id: b.id});
+      pingFlash(b.id);
+      e.preventDefault();
+      return true;
+    }
+  return false;
+}
 window.addEventListener("keydown", (e) => {
   syncCaps(e);
+  if (handlePingKey(e)) return;   // pairing capture / bound trigger keys
   if (e.repeat || keyTarget(e) || e.metaKey || e.ctrlKey || e.altKey) {
     // macOS swallows the keyup of letter keys while ⌘/ctrl is held — if a
     // modifier lands while notes are down, release them NOW or their offs
