@@ -545,12 +545,17 @@ class SynthApp:
                 w = {"from": src, "to": dst}
                 if w not in self.ctl_wires:
                     self.ctl_wires.append(w)
-                    if src in self.tonics and self._is_drone_id(dst):
-                        # fresh deriver→drone wire: aim the drone at the
-                        # current root immediately (don't wait for the grid)
-                        n = self.tonics[src].current_note()
-                        if n is not None:
-                            self._drone_sink(dst).note_on(n)
+                    if self._is_drone_id(dst):
+                        # the play-in is single-input: a new wire means a new
+                        # controller — stale held notes from the previous one
+                        # must not resurface on later note_offs (hold freq)
+                        self._drone_sink(dst).all_off()
+                        if src in self.tonics:
+                            # fresh deriver→drone wire: aim the drone at the
+                            # current root immediately (don't wait for the grid)
+                            n = self.tonics[src].current_note()
+                            if n is not None:
+                                self._drone_sink(dst).note_on(n)
             elif action == "remove":
                 n0 = len(self.ctl_wires)
                 self.ctl_wires = [w for w in self.ctl_wires
@@ -564,6 +569,11 @@ class SynthApp:
                     if dst in self.voices and \
                             not any(w["to"] == dst for w in self.ctl_wires):
                         self.voices[dst].all_off()
+                    # unhooking a drone's input drops the source's held
+                    # notes (hold the sounding root; no stale fallback if a
+                    # later controller releases over old state)
+                    if self._is_drone_id(dst) and dst in self._drone_sinks:
+                        self._drone_sinks[dst].all_off()
                     # unhooking the deck's replay must not leave notes ringing
                     if src == "deck" and dst in self.voices:
                         if dst == "voice":

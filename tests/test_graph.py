@@ -1187,6 +1187,22 @@ def test_tonic_drone():
     app.all_notes_off()
     app.set_ctl_wire("remove", "keys", "drone")
 
+    # REWIRE HYGIENE (live-found): held notes must not leak across wires —
+    # a note held under an old wire must never resurface as a fallback root
+    app.set_ctl_wire("add", "keys", "drone")
+    app.note_on(36)                       # held under wire #1
+    app.set_ctl_wire("remove", "keys", "drone")   # cut clears held (holds freq)
+    app.set_ctl_wire("add", "keys", "drone")      # new controller, clean slate
+    app.note_on(45)
+    app.note_on(52)
+    app.rack.calls.clear()
+    app.note_off(52)                      # falls back to 45 — NEVER stale 36
+    check("cut wire's held notes never resurface (fallback is 45, not 36)",
+          drone_freqs() and abs(drone_freqs()[-1] - 110.0) < 0.5)
+    app.note_off(45)
+    app.all_notes_off()
+    app.set_ctl_wire("remove", "keys", "drone")
+
     # deriver: input notes are EVIDENCE only; the out is the committed root
     # as a mono note stream over ordinary ctl wires
     sink = FakeNoteSink()

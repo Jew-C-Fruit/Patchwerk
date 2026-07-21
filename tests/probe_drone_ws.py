@@ -127,9 +127,22 @@ async def main():
             # -- deriver emits notes: keys→tonic→drone ---------------------
             await ws.send_json({"type": "ctl_wire", "action": "remove",
                                 "from": "keys", "to": dk})
-            await ws.send_json({"type": "spawn_tonic"})
             st = await drain_state(ws)
-            tid = st["tonics"][-1]["id"]
+            before = {t["id"] for t in st["tonics"]}
+            await ws.send_json({"type": "spawn_tonic"})
+            # drain until the NEW deriver appears — broadcasts from the
+            # preceding messages can arrive first (stale-state race)
+            tid = None
+            for _ in range(10):
+                st = await drain_state(ws)
+                new = [t["id"] for t in st["tonics"] if t["id"] not in before]
+                if new:
+                    tid = new[0]
+                    break
+            check("spawned deriver appears in state", tid is not None,
+                  str(st["tonics"]))
+            if tid is None:
+                return 1
             await ws.send_json({"type": "set_tonic", "id": tid,
                                 "every": "1 beat", "octave": 2})
             await ws.send_json({"type": "ctl_wire", "action": "add",
@@ -137,18 +150,23 @@ async def main():
             await ws.send_json({"type": "ctl_wire", "action": "add",
                                 "from": tid, "to": dk})
             st = await drain_state(ws)
-            # C-major evidence, then wait past a 1-beat grid decision
+            # C-major evidence, then poll past 1-beat grid decisions until
+            # the committed root lands on the drone (bounded wait)
             for n in (48, 60, 64, 67, 60, 48):
                 await note(n)
                 await note(n, on=False)
-            await asyncio.sleep(2.5)
             await ws.send_json({"type": "all_notes_off"})
-            st = await poke_state(ws, st)
-            f = drone_freq(st, dk)
+            f, root = None, None
+            for _ in range(12):
+                await asyncio.sleep(0.8)
+                st = await poke_state(ws, st)
+                f = drone_freq(st, dk)
+                root = next((t.get("root") for t in st["tonics"]
+                             if t["id"] == tid), None)
+                if root == "C" and f and abs(f - 65.41) < 1.0:
+                    break
             check("deriver committed root drives the drone (C2≈65.4)",
                   f and abs(f - 65.41) < 1.0, str(f))
-            root = next((t.get("root") for t in st["tonics"]
-                         if t["id"] == tid), None)
             check("deriver root readout is C", root == "C", str(root))
 
             # -- cleanup: remove what we spawned ---------------------------
