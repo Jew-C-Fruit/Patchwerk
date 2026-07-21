@@ -8,7 +8,7 @@
   :root {
     --plane: #0d0d0d; --surface: #1a1a19; --card: #202020; --ink-1: #f2f1ea;
     --ink-2: #a9a89e; --hairline: #2c2c2a; --border: rgba(255,255,255,0.10);
-    --audio: #3987e5; --ctl: #1baf7a; --mod: #9085e9; --tonic: #d9a521;
+    --audio: #3987e5; --ctl: #1baf7a; --mod: #9085e9;
     --danger: #e34948; --meter: #1baf7a; --grid: rgba(255,255,255,0.045);
   }
   * { box-sizing: border-box; }
@@ -180,8 +180,6 @@
   .port[data-sig=audio] { background: var(--audio); }
   .port[data-sig=ctl]   { background: var(--ctl); }
   .port[data-sig=mod]   { background: var(--mod); }
-  /* tonic handles sit above the quiet per-param mod handles on the same edge */
-  .port[data-sig=tonic] { background: var(--tonic); z-index: 6; }
   .port.quiet { width: 7px; height: 7px; border-width: 1.5px;
     background: #6f6d64; opacity: 0.5; }
   .port.quiet:hover, .port.quiet.hot { opacity: 1; background: var(--mod); }
@@ -364,8 +362,7 @@
     <select id="meter" title="meter"><option value="2">2/4</option><option value="3">3/4</option>
       <option value="4" selected>4/4</option><option value="6">6/8</option></select>
     <label><input type="checkbox" id="click-on">click</label>
-    <span class="lb">pos</span><b id="beat-pos">—</b>
-    <span class="lb">tonic</span><b id="tonic-root" style="font-size:11px">—</b></div>
+    <span class="lb">pos</span><b id="beat-pos">—</b></div>
   <div class="grp"><span class="lb">master</span>
     <input type="range" id="vol" min="0" max="1" step="0.001" value="0.8">
     <div class="mbars"><div id="m-out-l"><div></div></div><div id="m-out-r"><div></div></div></div></div>
@@ -378,7 +375,6 @@
     <span><b style="background:linear-gradient(90deg,#3987e5,#22b8d4)"></b>audio</span>
     <span><b style="background:linear-gradient(90deg,#1baf7a,#e8c832)"></b>notes</span>
     <span><b style="background:linear-gradient(90deg,#e34948,#9085e9)"></b>mod</span>
-    <span data-legend="tonic"><b style="background:linear-gradient(90deg,#d9a521,#f0c96a)"></b>tonic</span>
   </div>
 
 </header>
@@ -418,16 +414,14 @@ const FAMILY = {
   psine: "#22b8d4",
 };
 // subway line palettes — audio owns the cools, notes/control green→yellow,
-// mod the warm+violet half (the population that grows), tonic amber/gold.
+// mod the warm+violet half (the population that grows).
 const LINES = {
   audio: ["#3987e5", "#22b8d4", "#1f9e9e", "#6db1ff", "#4a5fd0", "#7fd4ef"],
   ctl:   ["#1baf7a", "#8cc63f", "#e8c832", "#4fd08c", "#c9d94d", "#0f8f66"],
   mod:   ["#e34948", "#f2842c", "#d446b8", "#9085e9", "#e87ba4", "#ff6b5e", "#7a5fd0"],
-  tonic: ["#d9a521", "#f0c96a", "#b8860b", "#e8b93e"],
 };
-const lineCount = {audio: 0, ctl: 0, mod: 0, tonic: 0};
-const SIG_CSS = {audio: "var(--audio)", ctl: "var(--ctl)", mod: "var(--mod)",
-                 tonic: "var(--tonic)"};
+const lineCount = {audio: 0, ctl: 0, mod: 0};
+const SIG_CSS = {audio: "var(--audio)", ctl: "var(--ctl)", mod: "var(--mod)"};
 
 const world = document.getElementById("world");
 const wiresPerm = document.getElementById("wire-perm");
@@ -476,7 +470,6 @@ function connect() {
     else if (m.type === "param") onParam(m);
     else if (m.type === "midi") onMidi(m.event);
     else if (m.type === "beat") onBeat(m);
-    else if (m.type === "tonic") $("tonic-root").textContent = m.root || "—";
     else if (m.type === "scope_data") onScopeData(m);
     else if (m.type === "error") console.warn("server:", m.message);
   };
@@ -988,15 +981,15 @@ function reducePoly(P) {
 const FAN_PITCH = 0.78, T_LEAD = 1.1, PORT_GAP = 0.8;
 const PRIM_MOD_GAP = 1.2, END_MARGIN = 0.7;
 const LANE_W = 4, LANE_MAX = 3;
-const PRIMARY_SIGS = new Set(["audio", "ctl", "tonic"]);
+const PRIMARY_SIGS = new Set(["audio", "ctl"]);
 // + handle rules: outputs branch; FAN-IN inputs combine (audio mix, ctl
-// merge into voice/deck/keyshift/tonic); SINGLE-INPUT ports never grow a + —
-// param (mod) ins, a source's "play" in (a drop RE-TARGETS the voice, it
-// doesn't add), and a drone's tonic in (one root source).
+// merge into voice/deck/keyshift/deriver); SINGLE-INPUT ports never grow
+// a + — param (mod) ins and a source's "play" in (a drop RE-TARGETS the
+// voice, it doesn't add; a drone's play-in takes one root source).
 function portAllowsPlus(port) {
   if (port.dir === "out") return true;
   if (port.sig === "mod") return false;                     // param ins
-  if (port.label === "play" || port.label === "tonic") return false;
+  if (port.label === "play") return false;
   return true;
 }
 function wiresAt(node, port) {
@@ -1456,7 +1449,7 @@ function compactLayout() {
   for (const n of all) applySize(n);
   const has = new Map(all.map(n => [n.gid, n]));
   const touch = (m, k, mk) => { if (!m.has(k)) m.set(k, mk()); return m.get(k); };
-  // adjacency over every wire kind (audio/ctl/tonic/mod)
+  // adjacency over every wire kind (audio/ctl/mod)
   const outs = new Map(), ins = new Map(), und = new Map();
   const modOnly = new Map();          // gid -> all outgoing wires are mod
   for (const w of wires) {
@@ -2260,8 +2253,7 @@ function wouldCycle(from, to) {
   return false;
 }
 // what does connecting out-port → in-port MEAN? returns a sender fn or null.
-// audio: real graph rewiring. mod: LFO (re)assignment. tonic: deriver TONIC
-// out → a drone instance's tonic-in (ctl_wire — same vocabulary). ctl: real
+// audio: real graph rewiring. mod: LFO (re)assignment. ctl: real
 // control-plane wiring (ctl_wire add among keys/arp/deck/voice ids/tonic
 // ids); voice.out → source stays set_voice_target (each voice always drives
 // exactly one target).
@@ -2273,6 +2265,12 @@ function tonicIds() {
 }
 function keyshiftIds() {
   return new Set(((state && state.keyshifts) || []).map(k => k.id));
+}
+function droneIds() {
+  const s = new Set();
+  for (const m of ((state && state.chain) || []))
+    if ((m.type || String(m.key).split(".")[0]) === "drone") s.add(m.key);
+  return s;
 }
 // ctl endpoint grammar: "keyshift.2:3" = node "keyshift.2", lane 3. Nodes
 // without lanes are plain ids (unchanged).
@@ -2292,7 +2290,8 @@ function ctlDstOk(d) {
   const [b, l] = splitEp(d);
   if (keyshiftIds().has(b)) return laneOk(l);
   return l === undefined &&
-    (b === "arp" || b === "deck" || voiceIds().has(b) || tonicIds().has(b));
+    (b === "arp" || b === "deck" || voiceIds().has(b) || tonicIds().has(b) ||
+     droneIds().has(b));   // drones are mono ctl note-sinks (drone rework)
 }
 // backend node id for a canvas node (module cards carry their instance id)
 function ctlId(n) { return n.chainKey || n.gid; }
@@ -2328,13 +2327,6 @@ function connectAction(out, inn) {
         send({type: "lfo_unassign", id: src.gid.slice(4)});  // re-target a live LFO
       send({type: "lfo_assign", key: inn.node.chainKey, name: pi.param});
     };
-  }
-  if (sig === "tonic") {
-    // tonic outs only connect to tonic ins (drone instances)
-    const from = ctlId(out.node), to = ctlId(inn.node);
-    if (!tonicIds().has(from)) return null;
-    if (!(inn.node.mod && inn.node.mod.type === "drone")) return null;
-    return () => send({type: "ctl_wire", action: "add", from, to});
   }
   // ---- ctl ----
   if (voiceIds().has(out.node.gid) && inn.node.mod && inn.node.mod.kind === "source" &&
@@ -2577,19 +2569,11 @@ function buildChainCard(mod) {
       state.current_input,
       (name) => send({type: "set_devices", input: name})));
   const isDrone = mtype === "drone";
-  if (isDrone) {
-    // the drone's ctl-plane presence: a follow toggle for its tonic-in
-    rows.push(rowChip({gid}, "follow", {
-      text: (mod.tonic_follow !== false) ? "on" : "off",
-      onClick: (chip) => {
-        const on = chip.textContent !== "on";
-        chip.textContent = on ? "on" : "off";
-        send({type: "drone_follow", id: mod.key, on});
-      },
-    }));
-  }
   const ports = [];
-  if (isDrone) ports.push(["in", "tonic", "tonic"]);  // subtle side handle
+  // the drone is a MONO ctl note-sink (drone rework): its play-in takes
+  // ONE note source (keys / arp / a deriver / a keyshift lane) and note_ons
+  // retarget its freq through the glide path; note_offs hold the last root
+  if (isDrone) ports.push(["in", "ctl", "play"]);
   else if (mod.service) ports.push(["in", "ctl", "listen"]);
   else if (mod.kind === "source") ports.push(["in", "ctl", "play"]);
   else ports.push(["in", "audio", "in"]);
@@ -2732,8 +2716,9 @@ function buildVoiceCard(v) {
                   ports: [["in", "ctl", "notes"], ["out", "ctl", "drive"]]});
 }
 
-// one card per tonic deriver (state.tonics): estimator knobs + root readout,
-// ctl THRU out and the amber TONIC out.
+// one card per tonic deriver (state.tonics): estimator knobs + root readout.
+// notes in, ONE ctl out — the committed root as a mono note stream (the
+// bespoke tonic signal is retired; a drone is an ordinary ctl sink now).
 function buildTonicCard(t) {
   const gid = t.id;
   const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
@@ -2761,8 +2746,7 @@ function buildTonicCard(t) {
   return addCard({gid, name: "Tonic Deriver" + suffix, short: "Tonic" + suffix,
                   sub: "root estimator", fam: "service", rows,
                   kill: () => send({type: "remove_tonic", id: gid}),
-                  ports: [["in", "ctl", "notes"], ["out", "ctl", "thru"],
-                          ["out", "tonic", "tonic"]]});
+                  ports: [["in", "ctl", "notes"], ["out", "ctl", "root"]]});
 }
 
 // ---- key shifter: Grasshopper-ish key popover + progression step strip ----
@@ -3162,7 +3146,7 @@ function rebuildGraph() {
     if (n.gid === "drums") expandMem.drums = n.expanded;
   }
   for (const w of [...wires]) removeWire(w);
-  lineCount.audio = 0; lineCount.ctl = 0; lineCount.mod = 0; lineCount.tonic = 0;
+  lineCount.audio = 0; lineCount.ctl = 0; lineCount.mod = 0;
   for (const n of [...nodes.values()]) if (!n.persistent) removeNode(n);
   for (const k of Object.keys(uiParam))
     if (!k.startsWith("mon:")) delete uiParam[k];
@@ -3215,9 +3199,9 @@ function rebuildGraph() {
     opts || {});
   // control: SERVER TRUTH — state.ctl_wires defines the note router among
   // keys/arp/deck/voice ids/tonic ids/drone instance ids. Cut = ctl_wire
-  // remove; port drag ctl-out → ctl-in = ctl_wire add (connectAction). A
-  // wire INTO a drone instance is a TONIC wire (amber, deriver tonic-out →
-  // drone tonic-in); everything else rides the green ctl family.
+  // remove; port drag ctl-out → ctl-in = ctl_wire add (connectAction).
+  // Wires INTO drone instances are ordinary ctl wires (drone rework) and
+  // land on the drone's play-in like any note sink.
   const ctlNode = (k) => nodes.get(k) || nodes.get("m:" + k);
   for (const cw of (state.ctl_wires || [])) {
     // lane endpoints ("keyshift.2:3") resolve to the base node's lane port
@@ -3227,10 +3211,6 @@ function rebuildGraph() {
     if (!a || !b) continue;   // e.g. a wired node whose card isn't spawned
     const cut = () => send({type: "ctl_wire", action: "remove",
                             from: cw.from, to: cw.to});
-    if (b.mod && (b.mod.type || String(b.mod.key).split(".")[0]) === "drone") {
-      W(a, "tonic", b, "tonic", {cut});   // its own color family + handles
-      continue;
-    }
     // a Note Monitor may RIDE this wire (visual splice): draw A→mon→B but
     // keep the backend wire A→B — cutting either half cuts the real wire
     const ride = [...monRide].find(([gid, set]) =>
@@ -3330,7 +3310,7 @@ function renderPalette() {
   btn("Mono Voice", FAMILY.ctl, () => send({type: "spawn_voice"}));
   h3("control");
   btn("LFO ∿", FAMILY.service, () => buildArmedLfo());
-  btn("Tonic Deriver", "#d9a521", () => send({type: "spawn_tonic"}));
+  btn("Tonic Deriver", "#9085e9", () => send({type: "spawn_tonic"}));
   btn("Key Shifter", FAMILY.ctl, () => send({type: "spawn_keyshift"}));
   // the palette NEVER removes placed modules: any entry can be spawned
   // again — every click/drag makes a fresh instance ("lowpass.2", ...)
@@ -3995,7 +3975,7 @@ function drawWaveViz(n, ctx, W, H, style) {
 const TAP_COLORS = {keys: "#1baf7a", arp: "#e8c832", deck: "#e34948"};
 function tapColor(src, style) {
   if (TAP_COLORS[src]) return TAP_COLORS[src];
-  if (String(src).startsWith("tonic")) return "#d9a521";    // deriver thru taps
+  if (String(src).startsWith("tonic")) return "#d9a521";    // deriver root fires
   if (String(src).startsWith("keyshift")) return "#4fd08c"; // shifter out fires
   return style.getPropertyValue("--ctl");
 }
