@@ -16,6 +16,9 @@ Current coverage:
      zoom-derivation *inputs* can be asserted here, not the post-128 branch).
   3. Wiring grammar: connectAction refuses cross-kind drops.
   4. Key Shifter: card renders its step grid; steps paint from state.
+  5. Key Shifter sizing: S/M/L chips present; a LENGTH-32 track renders fully
+     inside the card at every size (no overflow), cells stay tappable, the
+     chip-set size survives a state rebuild (sizeLocked generalization).
 """
 
 import glob
@@ -246,6 +249,72 @@ def main():
         })()""")
         check("keyshift grid has one cell per step", ks["count"] == 8, str(ks))
         check("keyshift assigned steps paint 'on'", ks["on"] == 2, str(ks))
+
+        # ================================================================
+        # 5 — Key Shifter sizing: 32 steps fit at S, M and L
+        # ================================================================
+        st32 = base_state(
+            [sg, echo],
+            [{"from": "signal_gen", "to": "echo"},
+             {"from": "echo", "to": "master"}],
+            keyshifts=[{"id": "keyshift", "key": 0, "length": 32,
+                        "steps": [2 if i % 4 == 0 else None
+                                  for i in range(32)], "active": 0}])
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st32)
+        page.wait_for_timeout(400)
+
+        chips = page.evaluate(
+            "[...nodes.get('keyshift').el.querySelectorAll('.szchips button')]"
+            ".map(b => b.dataset.sz)")
+        check("keyshift has S/M/L size chips", chips == ["S", "M", "L"],
+              str(chips))
+
+        def ks_fit(size):
+            return page.evaluate("""(size) => {
+              const n = nodes.get('keyshift');
+              n.el.querySelector(`.szchips button[data-sz="${size}"]`).click();
+              const grid = n.el.querySelector('.ksgrid');
+              const steps = [...grid.children];
+              const cr = n.el.getBoundingClientRect();
+              const last = steps[steps.length - 1].getBoundingClientRect();
+              const cell = steps[0].getBoundingClientRect();
+              const zs = parseFloat(world.style.zoom) || 1;
+              return {size: n.size, count: steps.length,
+                      cols: grid.style.gridTemplateColumns,
+                      overflow: last.bottom - cr.bottom,
+                      cellW: cell.width / zs, cellH: cell.height / zs,
+                      visible: steps[0].offsetParent !== null};
+            }""", size)
+
+        for size in ("L", "M", "S"):
+            r = ks_fit(size)
+            page.wait_for_timeout(250)   # let the resize transition settle
+            r = ks_fit(size)             # re-measure at rest
+            check(f"keyshift@{size}: resize applied", r["size"] == size, str(r))
+            check(f"keyshift@{size}: all 32 steps present", r["count"] == 32,
+                  str(r))
+            check(f"keyshift@{size}: grid inside the card (no overflow)",
+                  r["overflow"] <= 1, str(r))
+            check(f"keyshift@{size}: cells tappable (>=7px wide, >=6px tall)",
+                  r["cellW"] >= 7 and r["cellH"] >= 6, str(r))
+            check(f"keyshift@{size}: grid visible", r["visible"], str(r))
+
+        # a step stays clickable at S: click opens the key pop-out
+        page.evaluate("""() => {
+          nodes.get('keyshift').el.querySelectorAll('.ksstep')[1].click();
+        }""")
+        page.wait_for_timeout(80)
+        pop = page.evaluate(
+            "!!document.querySelector('#keypop') && "
+            "document.querySelector('#keypop').style.display !== 'none'")
+        check("keyshift@S: step click opens the key pop-out", pop)
+        page.keyboard.press("Escape")
+
+        # chip-set size survives a rebuild (state resend) via posMem
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st32)
+        page.wait_for_timeout(400)
+        kept = page.evaluate("nodes.get('keyshift').size")
+        check("keyshift chip-set size survives rebuild", kept == "S", kept)
 
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()

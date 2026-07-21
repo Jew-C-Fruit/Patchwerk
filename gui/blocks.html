@@ -145,6 +145,17 @@
   .ksstep.on { background: var(--ctl); color: #0d0d0d; font-weight: 700; }
   .ksstep.sel { outline: 1.5px solid #fff; }
   .ksstep.ph { box-shadow: 0 0 0 1.5px rgba(255,255,255,0.75); }
+  /* key shifter at M/S: denser cells (aspect lock off, tighter gaps, labels
+     shrink then hide) so a length-32 track fits at EVERY size — cols are
+     chosen by paintSteps from the card's current size */
+  .mod[data-size="M"] .ksgrid { gap: 1px; }
+  .mod[data-size="M"] .ksstep { aspect-ratio: auto; height: 11px; border-radius: 1px;
+    font-size: 7px; }
+  .mod[data-size="S"] .ksgrid { gap: 1px; margin: 1px 0; }
+  .mod[data-size="S"] .ksstep { aspect-ratio: auto; height: 8px; border-radius: 1px;
+    font-size: 0; }
+  .mod[data-gid^="keyshift"][data-size="S"] .body { padding: 0 8px 3px 10px; }
+  .mod[data-gid^="keyshift"][data-size="S"] .mini { margin: 1px 0; }
   #keypop { position: fixed; z-index: 80; background: var(--card);
     border: 1px solid var(--ink-2); border-radius: 9px; padding: 6px;
     display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px;
@@ -1320,9 +1331,11 @@ function validMem(m) {
 function applyMem(n) {
   const m = posMem[n.gid];
   if (!validMem(m)) return false;
-  // remembered size binds MONITORS only (chip-set); every other card
-  // re-measures — a stale saved size must never clip newly-added content
-  if (n.montype && (m[3] === "S" || m[3] === "M" || m[3] === "L")) { n.size = m[3]; n.sizeLocked = true; }
+  // remembered size binds CHIP-ADJUSTABLE cards only (monitors + any card
+  // with size chips); every other card re-measures — a stale saved size must
+  // never clip newly-added content
+  if ((n.montype || n.sizeChips) &&
+      (m[3] === "S" || m[3] === "M" || m[3] === "L")) { n.size = m[3]; n.sizeLocked = true; }
   applySize(n);
   const pl = { size: n.size, bx: m[0], by: m[1], half: n.size === "S" ? (m[2] || "top") : null };
   // occupied or out of bounds → fall through to auto-placement
@@ -1409,13 +1422,15 @@ function resizeNode(n, size) {
     place(o);
   }
   n.size = target.size; n.bx = target.bx; n.by = target.by; n.half = target.half || null;
-  if (n.montype) n.sizeLocked = true;
+  if (n.montype || n.sizeChips) n.sizeLocked = true;
   place(n);
+  if (n.onResize) n.onResize();          // size-dependent viz (keyshift grid) repaints
   rerouteAll();
   saveLayout();
   return true;
 }
 function addSizeChips(n) {
+  n.sizeChips = true;                    // chip-set size persists + locks (like monitors)
   const head = n.el.querySelector(".head");
   const box = document.createElement("div");
   box.className = "szchips";
@@ -2819,7 +2834,6 @@ function buildKeyshiftCard(k) {
   ];
   const n = addCard({gid, name: "Key Shifter" + suffix, short: "Shift" + suffix,
     sub: "key transpose · 4 lanes", fam: "ctl", rows,
-    expandable: true, expanded: !!expandMem[gid], wide: true,
     vizHTML: `<div class="ksgrid"></div>`,
     kill: () => send({type: "remove_keyshift", id: gid}),
     ports: [["in", "ctl", "in.1"], ["in", "ctl", "in.2"],
@@ -2830,14 +2844,18 @@ function buildKeyshiftCard(k) {
     const m2 = /^(?:in|out)\.(\d)$/.exec(p.label);
     if (m2) p.lane = parseInt(m2[1], 10);
   }
+  addSizeChips(n);                       // S/M/L — the step grid reflows per size
+  n.onResize = () => paintSteps(n, true);
   n.ks = k;
   const paintSteps = (node, rebuild) => {
     const grid = node.el.querySelector(".ksgrid");
     if (!grid) return;
+    // up to 16 columns (32 steps = two rows at every size); per-size cell
+    // density comes from the [data-size] CSS, repainted on resize
+    const cols = Math.min(16, Math.max(8, k.length));
     if (rebuild || grid.children.length !== k.length) {
       grid.innerHTML = "";
-      grid.style.gridTemplateColumns =
-        `repeat(${Math.min(8, Math.max(4, k.length))}, 1fr)`;
+      grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
       for (let s = 0; s < k.length; s++) {
         const b = document.createElement("button");
         b.className = "ksstep";
@@ -3142,7 +3160,6 @@ function rebuildGraph() {
     if (n.bx !== undefined && n.bx !== null) posMem[n.gid] = memOf(n);
     if (n.gid === "deck") expandMem.deck = n.expanded;
     if (n.gid === "drums") expandMem.drums = n.expanded;
-    if (n.ks) expandMem[n.gid] = n.expanded;
   }
   for (const w of [...wires]) removeWire(w);
   lineCount.audio = 0; lineCount.ctl = 0; lineCount.mod = 0; lineCount.tonic = 0;
