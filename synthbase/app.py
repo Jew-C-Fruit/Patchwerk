@@ -17,7 +17,7 @@ from pathlib import Path
 
 from .arp import Arpeggiator
 from .drone import EVERY as TONIC_EVERY
-from .drone import NOTE_NAMES, TonicDeriver, midi_to_freq
+from .drone import LiteralDeriver, NOTE_NAMES, TonicDeriver, midi_to_freq
 from .drums import DrumMachine
 from .keyshift import KeyShifter
 from .lfo import LFOManager
@@ -224,7 +224,8 @@ class _KeysNode(_FanOut):
         # node's own open taps so monitors don't pin stuck bars
         self._close_taps()
         for s in (self.app.arp, *self.app.voices.values(),
-                  *self.app.tonics.values(), *self.app.keyshifts.values()):
+                  *self.app.tonics.values(), *self.app.literals.values(),
+                  *self.app.keyshifts.values()):
             if s is None:
                 continue
             try:
@@ -278,6 +279,8 @@ class SynthApp:
         self.transport = Transport()
         # v5: tonic derivers (spawnable ctl nodes) replace the DroneBrain.
         self.tonics: dict[str, TonicDeriver] = {}
+        # v6 deriver split: literal derivers (deterministic extract/place)
+        self.literals: dict[str, LiteralDeriver] = {}
         # v6: key shifters (spawnable 4-lane ctl modifiers)
         self.keyshifts: dict[str, KeyShifter] = {}
         self._drone_sinks: dict[str, _DroneSink] = {}  # drone id -> mono sink
@@ -496,15 +499,21 @@ class SynthApp:
             if w["from"] != src:
                 continue
             t = w["to"]
-            if t in self.tonics:
-                sinks.append(self.tonics[t])   # deriver: trigger() = commit
+            d = self._deriver(t)
+            if d is not None:
+                sinks.append(d)   # deriver: trigger() = commit
         return sinks
+
+    def _deriver(self, nid):
+        """Any deriver node (estimator or literal) by id, else None."""
+        return self.tonics.get(nid) or self.literals.get(nid)
 
     def _ctl_src_ok(self, src) -> bool:
         base, lane = self._split_ep(src)
         if base in self.keyshifts:
             return lane is not None and 1 <= lane <= 4
-        return lane is None and (base in CTL_SOURCES or base in self.tonics)
+        return lane is None and (base in CTL_SOURCES or base in self.tonics
+                                 or base in self.literals)
 
     def _ctl_dst_ok(self, dst) -> bool:
         base, lane = self._split_ep(dst)
@@ -513,7 +522,7 @@ class SynthApp:
         return lane is None and (
             base in CTL_TARGETS or base == "voice"  # primary id is reserved
             or base in self.voices or base in self.tonics
-            or self._is_drone_id(base))
+            or base in self.literals or self._is_drone_id(base))
 
     def _ctl_sinks(self, src: str) -> list:
         """Resolve a node's outgoing wires to note-sink objects, live.
@@ -537,6 +546,8 @@ class SynthApp:
                              else self._deck_raw_tap)
             elif t in self.tonics:
                 sinks.append(self.tonics[t])
+            elif t in self.literals:
+                sinks.append(self.literals[t])
             elif self._is_drone_id(t):
                 sinks.append(self._drone_sink(t))  # mono last-note freq sink
             elif base in self.keyshifts and lane is not None:
@@ -558,7 +569,7 @@ class SynthApp:
             # lands ONLY on trigger-ins; never on note sinks
             if self._is_ping_src(src):
                 if action == "add":
-                    if dst not in self.tonics:
+                    if self._deriver(dst) is None:
                         raise ValueError(
                             f"{src!r} emits pings — {dst!r} has no trigger input")
                     w = {"from": src, "to": dst}
@@ -588,10 +599,11 @@ class SynthApp:
                         # controller — stale held notes from the previous one
                         # must not resurface on later note_offs (hold freq)
                         self._drone_sink(dst).all_off()
-                        if src in self.tonics:
+                        d = self._deriver(src)
+                        if d is not None:
                             # fresh deriver→drone wire: aim the drone at the
-                            # current root immediately (don't wait for the grid)
-                            n = self.tonics[src].current_note()
+                            # current note immediately (don't wait for the grid)
+                            n = d.current_note()
                             if n is not None:
                                 self._drone_sink(dst).note_on(n)
             elif action == "remove":
@@ -934,8 +946,10 @@ class SynthApp:
             d.shutdown()
             # snip-heal candidates: note streams IN, note streams OUT (since
             # the drone rework EVERY out is an ordinary ctl wire — a healed
-            # A→drone feeds the drone A's notes, which is exactly the model)
-            ins = [w["from"] for w in self.ctl_wires if w.get("to") == tid]
+            # A→drone feeds the drone A's notes, which is exactly the model).
+            # Ping wires (trigger-ins) are a different kind: never healed.
+            ins = [w["from"] for w in self.ctl_wires
+                   if w.get("to") == tid and not self._is_ping_src(w.get("from"))]
             outs = [w["to"] for w in self.ctl_wires if w.get("from") == tid]
             self.ctl_wires = [w for w in self.ctl_wires
                               if tid not in (w.get("from"), w.get("to"))]
@@ -948,6 +962,35 @@ class SynthApp:
             d = self.tonics.get(tid)
             if d is None:
                 raise KeyError(f"no tonic deriver {tid!r}")
+            d.configure(**settings)
+
+    # -- literal derivers (deterministic extract/place) ---------------------------
+
+    def spawn_literal(self, want_id: str | None = None) -> str:
+        with self._lock:
+            lid = want_id or alloc_id("literal", self.literals.keys())
+            if lid not in self.literals:
+                self.literals[lid] = LiteralDeriver(self, lid)
+            return lid
+
+    def remove_literal(self, lid: str) -> None:
+        with self._lock:
+            d = self.literals.pop(lid, None)
+            if d is None:
+                raise KeyError(f"no literal deriver {lid!r}")
+            d.shutdown()
+            ins = [w["from"] for w in self.ctl_wires
+                   if w.get("to") == lid and not self._is_ping_src(w.get("from"))]
+            outs = [w["to"] for w in self.ctl_wires if w.get("from") == lid]
+            self.ctl_wires = [w for w in self.ctl_wires
+                              if lid not in (w.get("from"), w.get("to"))]
+            self._heal_ctl_snip(ins, outs)
+
+    def set_literal(self, lid: str, **settings) -> None:
+        with self._lock:
+            d = self.literals.get(lid)
+            if d is None:
+                raise KeyError(f"no literal deriver {lid!r}")
             d.configure(**settings)
 
     # -- ping trigger sources (button / clock) -----------------------------------
@@ -1213,7 +1256,7 @@ class SynthApp:
             self.looper.shutdown()
             self.drums.shutdown()
             self.lfos.clear()
-            for d in self.tonics.values():
+            for d in (*self.tonics.values(), *self.literals.values()):
                 d.shutdown()
             for ks in self.keyshifts.values():
                 try:
@@ -1377,6 +1420,7 @@ class SynthApp:
                 "voices": [{"id": vid, "target": v.target_key}
                            for vid, v in self.voices.items()],
                 "tonics": [d.settings() for d in self.tonics.values()],
+                "literals": [d.settings() for d in self.literals.values()],
                 "keyshifts": [k.settings() for k in self.keyshifts.values()],
                 "buttons": [b.settings() for b in self.buttons.values()],
                 "clocks": [c.settings() for c in self.clocks.values()],

@@ -29,6 +29,11 @@ Current coverage:
      family; the grammar is strict (ping↮mod/ctl/audio in BOTH directions);
      the pad click + bound computer key fire; pairing binds only UNASSIGNED
      keys (note keys can never bind) and the binding chip updates.
+  8. Deriver split (item 6): the Estimator card carries knob rows + the
+     12-bar histogram viz that breathes on "deriver" analysis messages
+     (presence/scores toggle, committed vs leading marking, confidence);
+     the Literal card's chips cycle and send set_literal; both derivers
+     take notes/emit notes/accept ping triggers in the grammar.
 """
 
 import glob
@@ -507,6 +512,119 @@ def main():
               {"type": "fire_button", "id": "button"} in sent, str(sent))
         check("bound key does not ALSO play a note",
               not [m for m in sent if m.get("type") == "note_on"], str(sent))
+
+        # ================================================================
+        # 8 — deriver split: Estimator viz + knobs, Literal chips, grammar
+        # ================================================================
+        st_l = base_state(
+            [sg, echo],
+            [{"from": "signal_gen", "to": "echo"},
+             {"from": "echo", "to": "master"}],
+            ctl_wires=[{"from": "keys", "to": "arp"},
+                       {"from": "arp", "to": "voice"},
+                       {"from": "keys", "to": "literal"},
+                       {"from": "literal", "to": "voice"}],
+            tonics=[{"id": "tonic", "every": "1 bar", "everies": ["1 bar"],
+                     "octave": 2, "root": "C", "memory": 6.0,
+                     "stickiness": 1.25, "bass": 0.06,
+                     "listening": "triadic",
+                     "listenings": ["triadic", "root+fifth", "chromatic"]}],
+            literals=[{"id": "literal", "every": "immediate",
+                       "everies": ["immediate", "1 beat", "1 bar"],
+                       "extract": "lowest-held",
+                       "extracts": ["lowest-held", "highest-held",
+                                    "last-played", "first-played"],
+                       "place": "absolute",
+                       "places": ["absolute", "fold", "transpose"],
+                       "fold_octave": 3, "transpose": 0,
+                       "hold_on_empty": True, "note": None}])
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st_l)
+        page.wait_for_timeout(500)
+
+        est = page.evaluate("""(() => {
+          const n = nodes.get('tonic');
+          const labels = [...n.el.querySelectorAll('label')].map(l => l.title);
+          return {name: n.el.querySelector('.title').textContent,
+                  cells: n.el.querySelectorAll('.tonic > div').length,
+                  labels};
+        })()""")
+        check("estimator card renders 12 histogram cells",
+              est["cells"] == 12, str(est))
+        for knob in ("memory", "stickiness", "bass", "listening"):
+            check(f"estimator knob row: {knob}", knob in est["labels"],
+                  str(est))
+
+        # a deriver analysis message animates the bars + marks root/leading
+        page.evaluate("""() => __msg({type: 'deriver', id: 'tonic',
+          weights: [1, 0, 0, 0, 0, 0, 0, 0.6, 0, 0, 0, 0],
+          scores:  [1, 0, 0, 0, 0, 0, 0, 0.9, 0, 0, 0, 0],
+          leading: 7, root: 0, confidence: 0.42})""")
+        page.wait_for_timeout(60)
+        viz = page.evaluate("""(() => {
+          const n = nodes.get('tonic');
+          const cells = [...n.el.querySelectorAll('.tonic > div')];
+          return {h0: cells[0].querySelector('span').style.height,
+                  root0: cells[0].classList.contains('root'),
+                  lead7: cells[7].classList.contains('lead'),
+                  conf: n.el.querySelector('.tconf').textContent};
+        })()""")
+        check("histogram bars follow the weights", viz["h0"] == "100%",
+              str(viz))
+        check("committed root marked distinctly", viz["root0"], str(viz))
+        check("leading candidate outlined", viz["lead7"], str(viz))
+        check("confidence readout shown", "42" in viz["conf"], str(viz))
+
+        # presence/scores toggle swaps the vector
+        page.evaluate("""() => {
+          nodes.get('tonic').el.querySelector('.tmode').click();
+          __msg({type: 'deriver', id: 'tonic',
+            weights: [0.2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            scores:  [0.9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            leading: 0, root: 0, confidence: 0.9});
+        }""")
+        page.wait_for_timeout(60)
+        h0 = page.evaluate(
+            "nodes.get('tonic').el.querySelector('.tonic > div span')"
+            ".style.height")
+        check("scores mode renders the score vector", h0 == "90%", h0)
+
+        # literal card chips cycle and send set_literal
+        lit = page.evaluate(
+            "[...nodes.get('literal').el.querySelectorAll('label')]"
+            ".map(l => l.title)")
+        for rowlabel in ("every", "extract", "place", "value", "on empty"):
+            check(f"literal row: {rowlabel}", rowlabel in lit, str(lit))
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("""() => {
+          const n = nodes.get('literal');
+          const chipOf = (title) => [...n.el.querySelectorAll('label')]
+            .find(l => l.title === title).parentElement.querySelector('.chip');
+          chipOf('extract').click();
+          chipOf('place').click();
+          chipOf('on empty').click();
+        }""")
+        sent = page.evaluate("window.__sent")
+        check("literal chips send set_literal",
+              {"type": "set_literal", "id": "literal",
+               "extract": "highest-held"} in sent
+              and {"type": "set_literal", "id": "literal",
+                   "place": "fold"} in sent
+              and {"type": "set_literal", "id": "literal",
+                   "hold_on_empty": False} in sent, str(sent))
+
+        # grammar: keys→literal + literal→voice drew; ping→literal connects
+        litwires = page.evaluate(
+            "wires.filter(w => w.to.node.gid === 'literal' "
+            "|| w.from.node.gid === 'literal').map(w => w.sig)")
+        check("literal note wires drew (ctl in+out)",
+              litwires.count("ctl") == 2, str(litwires))
+        trig = page.evaluate("""(() => {
+          const n = nodes.get('literal');
+          const p = n.ports.find(p => p.sig === 'ping');
+          return p ? {dir: p.dir, quiet: !!p.quiet} : null;
+        })()""")
+        check("literal has a quiet ping trigger-in",
+              trig == {"dir": "in", "quiet": True}, str(trig))
 
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()

@@ -27,7 +27,16 @@ Protocol (JSON messages):
          fresh instance — duplicates allowed — audio out unconnected)
     {"type": "spawn_voice"} / {"type": "remove_voice", "id": "voice.2"}
     {"type": "spawn_tonic"} / {"type": "remove_tonic", "id": "tonic.2"}
-    {"type": "set_tonic", "id": "tonic", "every": "1 bar", "octave": 2}
+    {"type": "set_tonic", "id": "tonic", "every": "1 bar", "octave": 2,
+     "memory": 6.0, "stickiness": 1.25, "bass": 0.06, "listening": "triadic"}
+        (the ESTIMATOR deriver: statistical, settle-and-land; its analysis
+         — weights/scores/leading/confidence — broadcasts ~5 Hz as
+         {"type": "deriver", "id", ...} for the card histogram)
+    {"type": "spawn_literal"} / {"type": "remove_literal", "id": "literal.2"}
+    {"type": "set_literal", "id": "literal", "every": "immediate",
+     "extract": "lowest-held", "place": "absolute", "fold_octave": 3,
+     "transpose": 0, "hold_on_empty": true}
+        (the LITERAL deriver: deterministic, zero-lag extract×place)
     {"type": "spawn_button"} / {"type": "remove_button", "id": "button.2"}
     {"type": "set_button", "id": "button", "binding": {"kind": "key",
      "code": "KeyN"} | {"kind": "cc", "cc": 20} | null, "armed": true}
@@ -195,10 +204,25 @@ class GuiServer:
         elif t == "remove_tonic":
             self.synth.remove_tonic(m["id"])
             await self._broadcast_state()
-        elif t == "set_tonic":
-            self.synth.set_tonic(m["id"], every=m.get("every"),
-                                 octave=m.get("octave"))
+        elif t == "spawn_literal":
+            self.synth.spawn_literal()
             await self._broadcast_state()
+        elif t == "remove_literal":
+            self.synth.remove_literal(m["id"])
+            await self._broadcast_state()
+        elif t == "set_literal":
+            self.synth.set_literal(
+                m["id"], every=m.get("every"), extract=m.get("extract"),
+                place=m.get("place"), fold_octave=m.get("fold_octave"),
+                transpose=m.get("transpose"),
+                hold_on_empty=m.get("hold_on_empty"))
+            await self._broadcast_state(exclude=sender)
+        elif t == "set_tonic":
+            self.synth.set_tonic(
+                m["id"], every=m.get("every"), octave=m.get("octave"),
+                memory=m.get("memory"), stickiness=m.get("stickiness"),
+                bass=m.get("bass"), listening=m.get("listening"))
+            await self._broadcast_state(exclude=sender)
         elif t == "spawn_keyshift":
             self.synth.spawn_keyshift()
             await self._broadcast_state()
@@ -392,9 +416,19 @@ class GuiServer:
                 levels = await loop.run_in_executor(None, self.synth.levels)
                 await self._broadcast({"type": "meters", **levels})
                 tick += 1
-                if tick % 4 == 0:  # tonic strip ~5 Hz
+                if tick % 4 == 0:  # ~5 Hz
+                    # legacy header strip (archived GUIs)
                     tonic = await loop.run_in_executor(None, self.synth.tonic_state)
                     await self._broadcast({"type": "tonic", **tonic})
+                    # per-estimator analysis: the card histogram breathes on
+                    # this steady tick (weights + scores + leading + committed
+                    # + confidence), not only at commit decisions
+                    for d in list(self.synth.tonics.values()):
+                        try:
+                            a = await loop.run_in_executor(None, d.analysis)
+                        except Exception:  # noqa: BLE001
+                            continue
+                        await self._broadcast({"type": "deriver", **a})
             await asyncio.sleep(METER_INTERVAL)
 
     # -- run -------------------------------------------------------------------
