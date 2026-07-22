@@ -43,9 +43,11 @@ Current coverage:
      swaps blocks ↔ flex; flex renders every card at fixed width with AUTO
      height (data-size F, all rows visible), seeds positions from the
      blocks layout, routes wires with the ported A* router by default and
-     cubic beziers behind the ⌇/∿ toggle; wheel/pinch free-zooms flex
-     always and blocks only while UNLOCKED (locking snaps to the closest
-     grid size); a drag from a dead zone draws a square lasso that
+     cubic beziers behind the ⌇/∿ toggle; scroll PANS (native) while a
+     trackpad pinch (ctrl+wheel) or the +/- controls ZOOM — smoothly
+     (rAF-eased), flex always and blocks only while UNLOCKED (locking
+     snaps to the closest grid size); a drag from a dead zone draws a
+     square lasso that
      mass-selects, a selected card's head drags the WHOLE group, clicking
      anything else deselects; blocks geometry and flex spots both survive
      the mode round-trip.
@@ -988,16 +990,31 @@ def main():
         page.click("#wirestyle")   # back to routed
         page.wait_for_timeout(250)
 
-        # zoom: wheel over the board free-zooms flex (pinch = ctrl+wheel)
+        # zoom: scroll is PAN — only a trackpad PINCH (ctrl+wheel) zooms,
+        # smoothly (rAF-eased toward the target)
         z0 = page.evaluate("parseFloat(world.style.zoom) || 1")
+        page.evaluate("""() => {
+          document.getElementById('board').dispatchEvent(new WheelEvent(
+            'wheel', {deltaY: -240, ctrlKey: false, clientX: 700, clientY: 500,
+                      bubbles: true, cancelable: true}));
+        }""")
+        page.wait_for_timeout(250)
+        zp = page.evaluate("parseFloat(world.style.zoom) || 1")
+        check("flex: plain scroll PANS, never zooms", abs(zp - z0) < 1e-9,
+              f"{z0}->{zp}")
         page.evaluate("""() => {
           document.getElementById('board').dispatchEvent(new WheelEvent(
             'wheel', {deltaY: -240, ctrlKey: true, clientX: 700, clientY: 500,
                       bubbles: true, cancelable: true}));
         }""")
-        page.wait_for_timeout(100)
+        page.wait_for_timeout(120)
+        z_mid = page.evaluate("parseFloat(world.style.zoom) || 1")
+        page.wait_for_timeout(400)
         z1 = page.evaluate("parseFloat(world.style.zoom) || 1")
-        check("flex: pinch/wheel zooms IN (scale rises)", z1 > z0, f"{z0}->{z1}")
+        check("flex: pinch zooms IN (scale rises)", z1 > z0, f"{z0}->{z1}")
+        check("zoom is SMOOTH (eases through intermediate scales)",
+              z0 < z_mid < z1 or abs(z_mid - z1) < 1e-9 and z_mid > z0,
+              f"{z0} -> {z_mid} -> {z1}")
 
         # lasso in flex: drag from empty space around both cards, then drag
         # the group by one card's head — both cards move by the same delta
@@ -1141,9 +1158,9 @@ def main():
             'wheel', {deltaY: -240, ctrlKey: true, clientX: 700, clientY: 500,
                       bubbles: true, cancelable: true}));
         }""")
-        page.wait_for_timeout(80)
+        page.wait_for_timeout(300)
         zb1 = page.evaluate("parseFloat(world.style.zoom) || 1")
-        check("blocks LOCKED: wheel does not zoom", abs(zb1 - zb0) < 1e-9,
+        check("blocks LOCKED: pinch does not zoom", abs(zb1 - zb0) < 1e-9,
               f"{zb0}->{zb1}")
         page.click("#panlock")     # unlock
         page.evaluate("""() => {
@@ -1151,11 +1168,11 @@ def main():
             'wheel', {deltaY: -240, ctrlKey: true, clientX: 700, clientY: 500,
                       bubbles: true, cancelable: true}));
         }""")
-        page.wait_for_timeout(80)
+        page.wait_for_timeout(500)
         zb2 = page.evaluate("parseFloat(world.style.zoom) || 1")
-        check("blocks UNLOCKED: wheel free-zooms", zb2 > zb1, f"{zb1}->{zb2}")
+        check("blocks UNLOCKED: pinch free-zooms", zb2 > zb1, f"{zb1}->{zb2}")
         page.click("#panlock")     # lock again → snap to closest grid size
-        page.wait_for_timeout(80)
+        page.wait_for_timeout(500)
         snap_ok = page.evaluate("""(() => {
           const z = parseFloat(world.style.zoom) || 1;
           for (let c = 3; c <= BX; c++) for (let r = 2; r <= BY; r++)
