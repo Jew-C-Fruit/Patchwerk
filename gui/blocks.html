@@ -492,6 +492,9 @@ const FAMILY = {
 // underlying synth IN PLACE (swap_synth: same instance id, buses, wires).
 const INSTRUMENT_VOICES = ["fm_bell", "pluck", "wind", "wobble_saw"];
 const INSTRUMENT_DEFAULT = "fm_bell";
+// item 3: generator cards whose ∿/● viz is in LIVE mode (by gid) — cards
+// rebuild on every state broadcast; the choice must survive the rebuild
+const scopeLivePref = new Set();
 // subway line palettes — audio owns the cools, notes/control green→yellow,
 // mod the warm+violet half (the population that grows), ping pastel peach.
 const LINES = {
@@ -3340,6 +3343,12 @@ function buildChainCard(mod) {
   // its out bus (polled via the existing {"type":"scope"} message)
   const isScope = mtype === "scope_tap";
   const isPsine = mtype.startsWith("power_sine");
+  // item 3: EVERY generator card gets the ∿static/●live viz (computed
+  // waveform preview + live scope), generalized from the psines. Audio In
+  // is an input (nothing to compute), drone/service cards keep their own
+  // semantics, scope_tap IS a scope already.
+  const isGen = mod.kind === "source" && !mod.service
+    && !["audio_in", "drone", "scope_tap"].includes(mtype);
   // Instrument (item 2): voice-family instances render as ONE card type with
   // a voice dropdown; swap_synth changes the module under the same id/wires
   const isInstrument = INSTRUMENT_VOICES.includes(mtype);
@@ -3361,7 +3370,7 @@ function buildChainCard(mod) {
     fam: mod.family,
     seed: mod.kind === "source" && !mod.service,
     vizHTML: isScope ? `<canvas class="vz" data-viz="scope" height="44"></canvas>`
-      : isPsine ? `<canvas class="vz" data-viz="psine" height="44"></canvas>` : null,
+      : isGen ? `<canvas class="vz" data-viz="gen" height="44"></canvas>` : null,
     headCheck: {
       checked: mod.enabled,
       onChange: (on) => send({type: "set_enabled", key: mod.key, enabled: on}),
@@ -3380,18 +3389,21 @@ function buildChainCard(mod) {
       onUnit: (u) => { n.zoom = u; },
     }));
   }
-  if (isPsine) {
-    // static preview (computed from the module's own coefficient law, morphs
-    // with p/freq/amp) — toggleable to a LIVE zero-cross-synced scope trace
-    n.psineType = mtype;
-    n.psineLive = false;
+  if (isGen) {
+    // static preview (computed per generator type, morphs with its params —
+    // psines from their coefficient law, the rest via genWave), toggleable
+    // to a LIVE zero-cross-synced scope trace of the module's out bus
+    n.psineType = mtype;   // kept name: the gen viz keys off it
+    n.psineLive = scopeLivePref.has(gid);   // live choice survives rebuilds
     const b = document.createElement("button");
     b.className = "pslive";
-    b.textContent = "\u223f static";
+    b.textContent = n.psineLive ? "\u25cf live" : "\u223f static";
+    b.classList.toggle("on", n.psineLive);
     b.title = "toggle static preview / live scope";
     b.addEventListener("pointerdown", (e) => e.stopPropagation());
     b.addEventListener("click", (e) => {
       n.psineLive = !n.psineLive;
+      if (n.psineLive) scopeLivePref.add(gid); else scopeLivePref.delete(gid);
       b.textContent = n.psineLive ? "\u25cf live" : "\u223f static";
       b.classList.toggle("on", n.psineLive);
       e.target.blur();
@@ -4841,20 +4853,96 @@ function animateLfos(now) {
     }
   }
 }
+// deterministic pseudo-noise for KS/wind previews (stable across frames)
+function genNoise(i, seed) {
+  const f = Math.sin(i * 12.9898 + seed * 78.233) * 43758.5453;
+  return (f - Math.floor(f)) * 2 - 1;
+}
+// item 3: per-type static waveform for the generator preview. `pv` = every
+// param's CURRENT value (LFO-modulated where applicable). Returns a
+// Float32Array or null (null → live-only card, e.g. an unknown new type).
+function genWave(mtype, pv, N) {
+  if (mtype.startsWith("power_sine"))
+    return psineWave(mtype, pv.p ?? 2, pv.freq ?? 220, N);
+  const out = new Float32Array(N);
+  if (mtype === "pulse_pad") {
+    // two cycles of the selected wave; pulse drawn at its widest PWM excursion
+    const w = Math.round(pv.wave ?? 0), duty = 0.5 + (pv.pwm ?? 0.2);
+    for (let i = 0; i < N; i++) {
+      const ph = (2 * i / N) % 1;
+      out[i] = w === 0 ? (ph < duty ? 1 : -1)
+        : w === 1 ? 2 * ph - 1
+        : w === 2 ? 1 - 4 * Math.abs(ph - 0.5)
+        : Math.sin(2 * Math.PI * ph);
+    }
+    return out;
+  }
+  if (mtype === "wobble_saw") {
+    // stylized: 8 saw cycles under EXACTLY ONE tremolo cycle — the wobble
+    // is the module's identity and would be invisible at true scale
+    const depth = pv.depth ?? 0.5;
+    for (let i = 0; i < N; i++) {
+      const ph = (8 * i / N) % 1;
+      const lfo = Math.sin(2 * Math.PI * i / N) * 0.5 + 0.5;
+      out[i] = (2 * ph - 1) * (1 - lfo * depth);
+    }
+    return out;
+  }
+  if (mtype === "fm_bell") {
+    // two cycles of 2-op FM at a representative post-envelope index
+    const R = pv.ratio ?? 3.51, I = (pv.index ?? 4) * 0.35;
+    for (let i = 0; i < N; i++) {
+      const th = 4 * Math.PI * i / N;
+      out[i] = Math.sin(th + I * Math.sin(th * R));
+    }
+    return out;
+  }
+  if (mtype === "pluck") {
+    // mini Karplus-Strong: seeded noise through the averaging loop until the
+    // tone settles — damp shapes brightness exactly like the real string
+    const L = 64, damp = Math.min(0.9, Math.max(0, pv.damp ?? 0.4));
+    const buf = new Float32Array(L);
+    for (let i = 0; i < L; i++) buf[i] = genNoise(i, 7);
+    const passes = 6 + Math.round(damp * 30);
+    for (let p = 0; p < passes; p++)
+      for (let i = 0; i < L; i++)
+        buf[i] = 0.5 * (buf[i] + buf[(i + 1) % L]);
+    for (let i = 0; i < N; i++) out[i] = buf[(2 * L * i / N | 0) % L];
+    return out;
+  }
+  if (mtype === "wind") {
+    // seeded noise through a 2-pole resonant bandpass at `center`
+    const fc = pv.center ?? 700, Q = 0.5 + (pv.resonance ?? 1) * 2;
+    const sr = 12000, w0 = 2 * Math.PI * fc / sr, alpha = Math.sin(w0) / (2 * Q);
+    const b0 = alpha, a0 = 1 + alpha, a1 = -2 * Math.cos(w0), a2 = 1 - alpha;
+    let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+    for (let i = 0; i < N; i++) {
+      const x = genNoise(i, 3);
+      const y = (b0 * x - b0 * x2 - a1 * y1 - a2 * y2) / a0;
+      x2 = x1; x1 = x; y2 = y1; y1 = y;
+      out[i] = y;
+    }
+    return out;
+  }
+  return null;   // unknown generator → live scope only
+}
 function drawPsineViz(n, ctx, W, H, style) {
   const m = ((state && state.chain) || []).find(x => x.key === n.chainKey);
   if (!m) return;
-  // when p rides an LFO, the static preview morphs with the modulated value
-  const P = (n._lfoU && n._lfoU.p !== undefined && m.params.p)
-    ? fromUnit(m.params.p, n._lfoU.p)
-    : (m.params.p ? m.params.p.value : 2);
-  const F = m.params.freq ? m.params.freq.value : 220;
-  const A = m.params.amp ? m.params.amp.value : 0.3;
+  const mtype = m.type || String(m.key).split(".")[0];
+  // every param's current value; an LFO-ridden param uses its modulated
+  // value so the preview morphs (generalizes the old p-only special case)
+  const pv = {};
+  for (const [pn, p] of Object.entries(m.params || {}))
+    pv[pn] = (n._lfoU && n._lfoU[pn] !== undefined)
+      ? fromUnit(p, n._lfoU[pn]) : p.value;
+  const A = pv.amp ?? 0.3;
   const mid = H / 2;
   ctx.strokeStyle = style.getPropertyValue("--hairline");
   ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(W, mid); ctx.stroke();
-  ctx.strokeStyle = "#22b8d4";
+  ctx.strokeStyle = mtype.startsWith("power_sine") ? "#22b8d4"
+    : (FAMILY[m.family] || "#3987e5");
   ctx.lineWidth = 1.5;
   if (n.psineLive) {
     const s = scopeData[n.chainKey];
@@ -4879,12 +4967,22 @@ function drawPsineViz(n, ctx, W, H, style) {
     ctx.stroke();
     return;
   }
-  const key = `${n.psineType}|${P.toFixed(3)}|${F.toFixed(1)}`;
+  const key = mtype + "|" + Object.entries(pv)
+    .map(([k, v]) => k + ":" + (+v).toFixed(3)).join("|");
   if (n._psKey !== key) {
-    const w = psineWave(n.psineType, P, F, 256);
-    let pk = 1e-6;
-    for (let i = 0; i < w.length; i++) pk = Math.max(pk, Math.abs(w[i]));
-    n._psWave = w; n._psPeak = pk; n._psKey = key;
+    const w = genWave(mtype, pv, 256);
+    if (!w) { n._psWave = null; n._psKey = key; }
+    else {
+      let pk = 1e-6;
+      for (let i = 0; i < w.length; i++) pk = Math.max(pk, Math.abs(w[i]));
+      n._psWave = w; n._psPeak = pk; n._psKey = key;
+    }
+  }
+  if (!n._psWave) {
+    ctx.fillStyle = "rgba(255,255,255,0.4)";
+    ctx.font = "8px system-ui";
+    ctx.fillText("no preview — use ● live", 6, 10);
+    return;
   }
   // shape-normalized; amp modulates display gain so the knob still reads
   const data = n._psWave, N = data.length;
@@ -5006,7 +5104,7 @@ function drawVizLoop(now) {
       else if (viz === "scope") drawScopeViz(n, ctx, W, H, style);
       else if (viz === "wave") drawWaveViz(n, ctx, W, H, style);
       else if (viz === "notes") drawNotesViz(n, ctx, W, H, now, style);
-      else if (viz === "psine") drawPsineViz(n, ctx, W, H, style);
+      else if (viz === "psine" || viz === "gen") drawPsineViz(n, ctx, W, H, style);
     } catch (err) { console.warn("viz", viz, err); }
   }
   requestAnimationFrame(drawVizLoop);

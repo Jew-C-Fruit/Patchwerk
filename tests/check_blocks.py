@@ -58,6 +58,12 @@ Current coverage:
      carries a voice dropdown sending swap_synth (in-place swap: same id,
      same wires); Estimator→Theory Wizard, Literal→Instant; psines carry
      their mechanism names (Waveshaper / Harmonic Bank / Crossfade).
+  13. Generator viz (item 3): every generator card (sources minus
+     audio_in/drone/scope_tap) carries the ∿static/●live canvas — static
+     previews computed per type (psine law, pulse/saw/tri/sine, wobble
+     tremolo, FM snapshot, mini Karplus-Strong, bandpassed noise), live
+     mode polls the module's out bus via {"type":"scope"}; the mode
+     choice survives state rebuilds; effects get no gen viz.
   9. Routable LFO (item 7): the LFO is a standalone node (palette spawns
      via spawn_lfo, kill sends remove_lfo); the card has rate/depth/shape
      and NO center row; one card fans out to MANY destinations (a mod wire
@@ -1426,6 +1432,60 @@ def main():
               names12["tonic"] == "Theory Wizard", str(names12))
         check("Literal card renamed to Instant",
               names12["literal"] == "Instant", str(names12))
+
+        # ================================================================
+        # 13 — generator viz: ∿static/●live on every generator (item 3)
+        # ================================================================
+        st13 = base_state(
+            [mod("fm_bell", "FM Bell", "source", "voice",
+                 params={"freq": param(), "ratio": param(), "amp": param()}),
+             mod("pulse_pad", "PW Pulse Pad", "source", "voice",
+                 params={"freq": param(), "wave": param(), "pwm": param(),
+                         "amp": param()}),
+             mod("echo", "Echo", "effect", "time")],
+            [{"from": "fm_bell", "to": "echo"},
+             {"from": "pulse_pad", "to": "echo"},
+             {"from": "echo", "to": "master"}],
+            available=AVAIL2)
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st13)
+        page.wait_for_timeout(600)
+        gv = page.evaluate("""(() => {
+          const pick = (k) => {
+            const n = nodes.get('m:' + k);
+            return n && {canvas: !!n.el.querySelector('canvas[data-viz=gen]'),
+                         btn: (n.el.querySelector('.pslive')||{}).textContent,
+                         drawn: n._psKey !== undefined};
+          };
+          const e = nodes.get('m:echo');
+          return {bell: pick('fm_bell'), pad: pick('pulse_pad'),
+                  echoHasViz: !!(e && e.el.querySelector('canvas[data-viz=gen]'))};
+        })()""")
+        check("generator cards carry the gen viz canvas",
+              bool(gv["bell"]) and gv["bell"]["canvas"]
+              and bool(gv["pad"]) and gv["pad"]["canvas"], str(gv))
+        check("gen viz starts in static mode",
+              gv["bell"]["btn"] == "∿ static", str(gv))
+        check("static preview computed at least once (bell)",
+              gv["bell"]["drawn"], str(gv))
+        check("effects do NOT get the gen viz", not gv["echoHasViz"], str(gv))
+
+        # toggle to live: scope polls flow, and the choice survives a rebuild
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("""(() => {
+          nodes.get('m:fm_bell').el.querySelector('.pslive').click();
+        })()""")
+        page.wait_for_timeout(400)
+        sent13 = page.evaluate("window.__sent")
+        check("live mode polls the module's out bus (scope message)",
+              any(m == {"type": "scope", "key": "fm_bell"} for m in sent13),
+              str(sent13[:6]))
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st13)
+        page.wait_for_timeout(500)
+        btn13 = page.evaluate("""(() =>
+          (nodes.get('m:fm_bell').el.querySelector('.pslive')||{}).textContent
+        )()""")
+        check("live choice survives the state rebuild",
+              btn13 == "● live", str(btn13))
 
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()
