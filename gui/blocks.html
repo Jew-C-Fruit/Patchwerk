@@ -56,6 +56,9 @@
     overflow-y: auto; padding: 10px; backdrop-filter: blur(6px); }
   #palette h3 { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
     color: var(--ink-2); margin: 12px 2px 5px; font-weight: 600; }
+  #palette h4 { font-size: 9px; letter-spacing: 0.10em; text-transform: uppercase;
+    color: color-mix(in srgb, var(--ink-2) 72%, transparent);
+    margin: 8px 2px 3px 8px; font-weight: 600; }
   #palette button { display: flex; align-items: center; gap: 7px; width: 100%; text-align: left;
     background: var(--card); color: var(--ink-1); border: 1px solid var(--border);
     border-radius: 7px; padding: 5px 8px; margin: 3px 0; font-size: 12px; cursor: pointer; }
@@ -484,6 +487,11 @@ const FAMILY = {
   io: "#c3c2b7", ctl: "#1baf7a", source: "#3987e5", effect: "#199e70",
   psine: "#22b8d4",
 };
+// item 2: the Instrument card — ONE palette entry fronting the whole voice
+// family. It spawns the default voice; the placed card's dropdown swaps the
+// underlying synth IN PLACE (swap_synth: same instance id, buses, wires).
+const INSTRUMENT_VOICES = ["fm_bell", "pluck", "wind", "wobble_saw"];
+const INSTRUMENT_DEFAULT = "fm_bell";
 // subway line palettes — audio owns the cools, notes/control green→yellow,
 // mod the warm+violet half (the population that grows), ping pastel peach.
 const LINES = {
@@ -3332,8 +3340,25 @@ function buildChainCard(mod) {
   // its out bus (polled via the existing {"type":"scope"} message)
   const isScope = mtype === "scope_tap";
   const isPsine = mtype.startsWith("power_sine");
+  // Instrument (item 2): voice-family instances render as ONE card type with
+  // a voice dropdown; swap_synth changes the module under the same id/wires
+  const isInstrument = INSTRUMENT_VOICES.includes(mtype);
+  const availName = (k) =>
+    (((state && state.available) || []).find(a => a.key === k) || {name: k}).name;
+  if (isInstrument) {
+    const names = INSTRUMENT_VOICES.map(availName);
+    rows.unshift(rowDevSelect("voice", names, availName(mtype), (nm) => {
+      const k = INSTRUMENT_VOICES[names.indexOf(nm)];
+      if (k && k !== mtype) send({type: "swap_synth", id: mod.key, key: k});
+    }));
+  }
+  const suffix2 = mod.key.includes(".") ? " " + mod.key.split(".")[1] : "";
   const n = addCard({
-    gid, name: mod.name, sub: isPsine ? "" : `${mtype} · ${mod.family}`, fam: mod.family,
+    gid,
+    name: isInstrument ? "Instrument" + suffix2 : mod.name,
+    sub: isPsine ? "" : (isInstrument ? `${availName(mtype).toLowerCase()} · voice`
+                                      : `${mtype} · ${mod.family}`),
+    fam: mod.family,
     seed: mod.kind === "source" && !mod.service,
     vizHTML: isScope ? `<canvas class="vz" data-viz="scope" height="44"></canvas>`
       : isPsine ? `<canvas class="vz" data-viz="psine" height="44"></canvas>` : null,
@@ -3527,7 +3552,7 @@ function buildTonicCard(t) {
     }),
     rowChip({gid}, "root", {text: t.root || "listening…", static: true}),
   ];
-  const n = addCard({gid, name: "Estimator" + suffix, short: "Est" + suffix,
+  const n = addCard({gid, name: "Theory Wizard" + suffix, short: "Wiz" + suffix,
                   sub: "root estimator · statistical", fam: "service", rows,
                   vizHTML: `<div class="tonicbar">`
                     + `<span class="tmode" title="raw presence / candidate scores">presence</span>`
@@ -3643,7 +3668,7 @@ function buildLiteralCard(t) {
       },
     }),
   ];
-  const n = addCard({gid, name: "Literal" + suffix, short: "Lit" + suffix,
+  const n = addCard({gid, name: "Instant" + suffix, short: "Inst" + suffix,
                   sub: "note extractor · zero-lag", fam: "service", rows,
                   kill: () => send({type: "remove_literal", id: gid}),
                   ports: [["in", "ctl", "notes"], ["out", "ctl", "note"],
@@ -4369,13 +4394,27 @@ function renderPalette() {
   const h3 = (t) => {
     const h = document.createElement("h3"); h.textContent = t; pal.appendChild(h);
   };
-  h3("voices");
+  const h4 = (t) => {
+    const h = document.createElement("h4"); h.textContent = t; pal.appendChild(h);
+  };
+  // module (drag-capable) palette entry from a state.available record; the
+  // optional name override is how "Instrument" fronts its default voice
+  const modBtn = (a, nameOver) => {
+    const b = document.createElement("button");
+    const shown = nameOver || a.name;
+    b.innerHTML = `<i style="background:${FAMILY[a.family] || "#888"}"></i>${esc(shown)}`;
+    b.addEventListener("pointerdown",
+      (e) => startPaletteDrag(e, b, nameOver ? {...a, name: shown} : a));
+    pal.appendChild(b);
+  };
+  h3("allocation");
   btn("Mono Voice", FAMILY.ctl, () => send({type: "spawn_voice"}));
   h3("control");
   btn("LFO ∿", FAMILY.service, () => send({type: "spawn_lfo"}));
-  btn("Estimator", "#9085e9", () => send({type: "spawn_tonic"}));
-  btn("Literal", "#9085e9", () => send({type: "spawn_literal"}));
   btn("Key Shifter", FAMILY.ctl, () => send({type: "spawn_keyshift"}));
+  h4("extractors");
+  btn("Theory Wizard", "#9085e9", () => send({type: "spawn_tonic"}));
+  btn("Instant", "#9085e9", () => send({type: "spawn_literal"}));
   h3("triggers");
   btn("Button ◉", "#f0b37e", () => send({type: "spawn_button"}));
   btn("Clock ◔", "#f0b37e", () => send({type: "spawn_clock"}));
@@ -4383,15 +4422,38 @@ function renderPalette() {
   // the palette NEVER removes placed modules: any entry can be spawned
   // again — every click/drag makes a fresh instance ("lowpass.2", ...)
   const avail = (state && state.available) || [];
-  for (const [label, kind] of [["sources", "source"], ["effects", "effect"]]) {
-    h3(label);
-    for (const a of avail.filter(x => x.kind === kind && x.key !== "scope_tap")) {
-      const b = document.createElement("button");
-      b.innerHTML = `<i style="background:${FAMILY[a.family] || "#888"}"></i>${esc(a.name)}`;
-      b.addEventListener("pointerdown", (e) => startPaletteDrag(e, b, a));
-      pal.appendChild(b);
-    }
+  const byKey = Object.fromEntries(avail.map(a => [a.key, a]));
+  const used = new Set(["scope_tap"]);
+  const put = (key, nameOver) => {
+    if (byKey[key]) { modBtn(byKey[key], nameOver); used.add(key); }
+  };
+  h3("voices");
+  // the Instrument card: ONE entry for the whole voice family — it spawns
+  // the default voice; the placed card's dropdown swaps the synth in place
+  INSTRUMENT_VOICES.forEach(k => used.add(k));
+  if (byKey[INSTRUMENT_DEFAULT]) put(INSTRUMENT_DEFAULT, "Instrument");
+  put("pulse_pad");
+  put("audio_in");
+  h4("psines");
+  ["power_sine_shaper", "power_sine_additive", "power_sine_blend"].forEach(k => put(k));
+  h4("drone");
+  put("drone");
+  // any source this layout doesn't know about still gets a slot — new
+  // module files must never silently vanish from the palette
+  const extraSrc = avail.filter(x => x.kind === "source" && !used.has(x.key));
+  if (extraSrc.length) { h4("other"); extraSrc.forEach(a => { modBtn(a); used.add(a.key); }); }
+  h3("fx");
+  const FX_SUBS = [["filters", "filter"], ["time & space", "time"],
+                   ["dirt", "dirt"], ["dynamics", "dyn"], ["pitch", "vox"]];
+  for (const [label, fam] of FX_SUBS) {
+    const members = avail.filter(x => x.kind === "effect" && x.family === fam
+                                      && !used.has(x.key));
+    if (!members.length) continue;
+    h4(label);
+    members.forEach(a => { modBtn(a); used.add(a.key); });
   }
+  const extraFx = avail.filter(x => x.kind === "effect" && !used.has(x.key));
+  if (extraFx.length) { h4("other"); extraFx.forEach(a => { modBtn(a); used.add(a.key); }); }
   h3("monitors");
   const scopeAv = avail.find(x => x.key === "scope_tap");
   if (scopeAv) {

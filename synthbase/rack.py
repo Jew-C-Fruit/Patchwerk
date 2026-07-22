@@ -237,15 +237,16 @@ class Rack:
 
     # -- incremental chain edits (in-place, no whole-rack rebuild) ----------------
 
-    def add_module(self, key: str) -> Instance:
+    def add_module(self, key: str, type_key: str | None = None) -> Instance:
         """Spawn ONE module in place, parked on the null bus (connected to
         nothing), without touching any running module. `key` is an instance id;
-        its type is resolved via the registry. Sources start silent (gate=0);
-        effects get a PRIVATE in_bus so a later detach can free it safely.
-        Wiring is applied afterwards through graph_wire/audio_rewire, exactly
-        like every other live edit."""
+        its type is resolved via the registry (or forced by `type_key` — a
+        resumed swap keeps its id while running a different module type).
+        Sources start silent (gate=0); effects get a PRIVATE in_bus so a later
+        detach can free it safely. Wiring is applied afterwards through
+        graph_wire/audio_rewire, exactly like every other live edit."""
         assert self.engine.server is not None, "engine not booted"
-        mod = self._lookup(key)
+        mod = self.registry[type_key] if type_key else self._lookup(key)
         self.engine.register(mod)
         settings = {name: p.default for name, p in mod.params.items()}
         if (mod.kind == "source" and "gate" not in settings
@@ -267,6 +268,57 @@ class Rack:
         inst = Instance(key=key, module=mod, settings=settings, node=node,
                         bus_group=owned, type=mod.key)
         self.instances.append(inst)
+        return inst
+
+    def swap_module(self, key: str, new_type: str) -> Instance:
+        """Swap the module TYPE of a running instance IN PLACE (item 2's
+        Instrument card): same instance id, same buses, same wires, same node
+        ORDER — the new synth REPLACEs the old node on the server. Params
+        shared by name carry their values across; everything else resets to
+        the new module's defaults. Sources come up gated silent, exactly like
+        a fresh spawn (the voice re-gates on the next note)."""
+        assert self.engine.server is not None, "engine not booted"
+        inst = self.find(key)
+        mod = self.registry.get(new_type)
+        if mod is None:
+            raise ValueError(f"unknown module type {new_type!r}")
+        if mod.kind != inst.module.kind:
+            raise ValueError(
+                f"cannot swap {inst.module.kind} {inst.key!r} to "
+                f"{mod.kind} {new_type!r}")
+        if mod.key == inst.type:
+            return inst
+        self.engine.register(mod)
+        settings = {name: p.default for name, p in mod.params.items()}
+        for name in settings:                       # carry shared params
+            if name in inst.module.params and name in inst.settings:
+                settings[name] = inst.settings[name]
+        for name in ("in_bus", "out"):              # buses survive the swap
+            if name in inst.settings:
+                settings[name] = inst.settings[name]
+        if mod.kind == "source" and "gate" in mod.synthdef.parameters:
+            settings["gate"] = 0     # ALWAYS gated silent — never carry a
+                                     # live gate across the swap; the voice
+                                     # re-gates on the next note
+        if not inst.enabled and mod.kind == "effect":
+            # bypassed effect: the live node IS the passthrough — leave it;
+            # re-enable spawns the (new) module synthdef from inst.settings
+            inst.module = mod
+            inst.type = mod.key
+            inst.settings = settings
+            return inst
+        node = self.engine.server.add_synth(
+            mod.synthdef,
+            add_action=AddAction.REPLACE,           # keeps server node order
+            target_node=inst.node,
+            **settings,
+        )
+        inst.module = mod
+        inst.type = mod.key
+        inst.settings = settings
+        inst.node = node
+        if not inst.enabled and mod.kind == "source":
+            node.pause()                            # stay bypassed through the swap
         return inst
 
     def detach_instance(self, key: str) -> None:

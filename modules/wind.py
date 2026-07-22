@@ -26,4 +26,6 @@ def wind(center=700, gust=0.6, resonance=1.0, amp=0.3, out=0):
         BPF.ar(source=PinkNoise.ar(), frequency=drift_l, reciprocal_of_q=resonance),
         BPF.ar(source=PinkNoise.ar(), frequency=drift_r, reciprocal_of_q=resonance),
     ]
-    Out.ar(bus=out, source=[s * swell * amp * 2 for s in sig])
+    # 2.9 = the old 2x headroom boost × 1.45 makeup: level-matched to the
+    # voice family at default params (probe_voice_levels_ws, 2026-07-22)
+    Out.ar(bus=out, source=[s * swell * amp * 2.9 for s in sig])

@@ -163,6 +163,17 @@ def _apply(app, data: dict) -> None:
                 inst = app.rack.find(key)
             except KeyError:
                 continue  # module not present in this patch anymore
+            # a swapped Instrument: the saved type differs from what's
+            # running under this id — swap in place BEFORE applying settings
+            want_type = mod_state.get("type")
+            if (want_type and want_type != inst.type
+                    and want_type in app.registry
+                    and app.registry[want_type].kind == inst.module.kind):
+                try:
+                    app.swap_synth(inst.key, want_type)
+                    inst = app.rack.find(key)
+                except Exception:  # noqa: BLE001
+                    pass
             settings = {
                 k: v for k, v in mod_state.get("settings", {}).items()
                 if k in inst.module.params
@@ -230,7 +241,13 @@ def apply_resume(app) -> bool:
             app.rack.find(key)
         except KeyError:
             try:
-                app.edit_chain("add", key if "." in key else ms.get("type", key))
+                # respawn by ID whenever the id's base type still exists, so
+                # wires keep resolving; a swapped Instrument (stored type !=
+                # id's base) gets its type corrected by _apply's swap pass
+                base = str(key).split(".", 1)[0]
+                app.edit_chain("add",
+                               key if base in app.registry
+                               else ms.get("type", key))
             except Exception:  # noqa: BLE001
                 pass
 

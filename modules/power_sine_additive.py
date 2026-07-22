@@ -16,7 +16,7 @@ from synthbase import module, odd_harmonic_bank, param, power_law_coeffs
 
 
 @module(
-    name="Power Sine (add)",
+    name="Psine Harmonic Bank",
     kind="source",
     params={
         "freq": param(20, 2000, 220, curve="exp"),

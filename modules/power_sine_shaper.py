@@ -20,7 +20,7 @@ from synthbase import module, param
 
 
 @module(
-    name="Power Sine (shaper)",
+    name="Psine Waveshaper",
     kind="source",
     params={
         "freq": param(20, 2000, 220, curve="exp"),

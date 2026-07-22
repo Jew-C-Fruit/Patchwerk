@@ -25,6 +25,9 @@ Protocol (JSON messages):
          accepted and ignored)
     {"type": "spawn_module", "key": "reverb"}      (key = module TYPE; adds a
          fresh instance — duplicates allowed — audio out unconnected)
+    {"type": "swap_synth", "id": "fm_bell.2", "key": "pluck"}   (Instrument
+         card: swap the instance's module type IN PLACE — same id, buses,
+         wires, node order; shared params carry over, the rest reset)
     {"type": "spawn_voice"} / {"type": "remove_voice", "id": "voice.2"}
     {"type": "spawn_tonic"} / {"type": "remove_tonic", "id": "tonic.2"}
     {"type": "set_tonic", "id": "tonic", "every": "1 bar", "octave": 2,
@@ -209,6 +212,10 @@ class GuiServer:
         elif t == "spawn_module":
             await loop.run_in_executor(
                 None, lambda: self.synth.spawn_unconnected(m["key"]))
+            await self._broadcast_state()
+        elif t == "swap_synth":
+            await loop.run_in_executor(
+                None, lambda: self.synth.swap_synth(m["id"], m["key"]))
             await self._broadcast_state()
         elif t == "spawn_voice":
             self.synth.spawn_voice()

@@ -846,6 +846,38 @@ class SynthApp:
                 raise ValueError(f"unknown graph_wire action {action!r}")
             self.rack.reorder_for_wires(self.graph_wires)
 
+    def swap_synth(self, key: str, new_type: str) -> None:
+        """Swap a running instance's module type IN PLACE (the Instrument
+        card's dropdown): same instance id, buses, wires, and node order —
+        rack.swap_module REPLACEs the node on the server. Control-plane
+        hygiene here: LFO destinations (and map guards) on params the new
+        module doesn't have are dropped; surviving mapped params get re-mapped
+        onto the fresh node. Voices keep targeting the id and simply re-gate
+        the new synth on the next note."""
+        with self._lock:
+            if not self.rack:
+                raise RuntimeError("no rack running")
+            inst = self.rack.find(key)
+            key = inst.key
+            if new_type not in self.registry:
+                raise ValueError(f"unknown module type {new_type!r}")
+            new_params = set(self.registry[new_type].params)
+            # dests on params that don't survive the swap go first (their
+            # scale synths would otherwise steer a param the node lacks)
+            for lid, rec in list(self.lfos.instances.items()):
+                for (k, pname) in [d for d in list(rec["dests"])
+                                   if d[0] == key and d[1] not in new_params]:
+                    try:
+                        self.lfos.unwire(lid, k, pname)
+                    except Exception:  # noqa: BLE001
+                        pass
+            self.rack.mapped = {(k, p) for (k, p) in self.rack.mapped
+                                if k != key or p in new_params}
+            self.rack.swap_module(key, new_type)
+            self.lfos.on_node_replaced(key)      # re-map surviving dests
+            if self.graph_wires is not None:
+                self.rack.reorder_for_wires(self.graph_wires)
+
     def spawn_unconnected(self, key: str) -> str:
         """Add a module to the rack with its audio out parked on the null bus
         (palette click / empty-canvas drop). Snapshot the current wiring FIRST
