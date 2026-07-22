@@ -4,7 +4,7 @@
 
 Drives the real server over the websocket and verifies the item-7
 semantics end to end against a LIVE scsynth: the LFO as a standalone
-node, fan-out to two params with DIFFERENT curves (exp cutoff + lin res),
+node, fan-out to two params with DIFFERENT curves (exp cutoff + lin resonance),
 center steering from the mapped param's slider, audible modulation (an
 LFO on the drone's amp makes the meters breathe), and SYNTH-LEAK
 ACCOUNTING via scsynth /status (every spawn/wire/unwire/remove returns
@@ -75,6 +75,8 @@ async def drain_state(ws, timeout=6):
     end = asyncio.get_event_loop().time() + timeout
     while asyncio.get_event_loop().time() < end:
         m = json.loads((await asyncio.wait_for(ws.receive(), timeout)).data)
+        if m["type"] == "error":
+            print("      [server error] " + m.get("message", ""))
         if m["type"] == "state":
             return m
     raise TimeoutError("no state broadcast")
@@ -152,19 +154,19 @@ async def main():
             await ws.send_json({"type": "lfo_wire", "action": "add",
                                 "id": lid, "key": lp, "name": "cutoff"})
             await ws.send_json({"type": "lfo_wire", "action": "add",
-                                "id": lid, "key": lp, "name": "res"})
+                                "id": lid, "key": lp, "name": "resonance"})
             st = await drain_state(ws)
             st = await drain_state(ws)
             l = lfo_by_id(st, lid)
             check("both destinations in state",
                   {(d["key"], d["param"]) for d in l["dests"]}
-                  == {(lp, "cutoff"), (lp, "res")}, str(l))
+                  == {(lp, "cutoff"), (lp, "resonance")}, str(l))
             check("curves differ across the fan-out (exp + lin)",
                   chain_param(st, lp, "cutoff")["curve"] == "exp"
-                  and chain_param(st, lp, "res")["curve"] == "lin")
+                  and chain_param(st, lp, "resonance")["curve"] == "lin")
             check("both params flagged mapped in chain state",
                   chain_param(st, lp, "cutoff")["lfo"]
-                  and chain_param(st, lp, "res")["lfo"])
+                  and chain_param(st, lp, "resonance")["lfo"])
             await asyncio.sleep(0.3)
             n2 = await stable_count()
             check("each destination adds exactly ONE scale synth",
@@ -177,7 +179,7 @@ async def main():
             st = await poke_state(ws, st)
             l = lfo_by_id(st, lid)
             c = next(d["center"] for d in l["dests"] if d["param"] == "cutoff")
-            r = next(d["center"] for d in l["dests"] if d["param"] == "res")
+            r = next(d["center"] for d in l["dests"] if d["param"] == "resonance")
             check("mapped slider steered the cutoff dest center",
                   abs(c - 0.8) < 1e-6, str(l["dests"]))
             check("the OTHER dest's center untouched",
@@ -185,13 +187,13 @@ async def main():
 
             # -- unwire one dest: targeted teardown + param restore --------
             await ws.send_json({"type": "lfo_wire", "action": "remove",
-                                "id": lid, "key": lp, "name": "res"})
+                                "id": lid, "key": lp, "name": "resonance"})
             st = await drain_state(ws)
             l = lfo_by_id(st, lid)
             check("one dest survives a targeted unwire",
                   [d["param"] for d in l["dests"]] == ["cutoff"], str(l))
             check("unwired param unflagged",
-                  not chain_param(st, lp, "res")["lfo"])
+                  not chain_param(st, lp, "resonance")["lfo"])
             await asyncio.sleep(0.3)
             n3 = await stable_count()
             check("unwire frees exactly its scale synth",
@@ -211,6 +213,20 @@ async def main():
             await ws.send_json({"type": "graph_wire", "action": "add",
                                 "from": dk, "to": "master"})
             st = await drain_state(ws)
+            # arm the audio path: a stopped transport PAUSES drones, a
+            # bypassed drone is silent, a zeroed master shows no meters —
+            # remember what we changed and put it back after the check
+            was_running = st["transport"].get("running", True)
+            dch = next(c for c in st["chain"] if c["key"] == dk)
+            was_enabled = dch.get("enabled", True)
+            was_volume = st.get("volume", 0.8)
+            if not was_running:
+                await ws.send_json({"type": "set_transport", "playing": True})
+            if not was_enabled:
+                await ws.send_json({"type": "set_enabled", "key": dk,
+                                    "enabled": True})
+            if was_volume < 0.05:
+                await ws.send_json({"type": "set_volume", "volume": 0.4})
             await ws.send_json({"type": "set_param", "key": dk,
                                 "name": "amp", "unit": 0.5})
             await ws.send_json({"type": "lfo_wire", "action": "add",
@@ -222,10 +238,26 @@ async def main():
             lo, hi = await meter_minmax(ws)
             check("meters breathe under amp modulation",
                   hi > 0.003 and hi > lo * 2.5, f"min {lo:.4f} max {hi:.4f}")
+            # put the rig back the way we found it
+            if not was_running:
+                await ws.send_json({"type": "set_transport", "playing": False})
+            if not was_enabled:
+                await ws.send_json({"type": "set_enabled", "key": dk,
+                                    "enabled": False})
+            if was_volume < 0.05:
+                await ws.send_json({"type": "set_volume",
+                                    "volume": was_volume})
 
             # -- full teardown: back to baseline (leak accounting) ---------
             await ws.send_json({"type": "remove_lfo", "id": lid})
-            st = await drain_state(ws)
+            # drain past stale broadcasts queued by the arming messages
+            for _ in range(8):
+                st = await drain_state(ws)
+                if lfo_by_id(st, lid) is None:
+                    break
+                st = await poke_state(ws, st)
+                if lfo_by_id(st, lid) is None:
+                    break
             check("LFO gone from state", lfo_by_id(st, lid) is None)
             p = chain_param(st, lp, "cutoff")
             expect = p["min"] * (p["max"] / p["min"]) ** 0.8  # steered unit 0.8
