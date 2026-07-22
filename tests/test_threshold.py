@@ -341,6 +341,56 @@ def test_feed():
           calls2 == [False, True], str(calls2))
 
 
+# ---- engine swap (device switch reboots the engine) --------------------------
+
+def test_engine_swap():
+    """A device switch (app.set_devices) reboots the engine: the NEW server
+    must re-receive synthdefs and re-register the /tr callback. Found live
+    2026-07-22: stale registration flags left every post-switch spawn
+    emitting /s_new for defs the new scsynth never had."""
+    app = make_app()
+    tid = app.spawn_threshold()
+    lid = app.spawn_lfo()
+    app.threshold_wire("add", tid, lid)
+    old = app.engine.server
+    check("defs + callback on the FIRST server",
+          len(old.synthdefs) > 0 and len(old.callbacks) == 1)
+
+    # simulate set_devices' teardown half (clear + reset), then a NEW engine
+    app.thresholds.clear()
+    app.lfos.clear()
+    app.thresholds.reset()
+    app.lfos.reset()
+    app.engine = SimpleNamespace(server=FakeServer(), root_group="ROOT")
+    new = app.engine.server
+
+    tid2 = app.spawn_threshold()
+    lid2 = app.spawn_lfo()
+    app.threshold_wire("add", tid2, lid2)
+    check("LFO synthdefs re-sent to the NEW server",
+          any(d is _lfo_norm for d in new.synthdefs), str(new.synthdefs))
+    check("threshold synthdef re-sent to the NEW server",
+          any(d is _threshold_watch for d in new.synthdefs))
+    check("/tr callback re-registered on the NEW server",
+          len(new.callbacks) == 1)
+    check("watch synth spawns on the NEW server",
+          len(watch_synths(app)) == 1)
+
+    # belt & braces: even WITHOUT reset(), per-server tracking must notice
+    # a fresh server object and re-send
+    app.engine = SimpleNamespace(server=FakeServer(), root_group="ROOT")
+    third = app.engine.server
+    app.thresholds.instances[tid2]["node"].source = None  # force re-spawn path
+    app.lfos.instances[lid2]["node"] = None
+    lid3 = app.spawn_lfo()
+    app.threshold_wire("add", tid2, lid3)
+    check("per-server tracking re-sends even without reset()",
+          any(d is _lfo_norm for d in third.synthdefs)
+          and any(d is _threshold_watch for d in third.synthdefs)
+          and len(third.callbacks) == 1,
+          str((third.synthdefs, third.callbacks)))
+
+
 # ---- persistence -------------------------------------------------------------
 
 def test_persistence():
@@ -390,6 +440,7 @@ def main():
     test_ping_grammar_and_fanout()
     test_lfo_removal()
     test_feed()
+    test_engine_swap()
     test_persistence()
     print()
     if FAILURES:
