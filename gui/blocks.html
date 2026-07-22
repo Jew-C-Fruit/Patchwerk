@@ -2818,7 +2818,10 @@ function buildTonicCard(t) {
   const gid = t.id;
   const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
   const rows = [
-    rowChip({gid}, "every", {
+    // label is "trigger" (Cole nomenclature): this row IS the commit
+    // timing — the internal grid until a ping wire overrides it. The
+    // protocol field stays `every`.
+    rowChip({gid}, "trigger", {
       text: t.every,
       onClick: (chip) => {
         const es = t.everies || [];
@@ -2926,7 +2929,7 @@ function buildLiteralCard(t) {
     t.place === "fold" ? `C${t.fold_octave}` :
     t.place === "transpose" ? `${t.transpose >= 0 ? "+" : ""}${t.transpose}` : "—";
   const rows = [
-    rowChip({gid}, "every", {
+    rowChip({gid}, "trigger", {   // "trigger" label, `every` protocol field
       text: t.every,
       onClick: (chip) => {
         const es = t.everies || [];
@@ -3682,6 +3685,11 @@ function rebuildGraph() {
 
   rerouteAll();
   requestAnimationFrame(() => refreshActivity());
+  // SETTLE PASS: L-card bodies shift a beat after first paint (2-col flow,
+  // font metrics, title shrink) — the estimator's trigger-in was rendering
+  // 10px off its row from a stale cached layout. Recompute once settled so
+  // rowEl-anchored quiet handles sit EXACTLY on their rows.
+  setTimeout(rerouteAll, 250);
   if (typeof viewAutoUnlockOnce === "function") viewAutoUnlockOnce();
   saveLayout();
 }
