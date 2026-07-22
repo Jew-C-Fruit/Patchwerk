@@ -38,6 +38,9 @@ jobs:
       - name: Routable LFO tests
         run: python tests/test_lfo.py
 
+      - name: Threshold tests
+        run: python tests/test_threshold.py
+
   gui-checks:
     name: GUI checks (headless Playwright)
     runs-on: ubuntu-latest

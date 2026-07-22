@@ -22,6 +22,7 @@ from .drums import DrumMachine
 from .keyshift import KeyShifter
 from .lfo import LFOManager
 from .ping import ButtonTrigger, ClockTrigger
+from .threshold import ThresholdManager
 from .scope import Scope
 from .looper import Looper
 from . import presets as presets_mod
@@ -288,6 +289,8 @@ class SynthApp:
         # from the source endpoint — see synthbase/ping.py)
         self.buttons: dict[str, ButtonTrigger] = {}
         self.clocks: dict[str, ClockTrigger] = {}
+        # item 8: thresholds (CV edge → ping; watch synths + /tr edge-notify)
+        self.thresholds = ThresholdManager(self)
         self._legacy_drone = False               # set_drone compat pair active
         self._legacy_drone_id: str | None = None
         self.drums = DrumMachine(self)
@@ -487,9 +490,10 @@ class SynthApp:
             return base, -1  # malformed lane — never validates
 
     def _is_ping_src(self, nid) -> bool:
-        """Ping sources (button/clock ids). Their outgoing wires ARE ping
-        wires — the wire kind is inferred from the source endpoint."""
-        return nid in self.buttons or nid in self.clocks
+        """Ping sources (button/clock/threshold ids). Their outgoing wires
+        ARE ping wires — the wire kind is inferred from the source endpoint."""
+        return (nid in self.buttons or nid in self.clocks
+                or nid in self.thresholds.instances)
 
     def _ping_sinks(self, src: str) -> list:
         """Resolve a ping source's outgoing wires to trigger() sinks, live
@@ -1051,6 +1055,29 @@ class SynthApp:
                 raise KeyError(f"no clock trigger {cid!r}")
             c.configure(**settings)
 
+    # -- thresholds (item 8: CV edge → ping) --------------------------------------
+
+    def spawn_threshold(self, want_id: str | None = None) -> str:
+        with self._lock:
+            return self.thresholds.spawn(want_id=want_id)
+
+    def remove_threshold(self, tid: str) -> None:
+        with self._lock:
+            self.thresholds.remove(tid)
+            # a trigger source's wires go with it (no heal: pings have no thru)
+            self.ctl_wires = [w for w in self.ctl_wires
+                              if tid not in (w.get("from"), w.get("to"))]
+
+    def set_threshold(self, tid: str, **settings) -> None:
+        with self._lock:
+            self.thresholds.configure(tid, **settings)
+
+    def threshold_wire(self, action: str, tid: str, lfo_id: str | None) -> None:
+        """Add/remove the CV wire: LFO out → a threshold's CV-in
+        (single-input; ping-out wires ride ctl_wires like button/clock)."""
+        with self._lock:
+            self.thresholds.wire(action, tid, lfo_id)
+
     # -- key shifters -----------------------------------------------------------
 
     def spawn_keyshift(self, want_id: str | None = None) -> str:
@@ -1148,6 +1175,7 @@ class SynthApp:
 
     def remove_lfo(self, lid: str) -> None:
         with self._lock:
+            self.thresholds.on_lfo_removed(lid)  # CV-ins unwire first
             self.lfos.remove(lid)
 
     def lfo_set(self, lid: str, **cfg) -> None:
@@ -1265,6 +1293,7 @@ class SynthApp:
         with self._lock:
             self.looper.shutdown()
             self.drums.shutdown()
+            self.thresholds.clear()   # watch synths before their LFO norms
             self.lfos.clear()
             for d in (*self.tonics.values(), *self.literals.values()):
                 d.shutdown()
@@ -1447,6 +1476,7 @@ class SynthApp:
                 "drums": self.drums.settings(),
                 "looper": self.looper.settings(),
                 "lfos": self.lfos.state(),
+                "thresholds": self.thresholds.state(),
                 "presets": presets_mod.list_presets(),
                 "available": sorted(
                     ({"key": m.key, "name": m.name, "kind": m.kind,

@@ -64,6 +64,16 @@ Protocol (JSON messages):
      "key": "lowpass.2", "name": "cutoff"}
         (modulation fan-out: one LFO drives any number of params; a param
          is single-input — wiring an already-mapped param steals it)
+    {"type": "spawn_threshold"} / {"type": "remove_threshold", "id": "threshold.2"}
+    {"type": "set_threshold", "id": "threshold", "level": 0.0,
+     "hysteresis": 0.02, "mode": "rising"|"falling"|"both"}
+        (item 8: CV edge → ping. level/hysteresis are in the LFO's
+         NORMALIZED bipolar terms; a server-side Schmidt comparator
+         edge-notifies via one SendTrig /tr per crossing — never polled)
+    {"type": "threshold_wire", "action": "add"|"remove", "id": "threshold",
+     "lfo": "lfo.2"}
+        (the CV-in: single-input mod wire from an LFO; the ping-out rides
+         ctl_wire like button/clock and lands only on trigger-ins)
 
   server -> client:
     {"type": "state", ...full snapshot...}       (on connect and after changes)
@@ -292,6 +302,25 @@ class GuiServer:
         elif t == "lfo_set":
             self.synth.lfo_set(m["id"], rate=m.get("rate"), depth=m.get("depth"),
                                shape=m.get("shape"))
+        elif t == "spawn_threshold":
+            self.synth.spawn_threshold()
+            await self._broadcast_state()
+        elif t == "remove_threshold":
+            await loop.run_in_executor(
+                None, lambda: self.synth.remove_threshold(m["id"]))
+            await self._broadcast_state()
+        elif t == "set_threshold":
+            kw = {}
+            for k in ("level", "hysteresis", "mode"):
+                if k in m:
+                    kw[k] = m[k]
+            self.synth.set_threshold(m["id"], **kw)
+            await self._broadcast_state(exclude=sender)
+        elif t == "threshold_wire":
+            await loop.run_in_executor(
+                None, lambda: self.synth.threshold_wire(
+                    m.get("action", "add"), m["id"], m.get("lfo")))
+            await self._broadcast_state()
         elif t == "save_preset":
             await loop.run_in_executor(None, self.synth.save_preset, m["name"])
             await self._broadcast_state()
