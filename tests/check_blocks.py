@@ -447,6 +447,26 @@ def main():
               trig == {"dir": "in", "quiet": True, "label": "trigger"},
               str(trig))
 
+        # trigger cards are SMALL (Cole, 2026-07-22): both measure into S
+        for gid in ("button", "clock"):
+            sz = page.evaluate(f"nodes.get('{gid}').size")
+            check(f"trigger card {gid} sizes to S", sz == "S", str(sz))
+
+        # the trigger-in handle rides the `every` (timing) row's line —
+        # the ping overrides that timer, so they share a row
+        aln = page.evaluate("""(() => {
+          const n = nodes.get('tonic');
+          const lay = computeLayout(n);
+          const row = [...n.el.querySelectorAll('.mini')].find(
+            r => (r.querySelector('label')||{}).title === 'every');
+          const rowY = n.y + row.offsetTop + row.offsetHeight / 2;
+          const t = lay.handles.find(H => H.sig === 'ping');
+          return {rowY, trigY: t && t.y};
+        })()""")
+        check("deriver trigger-in aligns with the every row",
+              aln["trigY"] is not None
+              and abs(aln["trigY"] - aln["rowY"]) < 1.0, str(aln))
+
         wsig = page.evaluate(
             "(wires.find(w => w.from.node.gid === 'button') || {}).sig")
         check("button→deriver wire draws in the ping family",
@@ -562,6 +582,20 @@ def main():
         for knob in ("memory", "stickiness", "bass", "listening"):
             check(f"estimator knob row: {knob}", knob in est["labels"],
                   str(est))
+
+        # the Literal's trigger-in also rides its `every` row line
+        laln = page.evaluate("""(() => {
+          const n = nodes.get('literal');
+          const lay = computeLayout(n);
+          const row = [...n.el.querySelectorAll('.mini')].find(
+            r => (r.querySelector('label')||{}).title === 'every');
+          const rowY = n.y + row.offsetTop + row.offsetHeight / 2;
+          const t = lay.handles.find(H => H.sig === 'ping');
+          return {rowY, trigY: t && t.y};
+        })()""")
+        check("literal trigger-in aligns with the every row",
+              laln["trigY"] is not None
+              and abs(laln["trigY"] - laln["rowY"]) < 1.0, str(laln))
 
         # a deriver analysis message animates the bars + marks root/leading
         page.evaluate("""() => __msg({type: 'deriver', id: 'tonic',
