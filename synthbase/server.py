@@ -27,7 +27,28 @@ Protocol (JSON messages):
          fresh instance — duplicates allowed — audio out unconnected)
     {"type": "spawn_voice"} / {"type": "remove_voice", "id": "voice.2"}
     {"type": "spawn_tonic"} / {"type": "remove_tonic", "id": "tonic.2"}
-    {"type": "set_tonic", "id": "tonic", "every": "1 bar", "octave": 2}
+    {"type": "set_tonic", "id": "tonic", "every": "1 bar", "octave": 2,
+     "memory": 6.0, "stickiness": 1.25, "bass": 0.06, "listening": "triadic"}
+        (the ESTIMATOR deriver: statistical, settle-and-land; its analysis
+         — weights/scores/leading/confidence — broadcasts ~5 Hz as
+         {"type": "deriver", "id", ...} for the card histogram)
+    {"type": "spawn_literal"} / {"type": "remove_literal", "id": "literal.2"}
+    {"type": "set_literal", "id": "literal", "every": "immediate",
+     "extract": "lowest-held", "place": "absolute", "fold_octave": 3,
+     "transpose": 0, "hold_on_empty": true}
+        (the LITERAL deriver: deterministic, zero-lag extract×place)
+    {"type": "spawn_button"} / {"type": "remove_button", "id": "button.2"}
+    {"type": "set_button", "id": "button", "binding": {"kind": "key",
+     "code": "KeyN"} | {"kind": "cc", "cc": 20} | null, "armed": true}
+        (armed = pairing mode: the next NON-TONAL input — a MIDI CC server-
+         side, an unassigned computer key client-side — becomes the binding;
+         MIDI note messages can never bind or fire)
+    {"type": "fire_button", "id": "button"}   (manual click / bound key)
+    {"type": "spawn_clock"} / {"type": "remove_clock", "id": "clock.2"}
+    {"type": "set_clock", "id": "clock", "division": "1/4"}
+        (transport-locked ping every division; ping wires ride ctl_wire
+         with the kind inferred from the button/clock source endpoint —
+         ping-outs land ONLY on trigger-ins, e.g. a deriver)
     {"type": "spawn_keyshift"} / {"type": "remove_keyshift", "id": "keyshift.2"}
     {"type": "set_keyshift", "id": "keyshift", "key": 7, "length": 8,
      "steps": [0, null, 7, ...]}   (key/steps = pitch-class distance from C;
@@ -183,10 +204,25 @@ class GuiServer:
         elif t == "remove_tonic":
             self.synth.remove_tonic(m["id"])
             await self._broadcast_state()
-        elif t == "set_tonic":
-            self.synth.set_tonic(m["id"], every=m.get("every"),
-                                 octave=m.get("octave"))
+        elif t == "spawn_literal":
+            self.synth.spawn_literal()
             await self._broadcast_state()
+        elif t == "remove_literal":
+            self.synth.remove_literal(m["id"])
+            await self._broadcast_state()
+        elif t == "set_literal":
+            self.synth.set_literal(
+                m["id"], every=m.get("every"), extract=m.get("extract"),
+                place=m.get("place"), fold_octave=m.get("fold_octave"),
+                transpose=m.get("transpose"),
+                hold_on_empty=m.get("hold_on_empty"))
+            await self._broadcast_state(exclude=sender)
+        elif t == "set_tonic":
+            self.synth.set_tonic(
+                m["id"], every=m.get("every"), octave=m.get("octave"),
+                memory=m.get("memory"), stickiness=m.get("stickiness"),
+                bass=m.get("bass"), listening=m.get("listening"))
+            await self._broadcast_state(exclude=sender)
         elif t == "spawn_keyshift":
             self.synth.spawn_keyshift()
             await self._broadcast_state()
@@ -197,6 +233,31 @@ class GuiServer:
             self.synth.set_keyshift(m["id"], key=m.get("key"),
                                     length=m.get("length"), steps=m.get("steps"))
             # clicking client already painted its card — update the others
+            await self._broadcast_state(exclude=sender)
+        elif t == "spawn_button":
+            self.synth.spawn_button()
+            await self._broadcast_state()
+        elif t == "remove_button":
+            self.synth.remove_button(m["id"])
+            await self._broadcast_state()
+        elif t == "set_button":
+            kw = {}
+            if "binding" in m:
+                kw["binding"] = m["binding"]
+            if "armed" in m:
+                kw["armed"] = m["armed"]
+            self.synth.set_button(m["id"], **kw)
+            await self._broadcast_state(exclude=sender)
+        elif t == "fire_button":
+            self.synth.fire_button(m["id"])   # hot path: no state broadcast
+        elif t == "spawn_clock":
+            self.synth.spawn_clock()
+            await self._broadcast_state()
+        elif t == "remove_clock":
+            self.synth.remove_clock(m["id"])
+            await self._broadcast_state()
+        elif t == "set_clock":
+            self.synth.set_clock(m["id"], division=m.get("division"))
             await self._broadcast_state(exclude=sender)
         elif t == "set_voice_target":
             self.synth.set_voice_target(m["key"], m.get("voice", "voice"))
@@ -355,9 +416,19 @@ class GuiServer:
                 levels = await loop.run_in_executor(None, self.synth.levels)
                 await self._broadcast({"type": "meters", **levels})
                 tick += 1
-                if tick % 4 == 0:  # tonic strip ~5 Hz
+                if tick % 4 == 0:  # ~5 Hz
+                    # legacy header strip (archived GUIs)
                     tonic = await loop.run_in_executor(None, self.synth.tonic_state)
                     await self._broadcast({"type": "tonic", **tonic})
+                    # per-estimator analysis: the card histogram breathes on
+                    # this steady tick (weights + scores + leading + committed
+                    # + confidence), not only at commit decisions
+                    for d in list(self.synth.tonics.values()):
+                        try:
+                            a = await loop.run_in_executor(None, d.analysis)
+                        except Exception:  # noqa: BLE001
+                            continue
+                        await self._broadcast({"type": "deriver", **a})
             await asyncio.sleep(METER_INTERVAL)
 
     # -- run -------------------------------------------------------------------

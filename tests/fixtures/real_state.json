@@ -1,0 +1,1011 @@
+{
+ "type": "state",
+ "patch": "pad_space",
+ "patches": [
+  "bells",
+  "demo",
+  "mic_fx",
+  "pad_space",
+  "strings",
+  "vox"
+ ],
+ "chain": [
+  {
+   "key": "pulse_pad",
+   "type": "pulse_pad",
+   "name": "Signal Gen",
+   "kind": "source",
+   "family": "voice",
+   "enabled": true,
+   "service": false,
+   "params": {
+    "freq": {
+     "min": 20,
+     "max": 2000,
+     "curve": "exp",
+     "options": [],
+     "default": 220,
+     "lfo": false,
+     "value": 110
+    },
+    "wave": {
+     "min": 0.0,
+     "max": 3.0,
+     "curve": "select",
+     "options": [
+      "pulse",
+      "saw",
+      "tri",
+      "sine"
+     ],
+     "default": 0,
+     "lfo": false,
+     "value": 0
+    },
+    "detune": {
+     "min": 0.0,
+     "max": 50.0,
+     "curve": "lin",
+     "options": [],
+     "default": 12.0,
+     "lfo": false,
+     "value": 12.0
+    },
+    "porta": {
+     "min": 0,
+     "max": 1,
+     "curve": "toggle",
+     "options": [],
+     "default": 0,
+     "lfo": false,
+     "value": 0
+    },
+    "glide": {
+     "min": 0.01,
+     "max": 2.0,
+     "curve": "exp",
+     "options": [],
+     "default": 0.15,
+     "lfo": false,
+     "value": 0.15
+    },
+    "pwm": {
+     "min": 0.0,
+     "max": 0.45,
+     "curve": "lin",
+     "options": [],
+     "default": 0.2,
+     "lfo": false,
+     "value": 0.2
+    },
+    "attack": {
+     "min": 0.005,
+     "max": 2.0,
+     "curve": "exp",
+     "options": [],
+     "default": 0.15,
+     "lfo": false,
+     "value": 0.15
+    },
+    "release": {
+     "min": 0.05,
+     "max": 5.0,
+     "curve": "exp",
+     "options": [],
+     "default": 0.8,
+     "lfo": false,
+     "value": 0.8
+    },
+    "amp": {
+     "min": 0,
+     "max": 1,
+     "curve": "lin",
+     "options": [],
+     "default": 0.22,
+     "lfo": false,
+     "value": 0.22
+    }
+   }
+  },
+  {
+   "key": "power_sine_blend",
+   "type": "power_sine_blend",
+   "name": "Power Sine (blend)",
+   "kind": "source",
+   "family": "psine",
+   "enabled": true,
+   "service": false,
+   "params": {
+    "freq": {
+     "min": 20,
+     "max": 2000,
+     "curve": "exp",
+     "options": [],
+     "default": 220,
+     "lfo": false,
+     "value": 261.6255653005986
+    },
+    "p": {
+     "min": 1,
+     "max": 64,
+     "curve": "exp",
+     "options": [],
+     "default": 2.0,
+     "lfo": false,
+     "value": 1.915428334876809
+    },
+    "amp": {
+     "min": 0,
+     "max": 1,
+     "curve": "lin",
+     "options": [],
+     "default": 0.3,
+     "lfo": false,
+     "value": 0.8656424128914223
+    }
+   }
+  },
+  {
+   "key": "drive",
+   "type": "drive",
+   "name": "Drive",
+   "kind": "effect",
+   "family": "dirt",
+   "enabled": true,
+   "service": false,
+   "params": {
+    "gain": {
+     "min": 1.0,
+     "max": 40.0,
+     "curve": "exp",
+     "options": [],
+     "default": 4.0,
+     "lfo": false,
+     "value": 40.0
+    },
+    "tone": {
+     "min": 500,
+     "max": 12000,
+     "curve": "exp",
+     "options": [],
+     "default": 4000,
+     "lfo": false,
+     "value": 1485.63139856611
+    },
+    "mix": {
+     "min": 0.0,
+     "max": 1.0,
+     "curve": "lin",
+     "options": [],
+     "default": 1.0,
+     "lfo": false,
+     "value": 0.6
+    }
+   }
+  },
+  {
+   "key": "lowpass",
+   "type": "lowpass",
+   "name": "Low-pass Filter",
+   "kind": "effect",
+   "family": "filter",
+   "enabled": true,
+   "service": false,
+   "params": {
+    "cutoff": {
+     "min": 60,
+     "max": 12000,
+     "curve": "exp",
+     "options": [],
+     "default": 1200,
+     "lfo": true,
+     "value": 7669.8763715427685
+    },
+    "resonance": {
+     "min": 0.1,
+     "max": 1.0,
+     "curve": "lin",
+     "options": [],
+     "default": 0.5,
+     "lfo": false,
+     "value": 0.5
+    }
+   }
+  },
+  {
+   "key": "echo",
+   "type": "echo",
+   "name": "Echo",
+   "kind": "effect",
+   "family": "time",
+   "enabled": true,
+   "service": false,
+   "params": {
+    "time": {
+     "min": 0.02,
+     "max": 2.0,
+     "curve": "lin",
+     "options": [],
+     "default": 0.375,
+     "lfo": false,
+     "value": 0.7212360560887752
+    },
+    "feedback": {
+     "min": 0.0,
+     "max": 0.95,
+     "curve": "lin",
+     "options": [],
+     "default": 0.4,
+     "lfo": false,
+     "value": 0.35
+    },
+    "mix": {
+     "min": 0.0,
+     "max": 1.0,
+     "curve": "lin",
+     "options": [],
+     "default": 0.35,
+     "lfo": false,
+     "value": 0.35415962428726017
+    }
+   }
+  },
+  {
+   "key": "reverb",
+   "type": "reverb",
+   "name": "Reverb",
+   "kind": "effect",
+   "family": "time",
+   "enabled": true,
+   "service": false,
+   "params": {
+    "room": {
+     "min": 0.0,
+     "max": 1.0,
+     "curve": "lin",
+     "options": [],
+     "default": 0.6,
+     "lfo": false,
+     "value": 0.8
+    },
+    "damp": {
+     "min": 0.0,
+     "max": 1.0,
+     "curve": "lin",
+     "options": [],
+     "default": 0.5,
+     "lfo": false,
+     "value": 0.5293345494829477
+    },
+    "mix": {
+     "min": 0.0,
+     "max": 1.0,
+     "curve": "lin",
+     "options": [],
+     "default": 0.3,
+     "lfo": false,
+     "value": 0.35
+    }
+   }
+  },
+  {
+   "key": "scope_tap",
+   "type": "scope_tap",
+   "name": "Scope Tap",
+   "kind": "effect",
+   "family": "effect",
+   "enabled": true,
+   "service": false,
+   "params": {
+    "gain": {
+     "min": 0.0,
+     "max": 2.0,
+     "curve": "lin",
+     "options": [],
+     "default": 1.0,
+     "lfo": false,
+     "value": 1.0
+    }
+   }
+  },
+  {
+   "key": "lowpass.2",
+   "type": "lowpass",
+   "name": "Low-pass Filter 2",
+   "kind": "effect",
+   "family": "filter",
+   "enabled": true,
+   "service": false,
+   "params": {
+    "cutoff": {
+     "min": 60,
+     "max": 12000,
+     "curve": "exp",
+     "options": [],
+     "default": 1200,
+     "lfo": false,
+     "value": 4002.4270628875893
+    },
+    "resonance": {
+     "min": 0.1,
+     "max": 1.0,
+     "curve": "lin",
+     "options": [],
+     "default": 0.5,
+     "lfo": false,
+     "value": 0.5
+    }
+   }
+  },
+  {
+   "key": "autopan",
+   "type": "autopan",
+   "name": "Auto Pan",
+   "kind": "effect",
+   "family": "time",
+   "enabled": false,
+   "service": false,
+   "params": {
+    "rate": {
+     "min": 0.05,
+     "max": 10.0,
+     "curve": "exp",
+     "options": [],
+     "default": 0.5,
+     "lfo": false,
+     "value": 0.25
+    },
+    "depth": {
+     "min": 0.0,
+     "max": 1.0,
+     "curve": "lin",
+     "options": [],
+     "default": 0.7,
+     "lfo": false,
+     "value": 0.6
+    }
+   }
+  },
+  {
+   "key": "flanger",
+   "type": "flanger",
+   "name": "Flanger",
+   "kind": "effect",
+   "family": "time",
+   "enabled": true,
+   "service": false,
+   "params": {
+    "rate": {
+     "min": 0.05,
+     "max": 3.0,
+     "curve": "exp",
+     "options": [],
+     "default": 0.25,
+     "lfo": false,
+     "value": 1.0469709721205478
+    },
+    "depth": {
+     "min": 0.0,
+     "max": 1.0,
+     "curve": "lin",
+     "options": [],
+     "default": 0.7,
+     "lfo": false,
+     "value": 0.7
+    },
+    "feedback": {
+     "min": 0.0,
+     "max": 0.9,
+     "curve": "lin",
+     "options": [],
+     "default": 0.4,
+     "lfo": false,
+     "value": 0.4
+    },
+    "mix": {
+     "min": 0.0,
+     "max": 1.0,
+     "curve": "lin",
+     "options": [],
+     "default": 0.5,
+     "lfo": false,
+     "value": 0.5
+    }
+   }
+  },
+  {
+   "key": "drone",
+   "type": "drone",
+   "name": "Drone",
+   "kind": "source",
+   "family": "service",
+   "enabled": false,
+   "service": false,
+   "params": {
+    "freq": {
+     "min": 16,
+     "max": 500,
+     "curve": "exp",
+     "options": [],
+     "default": 55,
+     "lfo": false,
+     "value": 65.40639132514966
+    },
+    "amp": {
+     "min": 0,
+     "max": 1,
+     "curve": "lin",
+     "options": [],
+     "default": 0.16,
+     "lfo": false,
+     "value": 0.8269470886681509
+    },
+    "porta": {
+     "min": 0,
+     "max": 1,
+     "curve": "toggle",
+     "options": [],
+     "default": 1,
+     "lfo": false,
+     "value": 1
+    },
+    "glide": {
+     "min": 0.05,
+     "max": 8.0,
+     "curve": "exp",
+     "options": [],
+     "default": 1.5,
+     "lfo": false,
+     "value": 0.37555217501486365
+    },
+    "shape": {
+     "min": 0,
+     "max": 1,
+     "curve": "lin",
+     "options": [],
+     "default": 0.35,
+     "lfo": false,
+     "value": 0.35
+    },
+    "sub": {
+     "min": 0,
+     "max": 1,
+     "curve": "lin",
+     "options": [],
+     "default": 0.4,
+     "lfo": false,
+     "value": 0.4
+    },
+    "cutoff": {
+     "min": 80,
+     "max": 8000,
+     "curve": "exp",
+     "options": [],
+     "default": 900,
+     "lfo": false,
+     "value": 900
+    }
+   }
+  }
+ ],
+ "volume": 1.0,
+ "devices": {
+  "inputs": [
+   {
+    "name": "Cole\u2019s good purple pocket machine Microphone",
+    "channels": 1,
+    "sample_rate": 48000,
+    "default": false
+   },
+   {
+    "name": "BlackHole 2ch",
+    "channels": 2,
+    "sample_rate": 48000,
+    "default": false
+   },
+   {
+    "name": "MacBook Pro Microphone",
+    "channels": 1,
+    "sample_rate": 44100,
+    "default": true
+   },
+   {
+    "name": "Microsoft Teams Audio",
+    "channels": 1,
+    "sample_rate": 48000,
+    "default": false
+   }
+  ],
+  "outputs": [
+   {
+    "name": "BlackHole 2ch",
+    "channels": 2,
+    "sample_rate": 48000,
+    "default": false
+   },
+   {
+    "name": "MacBook Pro Speakers",
+    "channels": 2,
+    "sample_rate": 44100,
+    "default": true
+   },
+   {
+    "name": "Microsoft Teams Audio",
+    "channels": 1,
+    "sample_rate": 48000,
+    "default": false
+   },
+   {
+    "name": "PD Multi-Output",
+    "channels": 2,
+    "sample_rate": 48000,
+    "default": false
+   }
+  ]
+ },
+ "current_input": null,
+ "current_output": null,
+ "input_enabled": true,
+ "boot_note": null,
+ "voice_target": "power_sine_blend",
+ "voices": [
+  {
+   "id": "voice",
+   "target": "power_sine_blend"
+  }
+ ],
+ "tonics": [
+  {
+   "id": "tonic.2",
+   "every": "1 beat",
+   "everies": [
+    "1 beat",
+    "2 beats",
+    "1 bar",
+    "2 bars",
+    "4 bars"
+   ],
+   "octave": 2,
+   "root": null
+  },
+  {
+   "id": "tonic",
+   "every": "1 bar",
+   "everies": [
+    "1 beat",
+    "2 beats",
+    "1 bar",
+    "2 bars",
+    "4 bars"
+   ],
+   "octave": 2,
+   "root": null
+  }
+ ],
+ "keyshifts": [
+  {
+   "id": "keyshift",
+   "key": 0,
+   "length": 4,
+   "steps": [
+    0,
+    2,
+    0,
+    9
+   ],
+   "active": 0
+  }
+ ],
+ "transpose": 0,
+ "midi_inputs": [
+  "IAC Driver Bus 1"
+ ],
+ "midi_port": "IAC Driver Bus 1",
+ "midi_enabled": true,
+ "wires": [
+  {
+   "from": "pulse_pad",
+   "to": "drive"
+  },
+  {
+   "from": "power_sine_blend",
+   "to": "drive"
+  },
+  {
+   "from": "drive",
+   "to": "lowpass"
+  },
+  {
+   "from": "lowpass",
+   "to": "echo"
+  },
+  {
+   "from": "echo",
+   "to": "reverb"
+  },
+  {
+   "from": "reverb",
+   "to": "autopan"
+  },
+  {
+   "from": "lowpass.2",
+   "to": "master"
+  },
+  {
+   "from": "autopan",
+   "to": "flanger"
+  },
+  {
+   "from": "flanger",
+   "to": "master"
+  },
+  {
+   "from": "drone",
+   "to": "master"
+  }
+ ],
+ "ctl_wires": [
+  {
+   "from": "keys",
+   "to": "arp"
+  },
+  {
+   "from": "arp",
+   "to": "voice"
+  },
+  {
+   "from": "arp",
+   "to": "deck"
+  },
+  {
+   "from": "deck",
+   "to": "voice"
+  },
+  {
+   "from": "deck",
+   "to": "keyshift:1"
+  },
+  {
+   "from": "keys",
+   "to": "drone"
+  }
+ ],
+ "drums_target": "lowpass.2",
+ "arp": {
+  "enabled": true,
+  "division": "1/32",
+  "gate": 1.0,
+  "octaves": 2,
+  "pattern": "updown",
+  "patterns": [
+   "up",
+   "down",
+   "updown",
+   "random",
+   "played"
+  ],
+  "divisions": [
+   "1/1",
+   "1/2",
+   "1/4.",
+   "1/4",
+   "1/4T",
+   "1/8.",
+   "1/8",
+   "1/8T",
+   "1/16",
+   "1/16T",
+   "1/32"
+  ]
+ },
+ "transport": {
+  "bpm": 126.0,
+  "beats_per_bar": 4,
+  "click": false,
+  "accent": true,
+  "running": false,
+  "divisions": [
+   "1/1",
+   "1/2",
+   "1/4.",
+   "1/4",
+   "1/4T",
+   "1/8.",
+   "1/8",
+   "1/8T",
+   "1/16",
+   "1/16T",
+   "1/32"
+  ]
+ },
+ "drone": {
+  "enabled": false,
+  "every": "1 bar",
+  "everies": [
+   "1 beat",
+   "2 beats",
+   "1 bar",
+   "2 bars",
+   "4 bars"
+  ],
+  "octave": 2,
+  "root": null
+ },
+ "drums": {
+  "enabled": true,
+  "patterns": {
+   "kick": [
+    1,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "snare": [
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    0,
+    0
+   ],
+   "hat": [
+    1,
+    1,
+    1,
+    0,
+    1,
+    1,
+    1,
+    0,
+    1,
+    1,
+    1,
+    0,
+    1,
+    0,
+    1,
+    1
+   ],
+   "clap": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "levels": {
+   "kick": 0.43345386310294065,
+   "snare": 0.7,
+   "hat": 0.6,
+   "clap": 0.7
+  },
+  "target": "lowpass.2",
+  "to_chain": true,
+  "lanes": [
+   "kick",
+   "snare",
+   "hat",
+   "clap"
+  ],
+  "steps": 16
+ },
+ "looper": {
+  "state": "empty",
+  "bars": 2,
+  "level": 0.9,
+  "overdub": false,
+  "midi": true,
+  "position": "post",
+  "loop_beats": 8.0,
+  "notes": [],
+  "events": 0
+ },
+ "lfos": [
+  {
+   "id": "lowpass.cutoff",
+   "key": "lowpass",
+   "param": "cutoff",
+   "rate": 0.2879970914138767,
+   "shape": 0,
+   "depth": 0.8362242226454474,
+   "center": 0.5293345494829477,
+   "shapes": [
+    "sine",
+    "tri",
+    "ramp",
+    "square",
+    "s&h"
+   ]
+  }
+ ],
+ "presets": [
+  "spring_steel"
+ ],
+ "available": [
+  {
+   "key": "audio_in",
+   "name": "Audio In",
+   "kind": "source",
+   "family": "input"
+  },
+  {
+   "key": "power_sine_additive",
+   "name": "Power Sine (add)",
+   "kind": "source",
+   "family": "psine"
+  },
+  {
+   "key": "power_sine_blend",
+   "name": "Power Sine (blend)",
+   "kind": "source",
+   "family": "psine"
+  },
+  {
+   "key": "power_sine_shaper",
+   "name": "Power Sine (shaper)",
+   "kind": "source",
+   "family": "psine"
+  },
+  {
+   "key": "drone",
+   "name": "Drone",
+   "kind": "source",
+   "family": "service"
+  },
+  {
+   "key": "fm_bell",
+   "name": "FM Bell",
+   "kind": "source",
+   "family": "voice"
+  },
+  {
+   "key": "pluck",
+   "name": "Pluck",
+   "kind": "source",
+   "family": "voice"
+  },
+  {
+   "key": "pulse_pad",
+   "name": "Signal Gen",
+   "kind": "source",
+   "family": "voice"
+  },
+  {
+   "key": "wind",
+   "name": "Wind",
+   "kind": "source",
+   "family": "voice"
+  },
+  {
+   "key": "wobble_saw",
+   "name": "Wobble Saw",
+   "kind": "source",
+   "family": "voice"
+  },
+  {
+   "key": "bitcrush",
+   "name": "Bitcrush",
+   "kind": "effect",
+   "family": "dirt"
+  },
+  {
+   "key": "drive",
+   "name": "Drive",
+   "kind": "effect",
+   "family": "dirt"
+  },
+  {
+   "key": "wavefolder",
+   "name": "Wavefolder",
+   "kind": "effect",
+   "family": "dirt"
+  },
+  {
+   "key": "compressor",
+   "name": "Compressor",
+   "kind": "effect",
+   "family": "dyn"
+  },
+  {
+   "key": "scope_tap",
+   "name": "Scope Tap",
+   "kind": "effect",
+   "family": "effect"
+  },
+  {
+   "key": "lowpass",
+   "name": "Low-pass Filter",
+   "kind": "effect",
+   "family": "filter"
+  },
+  {
+   "key": "telephone",
+   "name": "Telephone",
+   "kind": "effect",
+   "family": "filter"
+  },
+  {
+   "key": "autopan",
+   "name": "Auto Pan",
+   "kind": "effect",
+   "family": "time"
+  },
+  {
+   "key": "chorus",
+   "name": "Chorus",
+   "kind": "effect",
+   "family": "time"
+  },
+  {
+   "key": "echo",
+   "name": "Echo",
+   "kind": "effect",
+   "family": "time"
+  },
+  {
+   "key": "flanger",
+   "name": "Flanger",
+   "kind": "effect",
+   "family": "time"
+  },
+  {
+   "key": "phaser",
+   "name": "Phaser",
+   "kind": "effect",
+   "family": "time"
+  },
+  {
+   "key": "reverb",
+   "name": "Reverb",
+   "kind": "effect",
+   "family": "time"
+  },
+  {
+   "key": "pitchshift",
+   "name": "Pitch Shift",
+   "kind": "effect",
+   "family": "vox"
+  },
+  {
+   "key": "ringmod",
+   "name": "Ring Mod",
+   "kind": "effect",
+   "family": "vox"
+  }
+ ],
+ "module_errors": {}
+}
