@@ -64,6 +64,15 @@ Current coverage:
      tremolo, FM snapshot, mini Karplus-Strong, bandpassed noise), live
      mode polls the module's out bus via {"type":"scope"}; the mode
      choice survives state rebuilds; effects get no gen viz.
+  14. Deck mini strip (item 4): the collapsed Loop Deck keeps a compact
+     20px track view (miniviz) instead of hiding it; expand grows the
+     full view; round-trips clean.
+  15. Stepped integer sliders (item 5): numeric cycle-chips replaced by
+     detented sliders (keys transpose ±12, tonic octave, literal
+     fold/transpose value, keyshift length over KS_LENGTHS, deck bars
+     1/2/4/8); relative drag through detents (one send per crossing,
+     zoom-safe math), bare click applies nothing; the literal's value
+     row type follows its place mode.
   9. Routable LFO (item 7): the LFO is a standalone node (palette spawns
      via spawn_lfo, kill sends remove_lfo); the card has rate/depth/shape
      and NO center row; one card fans out to MANY destinations (a mod wire
@@ -1524,6 +1533,88 @@ def main():
         })()""")
         check("collapsing returns to the mini strip (not hidden)",
               dk3["mini"] and 0 < dk3["h"] <= 24, str(dk3))
+
+        # ================================================================
+        # 15 — stepped integer sliders replace numeric cycle-chips (item 5)
+        # ================================================================
+        st15 = base_state(
+            [inst_bell], [{"from": "fm_bell", "to": "master"}],
+            available=AVAIL2,
+            keyshifts=[{"id": "keyshift", "key": "C", "length": 4,
+                        "steps": [None, None, None, None]}],
+            literals=[{"id": "literal", "every": "immediate",
+                       "everies": ["immediate"], "extract": "lowest-held",
+                       "extracts": ["lowest-held"], "place": "fold",
+                       "places": ["absolute", "fold", "transpose"],
+                       "fold_octave": 3, "transpose": 0,
+                       "hold_on_empty": True, "note": None}])
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st15)
+        page.wait_for_timeout(500)
+        sl = page.evaluate("""(() => {
+          const stepRow = (gid, label) => {
+            const n = nodes.get(gid);
+            const row = n && [...n.el.querySelectorAll('.mini.stepped')].find(
+              r => (r.querySelector('label')||{}).title === label);
+            return row ? {dets: row.querySelectorAll('.det').length,
+                          v: row.querySelector('.v').textContent} : null;
+          };
+          const lit = nodes.get('literal');
+          return {transpose: stepRow('keys', 'transpose'),
+                  bars: stepRow('deck', 'bars'),
+                  length: stepRow('keyshift', 'length'),
+                  litval: stepRow('literal', 'value'),
+                  litchips: lit
+                    ? [...lit.el.querySelectorAll('.chip')].length : -1};
+        })()""")
+        check("keys transpose is a 25-detent stepped slider",
+              bool(sl["transpose"]) and sl["transpose"]["dets"] == 25
+              and sl["transpose"]["v"] == "0 st", str(sl))
+        check("deck bars is a 4-detent stepped slider (1/2/4/8)",
+              bool(sl["bars"]) and sl["bars"]["dets"] == 4, str(sl))
+        check("keyshift length is a stepped slider over KS_LENGTHS",
+              bool(sl["length"]) and sl["length"]["dets"] == 8
+              and sl["length"]["v"] == "4 bars", str(sl))
+        check("literal fold mode: value is a stepped slider (C3)",
+              bool(sl["litval"]) and sl["litval"]["dets"] == 8
+              and sl["litval"]["v"] == "C3", str(sl))
+
+        # drag the transpose track via synthetic pointer events (viewport-
+        # independent): +4 detents' worth of visual px → exactly +4 st
+        page.evaluate("window.__sent.length = 0")
+        sent15 = page.evaluate("""(() => {
+          const n = nodes.get('keys');
+          const row = [...n.el.querySelectorAll('.mini.stepped')].find(
+            r => (r.querySelector('label')||{}).title === 'transpose');
+          const track = row.querySelector('.track');
+          const zs = parseFloat(world.style.zoom) || 1;
+          const per = (track.offsetWidth || 1) / 24;   // 25 detents → 24 gaps
+          const ev = (type, x) => track.dispatchEvent(new PointerEvent(type,
+            {pointerId: 7, clientX: x, clientY: 0, bubbles: true}));
+          ev('pointerdown', 500);
+          for (let s = 1; s <= 8; s++)
+            ev('pointermove', 500 + (4 * per * zs) * s / 8);
+          ev('pointerup', 500 + 4 * per * zs);
+          return window.__sent.filter(m => m.type === 'set_transpose');
+        })()""")
+        check("dragging steps through detents (set_transpose fired, ints)",
+              bool(sent15) and all(float(m["semitones"]).is_integer()
+                                   for m in sent15), str(sent15))
+        check("drag of 4 detents lands on +4 st exactly",
+              bool(sent15) and sent15[-1]["semitones"] == 4, str(sent15))
+        # a bare click (down+up, no move) applies nothing
+        clicked = page.evaluate("""(() => {
+          window.__sent.length = 0;
+          const n = nodes.get('keys');
+          const row = [...n.el.querySelectorAll('.mini.stepped')].find(
+            r => (r.querySelector('label')||{}).title === 'transpose');
+          const track = row.querySelector('.track');
+          const ev = (type, x) => track.dispatchEvent(new PointerEvent(type,
+            {pointerId: 8, clientX: x, clientY: 0, bubbles: true}));
+          ev('pointerdown', 500); ev('pointerup', 500);
+          return window.__sent.filter(m => m.type === 'set_transpose');
+        })()""")
+        check("bare click on a stepped slider applies nothing",
+              not clicked, str(clicked))
 
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()
