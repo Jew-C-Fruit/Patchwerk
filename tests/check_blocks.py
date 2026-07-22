@@ -954,7 +954,27 @@ def main():
                   zoom: world.style.zoom};
         })()""")
         page.click("#mode-flex")
-        page.wait_for_timeout(400)
+        page.wait_for_timeout(80)   # BEFORE the settle pass and any transition
+        early = page.evaluate("""(() => {
+          const bad = [];
+          for (const r of (window._routedDebug || [])) {
+            if (r.noroute) continue;
+            for (const [H, n] of [[r.sH, r.w.from.node], [r.dH, r.w.to.node]]) {
+              if (!H || !n) continue;
+              const b = flexRect(n);
+              const inX = H.x > b.x - 2 && H.x < b.x + b.w + 2;
+              const inY = H.y > b.y - 2 && H.y < b.y + b.h + 2;
+              const onEdge = Math.abs(H.x - b.x) < 2 || Math.abs(H.x - (b.x + b.w)) < 2
+                          || Math.abs(H.y - b.y) < 2 || Math.abs(H.y - (b.y + b.h)) < 2;
+              if (!(inX && inY && onEdge))
+                bad.push([n.gid, H.edge, H.x | 0, H.y | 0]);
+            }
+          }
+          return bad;
+        })()""")
+        check("switch to flex: wires connect IMMEDIATELY (no transition skew)",
+              early == [], str(early)[:200])
+        page.wait_for_timeout(320)
         check("flex: body carries the mode", page.evaluate(
             "document.body.dataset.mode") == "flex")
         flex = page.evaluate("""(() => {
@@ -974,6 +994,30 @@ def main():
               abs(flex["sg"]["fx"] - pre["sg"]["x"]) <= 8, str((pre, flex)))
         check("flex: every param row stays visible (auto height)",
               flex["rows"] >= 2, str(flex))
+
+        # wires stay CONNECTED across the switch: every routed endpoint must
+        # sit on its card's CURRENT perimeter (the old code measured cards
+        # mid-CSS-transition, landing wires visibly disconnected)
+        page.wait_for_timeout(400)   # past the settle pass
+        discon = page.evaluate("""(() => {
+          const bad = [];
+          for (const r of (window._routedDebug || [])) {
+            if (r.noroute) continue;
+            for (const [H, n] of [[r.sH, r.w.from.node], [r.dH, r.w.to.node]]) {
+              if (!H || !n) continue;
+              const b = flexRect(n);
+              const inX = H.x > b.x - 2 && H.x < b.x + b.w + 2;
+              const inY = H.y > b.y - 2 && H.y < b.y + b.h + 2;
+              const onEdge = Math.abs(H.x - b.x) < 2 || Math.abs(H.x - (b.x + b.w)) < 2
+                          || Math.abs(H.y - b.y) < 2 || Math.abs(H.y - (b.y + b.h)) < 2;
+              if (!(inX && inY && onEdge))
+                bad.push([n.gid, H.edge, H.x, H.y, b]);
+            }
+          }
+          return bad;
+        })()""")
+        check("flex wires stay connected to card perimeters after the switch",
+              discon == [], str(discon)[:200])
 
         # wires: default flex style is the ROUTED (A*) orthogonal path;
         # the ⌇/∿ toggle swaps to bezier curves
