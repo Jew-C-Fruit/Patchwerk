@@ -16,3 +16,4 @@ __pycache__/
 nohup.out
 .resume.json
 psine_wavs/
+continuity/
