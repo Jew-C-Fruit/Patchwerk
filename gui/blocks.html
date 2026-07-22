@@ -177,8 +177,12 @@
     color: var(--ink-2); z-index: 2; }
   /* trigger cards (button/clock): the pad IS the manual fire surface */
   .pingpad { display: flex; align-items: center; justify-content: center;
-    height: 100%; font-size: 15px; color: var(--ping); cursor: pointer;
-    user-select: none; -webkit-user-select: none; }
+    height: 100%; font-size: 15px; line-height: 1; color: var(--ping);
+    cursor: pointer; user-select: none; -webkit-user-select: none; }
+  /* trigger cards are SMALL by design: compact viz padding so sizeFor
+     measures them into S (a fire dot needs no M-card real estate) */
+  .mod[data-gid^="button"] .viz-sec, .mod[data-gid^="clock"] .viz-sec {
+    padding: 2px 10px 5px 14px; }
   .pingpad:hover { filter: brightness(1.25); }
   .pingpad.pulse { animation: pingpulse .22s ease; }
   @keyframes pingpulse { 30% { text-shadow: 0 0 9px var(--ping); transform: scale(1.35); } }
@@ -1039,8 +1043,9 @@ function computeLayout(n) {
   for (const port of n.ports) {
     const ws = wiresAt(n, port);
     // the QUIET band: mod (param-ins + lfo outs) and ping TRIGGER-INS —
-    // node-scoped, left edge, pinned below the primary port list (never in
-    // line with a param row: a trigger commits the whole node)
+    // node-scoped, left edge. A trigger-in carries a rowEl pointing at its
+    // card's `every` (timing) row so it rides that row's line — the ping
+    // overrides that timer, so they share a row (Cole, 2026-07-22).
     const isMod = port.sig === "mod" ||
                   (port.sig === "ping" && port.dir === "in");
     ports.push({ port, ws, isMod, side: port.dir });
@@ -2867,10 +2872,10 @@ function buildTonicCard(t) {
     tm.textContent = n.tonicMode;
   });
   // the trigger-in is NODE-SCOPED (commits the whole deriver): a quiet
-  // handle on the left edge, pinned below the port list — never in line
-  // with a param row. A wired ping overrides the internal `every` timer.
+  // handle on the left edge, IN LINE with the `every` (timing) row — a
+  // wired ping overrides that internal timer, so they share a row.
   const trig = n.ports.find(p => p.sig === "ping");
-  if (trig) trig.quiet = true;
+  if (trig) { trig.quiet = true; trig.rowEl = rows[0]; }
   return n;
 }
 
@@ -2969,8 +2974,9 @@ function buildLiteralCard(t) {
                   ports: [["in", "ctl", "notes"], ["out", "ctl", "note"],
                           ["in", "ping", "trigger"]]});
   valueChip = n.el.querySelectorAll(".chip")[3] || null;
+  // trigger-in rides the `every` row line, same as the Estimator's
   const trig = n.ports.find(p => p.sig === "ping");
-  if (trig) trig.quiet = true;
+  if (trig) { trig.quiet = true; trig.rowEl = rows[0]; }
   return n;
 }
 
