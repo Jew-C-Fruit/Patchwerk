@@ -1,15 +1,15 @@
 """TonicDeriver: a ctl-plane node that listens to notes and derives a root.
 
-v5 split of the old DroneBrain. The drone SOUND is an ordinary spawnable
-module (modules/drone.py); this file is the control-plane component,
-Grasshopper-style: notes in, two outs.
+v5 split of the old DroneBrain; reworked 2026-07 (drone rework, item 3):
+the bespoke "tonic" signal is RETIRED. The deriver is now an ordinary
+ctl-plane node — notes in, ONE mono note stream out:
 
   IN   note events (wired like any ctl node: keys/arp/deck/... -> tonic)
-  OUT1 ctl THRU — the unmodified note stream fans to the deriver's
-       outgoing ctl wires (tonic -> arp/deck/voice/tonic ...)
-  OUT2 TONIC — a "tonic" wire kind carrying root-note updates into drone
-       instances (tonic.X -> drone.Y); the deriver drives each wired
-       drone's `freq`, grid-quantized exactly like the old brain.
+  OUT  the COMMITTED ROOT as a standard note stream (mono: each new root
+       emits the previous root's note_off, then the new root's note_on),
+       fanned over the deriver's outgoing ctl wires like any node. A drone
+       is just a ctl note-sink now (app._DroneSink) — so is a voice, the
+       arp, or a Key Shifter lane; transposition and monitoring all apply.
 
 The estimation brain is extracted into RootEstimator: a time-decaying
 pitch-class histogram with bass emphasis, harmonic-support scoring
@@ -17,8 +17,9 @@ pitch-class histogram with bass emphasis, harmonic-support scoring
 flip-flop. Decisions land only at transport grid points ("every"
 1 beat ... 4 bars).
 
-Emits {"kind": "tap", "src": "<id>", ...} viz taps for the thru stream and
-{"kind": "tonic_out", "id": "<id>", "root": "Eb"} on root changes.
+Emits {"kind": "tap", "src": "<id>", ...} viz taps for its OUTPUT stream
+(the committed roots) and {"kind": "tonic_out", "id": "<id>", "root": "Eb"}
+on root changes.
 """
 
 from __future__ import annotations
@@ -102,13 +103,14 @@ class TonicDeriver:
         self.octave = 2               # root lands at C{octave}..B{octave}
         self.root: int | None = None  # pitch class 0-11
         self.est = RootEstimator()
-        self._open: set[int] = set()  # thru notes on'd but not yet off'd
+        self._open: set[int] = set()  # input notes on'd but not yet off'd
+        self._out_note: int | None = None  # the emitted root note (mono out)
 
         self._thread: threading.Thread | None = None
         self._quit = threading.Event()
         self._ensure_thread()
 
-    # -- note-sink interface (a ctl node: observe + thru) -----------------------
+    # -- note-sink interface (a ctl node: notes in are EVIDENCE only) -----------
 
     def _tap(self, note: int, on: bool) -> None:
         try:
@@ -125,21 +127,21 @@ class TonicDeriver:
                 pass
 
     def note_on(self, note: int, velocity: int = 100) -> None:
+        # input notes feed the estimator (and the held-set for future literal
+        # extraction); they do NOT pass through — the out is the derived root
         self.est.observe(note)
         self._open.add(int(note))
-        self._tap(note, True)
-        self._thru(lambda s: s.note_on(note, velocity))
 
     def note_off(self, note: int) -> None:
         self._open.discard(int(note))
-        self._tap(note, False)
-        self._thru(lambda s: s.note_off(note))
 
     def all_off(self) -> None:
-        # close open thru taps — silencing paths must never strand an "on"
-        for n in list(self._open):
-            self._tap(n, False)
+        # panic: clear input state, release the emitted root downstream and
+        # close its tap — silencing paths must never strand an "on"
         self._open.clear()
+        if self._out_note is not None:
+            self._tap(self._out_note, False)
+            self._out_note = None
         self._thru(lambda s: s.all_off())
 
     def set_sustain(self, on: bool) -> None:
@@ -155,7 +157,7 @@ class TonicDeriver:
             self.every = kw["every"]
         if kw.get("octave") is not None:
             self.octave = min(4, max(0, int(kw["octave"])))
-            self.drive_drones()  # re-pitch wired drones at the new octave
+            self._emit_root()  # re-voice the emitted root at the new octave
 
     def settings(self) -> dict:
         return {
@@ -167,48 +169,52 @@ class TonicDeriver:
         }
 
     def shutdown(self) -> None:
+        # release the emitted root downstream first — a removed deriver must
+        # not leave its note ringing (drones HOLD by design; voices release)
+        if self._out_note is not None:
+            note = self._out_note
+            self._tap(note, False)
+            self._thru(lambda s: s.note_off(note))
+            self._out_note = None
         self._quit.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=1)
 
-    # -- the TONIC out: drive wired drone instances ------------------------------
+    # -- the OUT: the committed root as a mono note stream ------------------------
 
     def _root_note(self) -> int | None:
         if self.root is None:
             return None
         return 12 * (self.octave + 1) + self.root
 
-    def drive_drones(self, only: str | None = None) -> None:
-        """Push the current root into every drone wired tonic.<id> -> drone.X
-        (or just `only`), honoring each drone's follow toggle."""
+    def _emit_root(self) -> None:
+        """Move the emitted root note to the current root/octave (mono:
+        previous root's note_off first, then the new root's note_on)."""
         note = self._root_note()
-        app = self.app
-        if note is None or app.rack is None:
+        prev = self._out_note
+        if note == prev:
             return
-        for w in list(getattr(app, "ctl_wires", []) or []):
-            if w.get("from") != self.id:
-                continue
-            dst = w.get("to")
-            if only is not None and dst != only:
-                continue
-            if not app._is_drone_id(dst):
-                continue
-            if not app.drone_follow.get(dst, True):
-                continue
-            try:
-                app.rack.set_param(dst, "freq", midi_to_freq(note))
-            except Exception:  # noqa: BLE001 — rack mid-rebuild; next tick lands
-                pass
+        if prev is not None:
+            self._tap(prev, False)
+            self._thru(lambda s: s.note_off(prev))
+        self._out_note = note
+        if note is not None:
+            self._tap(note, True)
+            self._thru(lambda s: s.note_on(note, 100))
+
+    def current_note(self) -> int | None:
+        """The note this deriver is currently emitting (None = none yet)."""
+        return self._out_note
 
     def decide(self) -> None:
-        """One grid-point decision: estimate, and on a root change drive the
-        wired drones + emit the tonic_out event. (The thread calls this;
-        tests may call it directly.)"""
+        """One grid-point decision: estimate, and on a root change emit the
+        new root note downstream + the tonic_out event. (The thread calls
+        this; tests may call it directly.)"""
         new_root = self.est.estimate(self.root)
         if new_root is None or new_root == self.root:
             return
         self.root = new_root
-        self.drive_drones()
+        self._emit_root()
         try:
             self.app._emit_midi_event(
                 {"kind": "tonic_out", "id": self.id, "root": NOTE_NAMES[new_root]})

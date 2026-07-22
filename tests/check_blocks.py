@@ -19,6 +19,11 @@ Current coverage:
   5. Key Shifter sizing: S/M/L chips present; a LENGTH-32 track renders fully
      inside the card at every size (no overflow), cells stay tappable, the
      chip-set size survives a state rebuild (sizeLocked generalization).
+  6. Drone rework: the "tonic" signal kind is fully retired (PRIMARY_SIGS,
+     CSS vars, legend, header strip, connectAction); the drone card is an
+     ordinary MONO ctl note-sink (play-in, no follow chip); the deriver has
+     ONE ctl out; keys→drone and deriver→drone wire as plain ctl; ctl wires
+     into drones draw in the ctl family.
 """
 
 import glob
@@ -315,6 +320,74 @@ def main():
         page.wait_for_timeout(400)
         kept = page.evaluate("nodes.get('keyshift').size")
         check("keyshift chip-set size survives rebuild", kept == "S", kept)
+
+        # ================================================================
+        # 6 — drone rework: tonic retired; drone is a plain mono ctl sink
+        # ================================================================
+        drone = mod("drone", "Drone", "source", "service",
+                    {"freq": param(55, 16, 500), "amp": param(0.16),
+                     "glide": param(1.5, 0.05, 8.0)})
+        st_d = base_state(
+            [sg, drone, echo],
+            [{"from": "signal_gen", "to": "echo"},
+             {"from": "echo", "to": "master"},
+             {"from": "drone", "to": "master"}],
+            ctl_wires=[{"from": "keys", "to": "arp"},
+                       {"from": "arp", "to": "voice"},
+                       {"from": "arp", "to": "tonic"},
+                       {"from": "tonic", "to": "drone"}],
+            tonics=[{"id": "tonic", "every": "1 bar",
+                     "everies": ["1 bar"], "octave": 2, "root": "C"}])
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st_d)
+        page.wait_for_timeout(500)
+
+        check("PRIMARY_SIGS has no tonic kind",
+              page.evaluate("!PRIMARY_SIGS.has('tonic')"))
+        check("no --tonic CSS var remains", page.evaluate(
+            "!getComputedStyle(document.documentElement)"
+            ".getPropertyValue('--tonic').trim()"))
+        check("no tonic legend entry", page.evaluate(
+            "!document.querySelector('[data-legend=tonic]')"))
+        check("no header tonic-root strip", page.evaluate(
+            "!document.getElementById('tonic-root')"))
+
+        dports = page.evaluate(
+            "nodes.get('m:drone').ports.filter(p => !p.quiet)"
+            ".map(p => [p.dir, p.sig, p.label])")
+        check("drone in-port is ctl 'play' (no tonic port)",
+              ["in", "ctl", "play"] in dports
+              and not any(p[1] == "tonic" for p in dports), str(dports))
+        check("drone card has no follow chip", page.evaluate(
+            "![...nodes.get('m:drone').el.querySelectorAll('label')]"
+            ".some(l => l.title === 'follow')"))
+        tports = page.evaluate(
+            "nodes.get('tonic').ports.map(p => [p.dir, p.sig, p.label])")
+        check("deriver has ONE ctl out (root), no tonic/thru",
+              tports.count(["out", "ctl", "root"]) == 1
+              and not any(p[1] == "tonic" for p in tports), str(tports))
+
+        # the deriver→drone wire from state draws in the ctl family
+        wsig = page.evaluate(
+            "(wires.find(w => w.to.node.gid === 'm:drone'"
+            " && w.sig !== 'audio') || {}).sig")
+        check("wire into the drone rides the ctl family", wsig == "ctl", wsig)
+
+        # grammar: keys→drone and deriver→drone connect as ctl; nothing tonic
+        acts = page.evaluate("""(() => {
+          const drone = nodes.get('m:drone');
+          const pi = drone.ports.find(p => p.sig === 'ctl' && p.dir === 'in');
+          const mk = (gid) => ({node: nodes.get(gid),
+            port: nodes.get(gid).ports.find(p => p.dir === 'out' && p.sig === 'ctl')});
+          return {
+            keys: !!connectAction(mk('keys'), {node: drone, port: pi}),
+            tonic: !!connectAction(mk('tonic'), {node: drone, port: pi}),
+          };
+        })()""")
+        check("keys→drone play-in connects (ctl)", acts["keys"], str(acts))
+        check("deriver→drone play-in connects (ctl)", acts["tonic"], str(acts))
+        check("drone play-in is single-input (no + handle)", page.evaluate(
+            "!portAllowsPlus(nodes.get('m:drone').ports"
+            ".find(p => p.sig === 'ctl' && p.dir === 'in'))"))
 
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()

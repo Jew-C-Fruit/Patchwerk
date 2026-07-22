@@ -8,7 +8,8 @@ rebuild), the drums target / to_chain compatibility mapping, the control
 plane (ctl_wires defaults, add/remove + validation, keys/arp dispatch
 through the wires, deck sink resolution, select_patch reset), and the v5
 structure: instance ids (duplicates, legacy type-key resolution), multiple
-mono voices, and tonic-deriver → drone root-follow.
+mono voices, and the drone rework (drone as a mono ctl note-sink; the
+deriver emitting its committed root as a standard note stream).
 """
 
 import sys
@@ -368,14 +369,16 @@ def test_alloff_closes_taps():
     check("arp all_off closes its open arp taps",
           {"kind": "tap", "src": "arp", "note": 72, "on": False} in taps)
 
-    # deriver thru: all_off closes its open thru taps
+    # deriver out: all_off releases the emitted root + closes its tap
     tid = app.spawn_tonic()
     d = app.tonics[tid]
-    d.note_on(55)
+    for _ in range(4):
+        d.est.observe(43)          # strong G evidence
+    d.decide()                     # emits the root note (G2 = 43) + its tap
     taps.clear()
     d.all_off()
-    check("tonic deriver all_off closes its open thru taps",
-          {"kind": "tap", "src": "tonic", "note": 55, "on": False} in taps)
+    check("tonic deriver all_off closes its emitted root's tap",
+          {"kind": "tap", "src": "tonic", "note": 43, "on": False} in taps)
     d.shutdown()
 
     # deck replay release: _release_all emits src=deck off taps
@@ -793,15 +796,16 @@ def test_snip_heal_ctl():
     app.remove_tonic("tonic")
     check("self-loop heal is dropped silently", app.ctl_wires == [])
 
-    # tonic→drone wires are a different signal kind: never healed into
+    # drone rework: a deriver's out is an ORDINARY ctl wire — removing a
+    # 1-in/1-out deriver that fed a drone heals A→drone (A's notes drive it)
     app2 = SynthApp(use_midi=False, use_reload=False)
     app2.rack = RecordingRack([("pluck", "source"), ("drone", "source")], [])
     app2.spawn_tonic()
     app2.ctl_wires = [{"from": "keys", "to": "tonic"},
                       {"from": "tonic", "to": "drone"}]
     app2.remove_tonic("tonic")
-    check("tonic-out (drone) wires drop, never heal",
-          app2.ctl_wires == [])
+    check("deriver removal heals its drone wire (ordinary ctl now)",
+          app2.ctl_wires == [{"from": "keys", "to": "drone"}])
 
     # keyshift: heal PER LANE (each lane is its own A→X→B)
     app3 = SynthApp(use_midi=False, use_reload=False)
@@ -1155,65 +1159,113 @@ def test_tonic_drone():
     check("second deriver suffixes", app.spawn_tonic() == "tonic.2")
     app.remove_tonic("tonic.2")
 
-    # tonic outs only connect to tonic ins (drone instances)
-    try:
-        app.set_ctl_wire("add", "keys", "drone")
-        check("non-tonic src rejected into a drone", False)
-    except ValueError:
-        check("non-tonic src rejected into a drone", True)
-    app.set_ctl_wire("add", "tonic", "drone")
-    check("tonic→drone wire accepted",
-          {"from": "tonic", "to": "drone"} in app.ctl_wires)
+    def drone_freqs():
+        return [c[3] for c in app.rack.calls
+                if c[0] == "set_param" and c[1] == "drone" and c[2] == "freq"]
 
-    # thru: notes wired INTO the deriver observe + fan out its ctl wires
+    # drone rework: the drone is an ordinary MONO ctl note-sink — ANY note
+    # source wires straight in and note_ons retarget freq (last-note priority)
+    app.set_ctl_wire("add", "keys", "drone")
+    check("keys→drone accepted (drone is a plain ctl sink)",
+          {"from": "keys", "to": "drone"} in app.ctl_wires)
+    app.note_on(60)   # middle C
+    check("note_on retargets the drone's freq",
+          drone_freqs() and abs(drone_freqs()[-1] - 261.63) < 0.1)
+    app.note_on(64)   # E4 takes over (last-note priority)
+    check("newer note takes over", abs(drone_freqs()[-1] - 329.63) < 0.1)
+    app.rack.calls.clear()
+    app.note_off(60)  # releasing a NON-sounding note must not retarget
+    check("off of a non-root note leaves freq alone", not drone_freqs())
+    app.note_off(64)  # releasing the last note HOLDS (no silence, no retarget)
+    check("releasing the last note holds the root", not drone_freqs())
+    app.note_on(60)
+    app.note_on(64)
+    app.rack.calls.clear()
+    app.note_off(64)  # releasing the sounding root falls back to newest held
+    check("root release falls back to the newest held note",
+          drone_freqs() and abs(drone_freqs()[-1] - 261.63) < 0.1)
+    app.all_notes_off()
+    app.set_ctl_wire("remove", "keys", "drone")
+
+    # REWIRE HYGIENE (live-found): held notes must not leak across wires —
+    # a note held under an old wire must never resurface as a fallback root
+    app.set_ctl_wire("add", "keys", "drone")
+    app.note_on(36)                       # held under wire #1
+    app.set_ctl_wire("remove", "keys", "drone")   # cut clears held (holds freq)
+    app.set_ctl_wire("add", "keys", "drone")      # new controller, clean slate
+    app.note_on(45)
+    app.note_on(52)
+    app.rack.calls.clear()
+    app.note_off(52)                      # falls back to 45 — NEVER stale 36
+    check("cut wire's held notes never resurface (fallback is 45, not 36)",
+          drone_freqs() and abs(drone_freqs()[-1] - 110.0) < 0.5)
+    app.note_off(45)
+    app.all_notes_off()
+    app.set_ctl_wire("remove", "keys", "drone")
+
+    # deriver: input notes are EVIDENCE only; the out is the committed root
+    # as a mono note stream over ordinary ctl wires
     sink = FakeNoteSink()
     app.voices["voice"] = sink
     app.set_ctl_wire("add", "keys", "tonic")
     app.set_ctl_wire("add", "tonic", "voice")
     d = app.tonics["tonic"]
     app.note_on(48)  # C2, heavy bass evidence
-    check("deriver thru forwards the unmodified stream", sink.ons == [48])
-    check("deriver emitted a thru tap", any(
-        e.get("kind") == "tap" and e.get("src") == "tonic" for e in events))
-
-    # fake estimator feed → grid decision drives the wired drone's freq
+    check("input notes do NOT pass through the deriver", sink.ons == [])
     for _ in range(4):
         d.est.observe(48)
         d.est.observe(60)
         d.est.observe(67)  # C major-ish: root should land on C (pc 0)
     d.decide()
     check("decide() picked C as root", d.root == 0)
-    freq_sets = [c for c in app.rack.calls
-                 if c[0] == "set_param" and c[1] == "drone" and c[2] == "freq"]
-    check("root change drove the wired drone's freq", len(freq_sets) >= 1
-          and abs(freq_sets[-1][3] - 65.41) < 0.1)   # C2 at octave 2
+    check("committed root emitted as a note (C at octave 2 = 36)",
+          sink.ons == [36])
+    check("root emission tapped (src=tonic)", any(
+        e.get("kind") == "tap" and e.get("src") == "tonic"
+        and e.get("note") == 36 and e.get("on") for e in events))
     check("tonic_out event emitted", any(
         e.get("kind") == "tonic_out" and e.get("id") == "tonic"
         and e.get("root") == "C" for e in events))
 
-    # follow toggle off: further root changes leave the drone alone
-    app.set_drone_follow("drone", False)
-    app.rack.calls.clear()
+    # root moves on → MONO handoff: previous root off, new root on
     for _ in range(30):
         d.est.observe(43)
         d.est.observe(50)
         d.est.observe(55)  # strong G evidence
     d.decide()
     check("root moved on", d.root == 7)
-    check("follow off leaves the drone alone", not any(
-        c[0] == "set_param" and c[1] == "drone" for c in app.rack.calls))
-    # ...and toggling back on re-applies the current root immediately
-    app.set_drone_follow("drone", True)
-    check("follow on re-pitches immediately", any(
-        c[0] == "set_param" and c[1] == "drone" and c[2] == "freq"
-        for c in app.rack.calls))
+    check("mono out: old root off, new root on",
+          sink.offs == [36] and sink.ons == [36, 43])
 
-    # octave knob re-pitches wired drones
+    # a FRESH deriver→drone wire aims the drone at the current root at once
+    app.rack.calls.clear()
+    app.set_ctl_wire("add", "tonic", "drone")
+    check("fresh deriver→drone wire pitches immediately (G2)",
+          drone_freqs() and abs(drone_freqs()[-1] - 98.0) < 0.1)
+
+    # octave knob re-voices the emitted root everywhere it is wired
     app.rack.calls.clear()
     app.set_tonic("tonic", octave=1)
-    fs = [c for c in app.rack.calls if c[0] == "set_param" and c[1] == "drone"]
-    check("octave change re-pitches at the new octave",
-          fs and abs(fs[-1][3] - 49.0) < 0.5)  # G1 at octave 1
+    check("octave change re-pitches the wired drone (G1)",
+          drone_freqs() and abs(drone_freqs()[-1] - 49.0) < 0.5)
+    check("octave change moved the mono note out too",
+          sink.offs[-1] == 43 and sink.ons[-1] == 31)
+
+    # full chain: deriver → keyshift lane → drone (transposition applies)
+    app.spawn_keyshift()
+    app.keyshifts["keyshift"].configure(key=2)     # D: +2 semitones
+    app.set_ctl_wire("add", "tonic", "keyshift:1")
+    app.set_ctl_wire("add", "keyshift:1", "drone")
+    app.rack.calls.clear()
+    app.set_tonic("tonic", octave=2)               # re-emit: G2 = 43 → +2 = 45
+    check("deriver→keyshift→drone transposes the root (A2 = 110 Hz)",
+          drone_freqs() and abs(drone_freqs()[-1] - 110.0) < 0.2)
+    app.remove_keyshift("keyshift")
+
+    # removing the deriver releases its emitted note downstream
+    app.remove_tonic("tonic")
+    check("deriver removal releases its note downstream",
+          sink.offs[-1] == 43)   # the G2 re-emitted by the octave=2 step above
 
     # legacy set_drone maps to a deriver+drone pair with default wiring
     app2 = SynthApp(use_midi=False, use_reload=False)

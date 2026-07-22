@@ -20,9 +20,9 @@ Protocol (JSON messages):
     {"type": "graph_wire", "action": "add"|"remove", "from": "pluck", "to": "echo"|"master"}
     {"type": "ctl_wire", "action": "add"|"remove", "from": "keys", "to": "arp"}
         (control-plane wiring among keys/arp/deck/voice ids/tonic ids/drone
-         instance ids — the graph IS the note router; tonic outs only land
-         on drone tonic-ins; set_looper's old "position" is accepted and
-         ignored)
+         instance ids — the graph IS the note router; drones are MONO ctl
+         note-sinks since the drone rework; set_looper's old "position" is
+         accepted and ignored)
     {"type": "spawn_module", "key": "reverb"}      (key = module TYPE; adds a
          fresh instance — duplicates allowed — audio out unconnected)
     {"type": "spawn_voice"} / {"type": "remove_voice", "id": "voice.2"}
@@ -32,7 +32,6 @@ Protocol (JSON messages):
     {"type": "set_keyshift", "id": "keyshift", "key": 7, "length": 8,
      "steps": [0, null, 7, ...]}   (key/steps = pitch-class distance from C;
         lanes wire via ctl_wire endpoints "keyshift:1".."keyshift:4")
-    {"type": "drone_follow", "id": "drone", "on": true}  (tonic-in toggle)
     {"type": "set_voice_target", "key": "pluck", "voice": "voice.2"}
         (re-aim a mono voice; "voice" when omitted)
     {"type": "set_drums", "target": "echo"|"master"|null}  (drums audio out routing)
@@ -199,9 +198,6 @@ class GuiServer:
                                     length=m.get("length"), steps=m.get("steps"))
             # clicking client already painted its card — update the others
             await self._broadcast_state(exclude=sender)
-        elif t == "drone_follow":
-            self.synth.set_drone_follow(m["id"], m.get("on", True))
-            await self._broadcast_state()
         elif t == "set_voice_target":
             self.synth.set_voice_target(m["key"], m.get("voice", "voice"))
             await self._broadcast_state()
