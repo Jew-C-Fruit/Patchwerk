@@ -26,5 +26,8 @@ def wobble_saw(freq=110, wobble=4, depth=0.5, amp=0.25, gate=1, out=0):
     lfo = SinOsc.kr(frequency=wobble) * 0.5 + 0.5          # 0..1 wobble
     tremolo = 1 - (lfo * depth)                            # dip by `depth`
     env = EnvGen.kr(envelope=Envelope.adsr(0.01, 0.1, 0.8, 0.3), gate=gate)
-    sig = LFSaw.ar(frequency=freq) * tremolo * env * amp
+    # 0.45 makeup: the saw ran ~2.2x hotter than the rest of the voice
+    # family — level-matched at default params (probe_voice_levels_ws,
+    # 2026-07-22). Presets keep their amp values; absolute level drops.
+    sig = LFSaw.ar(frequency=freq) * tremolo * env * (amp * 0.45)
     Out.ar(bus=out, source=[sig, sig])

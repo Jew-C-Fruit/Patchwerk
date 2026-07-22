@@ -51,6 +51,13 @@ Current coverage:
      mass-selects, a selected card's head drags the WHOLE group, clicking
      anything else deselects; blocks geometry and flex spots both survive
      the mode round-trip.
+  12. Palette reorg + Instrument (item 2): top-line sections Allocation/
+     Control(+Extractors)/Triggers/Voices(+Psines/Drone)/FX(Filters,
+     Time & Space, Dirt, Dynamics, Pitch)/Monitors; the four voice-family
+     sources fold into ONE "Instrument" palette entry whose placed card
+     carries a voice dropdown sending swap_synth (in-place swap: same id,
+     same wires); Estimator→Theory Wizard, Literal→Instant; psines carry
+     their mechanism names (Waveshaper / Harmonic Bank / Crossfade).
   9. Routable LFO (item 7): the LFO is a standalone node (palette spawns
      via spawn_lfo, kill sends remove_lfo); the card has rate/depth/shape
      and NO center row; one card fans out to MANY destinations (a mod wire
@@ -1276,6 +1283,149 @@ def main():
         check("+/- holds the view's upper corner (0,0-relative pull)",
               abs(c1[0] - c0[0]) < 1.0 and abs(c1[1] - c0[1]) < 1.0 and c1[2],
               f"{c0} -> {c1}")
+
+        # ================================================================
+        # 12 — palette reorg + Instrument card (item 2)
+        # ================================================================
+        AVAIL2 = [
+            {"key": "fm_bell", "name": "FM Bell", "kind": "source",
+             "family": "voice"},
+            {"key": "pluck", "name": "Pluck", "kind": "source",
+             "family": "voice"},
+            {"key": "wind", "name": "Wind", "kind": "source",
+             "family": "voice"},
+            {"key": "wobble_saw", "name": "Wobble Saw", "kind": "source",
+             "family": "voice"},
+            {"key": "pulse_pad", "name": "PW Pulse Pad", "kind": "source",
+             "family": "voice"},
+            {"key": "power_sine_shaper", "name": "Psine Waveshaper",
+             "kind": "source", "family": "psine"},
+            {"key": "drone", "name": "Drone", "kind": "source",
+             "family": "service"},
+            {"key": "lowpass", "name": "Low-pass Filter", "kind": "effect",
+             "family": "filter"},
+            {"key": "echo", "name": "Echo", "kind": "effect",
+             "family": "time"},
+        ]
+        inst_bell = mod("fm_bell", "FM Bell", "source", "voice",
+                        params={"freq": param(), "amp": param()})
+        st12 = base_state(
+            [inst_bell, mod("echo", "Echo", "effect", "time")],
+            [{"from": "fm_bell", "to": "echo"},
+             {"from": "echo", "to": "master"}],
+            available=AVAIL2)
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st12)
+        page.wait_for_timeout(500)
+
+        pal = page.evaluate("""(() => ({
+          h3: [...document.querySelectorAll('#palette h3')].map(h => h.textContent),
+          h4: [...document.querySelectorAll('#palette h4')].map(h => h.textContent),
+          btns: [...document.querySelectorAll('#palette button')].map(b => b.textContent),
+        }))()""")
+        check("palette top-line sections in order",
+              pal["h3"] == ["allocation", "control", "triggers", "voices",
+                            "fx", "monitors"], str(pal["h3"]))
+        for sub in ("extractors", "psines", "drone", "filters",
+                    "time & space"):
+            check(f"palette subsection: {sub}", sub in pal["h4"],
+                  str(pal["h4"]))
+        check("palette has ONE Instrument entry for the voice family",
+              pal["btns"].count("Instrument") == 1, str(pal["btns"]))
+        for hidden in ("FM Bell", "Pluck", "Wind", "Wobble Saw"):
+            check(f"voice-family member not listed individually: {hidden}",
+                  hidden not in pal["btns"], str(pal["btns"]))
+        check("psine renamed in palette (Psine Waveshaper)",
+              "Psine Waveshaper" in pal["btns"], str(pal["btns"]))
+        check("PW Pulse Pad stays a standalone entry",
+              "PW Pulse Pad" in pal["btns"], str(pal["btns"]))
+        for nm, msgt in (("Theory Wizard", "spawn_tonic"),
+                         ("Instant", "spawn_literal")):
+            page.evaluate("window.__sent.length = 0")
+            page.evaluate("""(nm) => {
+              [...document.querySelectorAll('#palette button')]
+                .find(b => b.textContent === nm).click();
+            }""", nm)
+            page.wait_for_timeout(60)
+            sent = page.evaluate("window.__sent")
+            check(f"palette {nm} sends {msgt}",
+                  {"type": msgt} in sent, str(sent))
+
+        # the Instrument card: renamed title, voice dropdown, in-place swap
+        card = page.evaluate("""(() => {
+          const n = nodes.get('m:fm_bell');
+          const sel = n && n.el.querySelector('select.devsel');
+          return n && {title: n.el.querySelector('.title').textContent,
+                       sub: (n.el.querySelector('.sub')||{}).textContent,
+                       opts: sel ? [...sel.options].map(o => o.value) : null,
+                       cur: sel && sel.value};
+        })()""")
+        check("voice-family instance renders as the Instrument card",
+              bool(card) and card["title"] == "Instrument", str(card))
+        check("Instrument dropdown lists the four voices",
+              bool(card) and card["opts"] == ["FM Bell", "Pluck", "Wind",
+                                              "Wobble Saw"], str(card))
+        check("Instrument dropdown shows the current voice",
+              bool(card) and card["cur"] == "FM Bell", str(card))
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("""(() => {
+          const n = nodes.get('m:fm_bell');
+          const sel = n.el.querySelector('select.devsel');
+          sel.value = 'Pluck';
+          sel.dispatchEvent(new Event('change'));
+        })()""")
+        page.wait_for_timeout(60)
+        sent12 = page.evaluate("window.__sent")
+        check("voice change sends an in-place swap_synth",
+              {"type": "swap_synth", "id": "fm_bell", "key": "pluck"}
+              in sent12, str(sent12))
+
+        # a SWAPPED instance (id fm_bell, type pluck) still renders as
+        # Instrument with the new voice selected — state round-trip
+        swapped = dict(inst_bell)
+        swapped["type"] = "pluck"
+        swapped["name"] = "Pluck"
+        st12b = dict(st12)
+        st12b["chain"] = [swapped, mod("echo", "Echo", "effect", "time")]
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st12b)
+        page.wait_for_timeout(400)
+        card2 = page.evaluate("""(() => {
+          const n = nodes.get('m:fm_bell');
+          const sel = n && n.el.querySelector('select.devsel');
+          return n && {title: n.el.querySelector('.title').textContent,
+                       cur: sel && sel.value};
+        })()""")
+        check("swapped instance keeps the Instrument card under the same id",
+              bool(card2) and card2["title"] == "Instrument", str(card2))
+        check("swapped instance's dropdown shows the new voice",
+              bool(card2) and card2["cur"] == "Pluck", str(card2))
+
+        # renamed deriver cards (Theory Wizard / Instant)
+        st12c = base_state(
+            [inst_bell], [{"from": "fm_bell", "to": "master"}],
+            available=AVAIL2,
+            tonics=[{"id": "tonic", "every": "1 bar", "everies": ["1 bar"],
+                     "octave": 2, "root": "C", "memory": 6.0,
+                     "stickiness": 1.25, "bass": 0.06,
+                     "listening": "triadic",
+                     "listenings": ["triadic", "root+fifth", "chromatic"]}],
+            literals=[{"id": "literal", "every": "immediate",
+                       "everies": ["immediate"], "extract": "lowest-held",
+                       "extracts": ["lowest-held"], "place": "absolute",
+                       "places": ["absolute"], "fold_octave": 3,
+                       "transpose": 0, "hold_on_empty": True,
+                       "note": None}])
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st12c)
+        page.wait_for_timeout(400)
+        names12 = page.evaluate("""(() => ({
+          tonic: nodes.get('tonic')
+            && nodes.get('tonic').el.querySelector('.title').textContent,
+          literal: nodes.get('literal')
+            && nodes.get('literal').el.querySelector('.title').textContent,
+        }))()""")
+        check("Estimator card renamed to Theory Wizard",
+              names12["tonic"] == "Theory Wizard", str(names12))
+        check("Literal card renamed to Instant",
+              names12["literal"] == "Instant", str(names12))
 
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()

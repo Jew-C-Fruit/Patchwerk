@@ -24,5 +24,6 @@ def pluck(freq=220, decay=4.0, damp=0.4, amp=0.35, gate=1, out=0):
         source=PinkNoise.ar() * 0.8, trigger=trig,
         maximum_delay_time=1 / 40, delay_time=1 / f,
         decay_time=decay, coefficient=damp,
-    ) * amp
+    ) * (amp * 2.65)  # makeup: level-matched to the voice family at default
+                      # params (probe_voice_levels_ws, 2026-07-22)
     Out.ar(bus=out, source=[sig, sig])

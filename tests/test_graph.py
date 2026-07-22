@@ -1284,6 +1284,83 @@ def test_tonic_drone():
         d2.shutdown()
 
 
+def test_swap_synth():
+    """Item 2: the Instrument card's in-place synth swap — same instance id,
+    same buses/wires, shared params carry over, map guards filtered."""
+    app = make_engine_app()
+    app.registry["fm_bell"] = _fmod(
+        "fm_bell", "source", ["freq", "ratio", "amp", "gate"], gate=True)
+    app.graph_wires = app.rack.audio_wires()      # pluck→chorus→echo→master
+    inst = app.rack.find("pluck")
+    inst.settings["freq"] = 0.9
+    inst.settings["amp"] = 0.7
+    out_before = inst.settings.get("out")
+    app.rack.mapped = {("pluck", "amp"), ("pluck", "damp")}
+
+    app.swap_synth("pluck", "fm_bell")
+    inst = app.rack.find("pluck")
+    check("swap keeps the instance id", inst.key == "pluck")
+    check("swap changes the module type", inst.type == "fm_bell")
+    check("swap keeps the out bus", inst.settings.get("out") == out_before)
+    check("shared param values carry over",
+          inst.settings["freq"] == 0.9 and inst.settings["amp"] == 0.7)
+    check("new-only params get defaults", inst.settings["ratio"] == 0.5)
+    check("swapped source spawns gated silent", inst.settings.get("gate") == 0)
+    check("map guard on a surviving param kept",
+          ("pluck", "amp") in app.rack.mapped)
+    check("map guard on a vanished param dropped",
+          ("pluck", "damp") not in app.rack.mapped)
+    check("audio wires still reference the id",
+          {"from": "pluck", "to": "chorus"} in app.graph_wires)
+    same = app.rack.swap_module("pluck", "fm_bell")
+    check("no-op swap to the same type is safe", same.type == "fm_bell")
+    try:
+        app.swap_synth("pluck", "echo")
+        check("kind-mismatch swap raises", False)
+    except ValueError:
+        check("kind-mismatch swap raises", True)
+    try:
+        app.swap_synth("pluck", "nope")
+        check("unknown-type swap raises", False)
+    except ValueError:
+        check("unknown-type swap raises", True)
+
+    # effect ↔ effect swap keeps the audio plumbing
+    fx = app.rack.find("chorus")
+    in_before = fx.settings.get("in_bus")
+    fx_out = fx.settings.get("out")
+    app.swap_synth("chorus", "echo")
+    fx = app.rack.find("chorus")
+    check("effect swap keeps in_bus", fx.settings.get("in_bus") == in_before)
+    check("effect swap keeps out", fx.settings.get("out") == fx_out)
+    check("effect swap changes type", fx.type == "echo")
+    app.transport.shutdown()
+
+
+def test_swap_persistence_shape():
+    """A swapped instance round-trips through the preset snapshot: the saved
+    `type` differs from the id's base, and _apply swaps it back in place."""
+    from synthbase import presets as presets_mod
+    app = make_engine_app()
+    app.registry["fm_bell"] = _fmod(
+        "fm_bell", "source", ["freq", "ratio", "amp", "gate"], gate=True)
+    app.swap_synth("pluck", "fm_bell")
+    snap = presets_mod.snapshot(app)
+    check("snapshot records the swapped type",
+          snap["modules"]["pluck"]["type"] == "fm_bell")
+
+    app2 = make_engine_app()
+    app2.registry["fm_bell"] = _fmod(
+        "fm_bell", "source", ["freq", "ratio", "amp", "gate"], gate=True)
+    check("premise: fresh rack runs the base type",
+          app2.rack.find("pluck").type == "pluck")
+    presets_mod._apply(app2, {"modules": snap["modules"]})
+    check("preset apply swaps the instance to the saved type",
+          app2.rack.find("pluck").type == "fm_bell")
+    app.transport.shutdown()
+    app2.transport.shutdown()
+
+
 def main():
     test_wires_derivation()
     test_graph_wire_bookkeeping()
@@ -1311,6 +1388,8 @@ def main():
     test_instance_ids()
     test_multi_voice()
     test_tonic_drone()
+    test_swap_synth()
+    test_swap_persistence_shape()
     print(f"\n{'PASS' if not FAILURES else 'FAIL'} — {len(FAILURES)} failures")
     return 1 if FAILURES else 0
 

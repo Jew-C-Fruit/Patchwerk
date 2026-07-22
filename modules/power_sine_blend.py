@@ -19,7 +19,7 @@ _PARTIALS = 24
 
 
 @module(
-    name="Power Sine (blend)",
+    name="Psine Crossfade",
     kind="source",
     params={
         "freq": param(20, 2000, 220, curve="exp"),
