@@ -387,7 +387,7 @@ class SynthApp:
         self.patch_name = patch_name
         self.patch = patch
         self.rack.on_node_replaced = self._on_node_replaced
-        self.lfos.assignments.clear()  # old rack's nodes are gone with it
+        self.lfos.on_rack_rebuilt()  # dests die with the old rack; LFOs stay
         self.rack.mapped.clear()
         if self._legacy_drone:  # re-add the compat deriver+drone pair
             self._ensure_legacy_drone()
@@ -769,10 +769,8 @@ class SynthApp:
                 if self._legacy_drone_id == key:
                     self._legacy_drone_id = None
                     self._legacy_drone = False
-                # drop any LFO assignments on the departing module + its map guards
-                for aid in [a for a in list(self.lfos.assignments)
-                            if a.rsplit(".", 1)[0] == key]:
-                    self.lfos.unassign(aid)
+                # drop any LFO destinations on the departing module + map guards
+                self.lfos.on_module_removed(key)
                 self.rack.mapped = {(k, p) for (k, p) in self.rack.mapped
                                     if k != key}
                 voice_touched = (key in self._voice_targets.values()
@@ -1142,17 +1140,29 @@ class SynthApp:
         with self._lock:
             self.looper.configure(**settings)
 
-    def lfo_assign(self, key: str, name: str, **cfg) -> None:
-        with self._lock:
-            self.lfos.assign(key, name, **cfg)
+    # -- routable LFOs (standalone modulation nodes, item 7) ----------------------
 
-    def lfo_unassign(self, aid: str) -> None:
+    def spawn_lfo(self, want_id: str | None = None) -> str:
         with self._lock:
-            self.lfos.unassign(aid)
+            return self.lfos.spawn(want_id=want_id)
 
-    def lfo_set(self, aid: str, **cfg) -> None:
+    def remove_lfo(self, lid: str) -> None:
         with self._lock:
-            self.lfos.configure(aid, **cfg)
+            self.lfos.remove(lid)
+
+    def lfo_set(self, lid: str, **cfg) -> None:
+        with self._lock:
+            self.lfos.configure(lid, **cfg)
+
+    def lfo_wire(self, action: str, lid: str, key: str, name: str) -> None:
+        """Add/remove a modulation wire: LFO out → a param's quiet handle."""
+        with self._lock:
+            if action == "add":
+                self.lfos.wire(lid, key, name)
+            elif action == "remove":
+                self.lfos.unwire(lid, key, name)
+            else:
+                raise ValueError(f"unknown lfo_wire action {action!r}")
 
     def save_preset(self, name: str) -> str:
         return presets_mod.save_preset(self, name)
