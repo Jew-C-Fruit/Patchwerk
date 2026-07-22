@@ -1295,6 +1295,10 @@ class SynthApp:
             self.drums.shutdown()
             self.thresholds.clear()   # watch synths before their LFO norms
             self.lfos.clear()
+            # the NEXT engine (device switch reboots via stop→start) must
+            # re-receive synthdefs + re-register the /tr callback
+            self.thresholds.reset()
+            self.lfos.reset()
             for d in (*self.tonics.values(), *self.literals.values()):
                 d.shutdown()
             for ks in self.keyshifts.values():

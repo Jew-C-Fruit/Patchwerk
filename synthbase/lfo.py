@@ -82,7 +82,14 @@ class LFOManager:
         self.app = app
         self.instances: dict[str, dict] = {}
         self._lock = threading.Lock()
-        self._registered = False
+        # PER-SERVER registration: a device switch reboots the engine
+        # (app.set_devices → stop/start) and a plain boolean survives
+        # pointing at the DEAD server — every later spawn then /s_new's a
+        # synthdef the new scsynth never received ("SynthDef not found",
+        # found live 2026-07-22). Track the server OBJECT instead so a
+        # fresh server always re-receives the defs, whether or not anyone
+        # remembered to call reset().
+        self._registered_server = None
 
     # -- server plumbing ---------------------------------------------------------
 
@@ -91,14 +98,14 @@ class LFOManager:
         return eng.server if eng and getattr(eng, "server", None) else None
 
     def _ensure_synthdefs(self, server) -> None:
-        if not self._registered:
+        if self._registered_server is not server:
             server.add_synthdefs(_lfo_norm, _lfo_scale)
             server.sync()
-            self._registered = True
+            self._registered_server = server
 
     def reset(self) -> None:
         """Engine went away — server-side objects are already gone."""
-        self._registered = False
+        self._registered_server = None
 
     # -- instances ---------------------------------------------------------------
 

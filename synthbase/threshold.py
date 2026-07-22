@@ -137,8 +137,12 @@ class ThresholdManager:
         self.app = app
         self.instances: dict[str, dict] = {}
         self._lock = threading.Lock()
-        self._registered = False       # synthdef sent to the live server
-        self._callback = None          # the /tr OscCallback (one per server)
+        # PER-SERVER registration (same live-found bug class as
+        # LFOManager): a device-switch engine reboot must re-send the
+        # synthdef AND re-register the /tr callback on the NEW server.
+        self._registered_server = None
+        self._callback = None          # the /tr OscCallback
+        self._callback_server = None   # ...and which server owns it
         self._next_tag = 700           # SendTrig ids: distinct, arbitrary base
 
     # -- server plumbing ---------------------------------------------------------
@@ -148,13 +152,14 @@ class ThresholdManager:
         return eng.server if eng and getattr(eng, "server", None) else None
 
     def _ensure_server_side(self, server) -> None:
-        if not self._registered:
+        if self._registered_server is not server:
             server.add_synthdefs(_threshold_watch)
             server.sync()
-            self._registered = True
-        if self._callback is None:
+            self._registered_server = server
+        if self._callback is None or self._callback_server is not server:
             self._callback = server.register_osc_callback(
                 pattern=["/tr"], procedure=self._on_tr)
+            self._callback_server = server
 
     def _on_tr(self, message) -> None:
         """/tr handler (OSC thread): [node_id, trig_id, value] → the
@@ -171,8 +176,9 @@ class ThresholdManager:
 
     def reset(self) -> None:
         """Engine went away — server-side objects are already gone."""
-        self._registered = False
+        self._registered_server = None
         self._callback = None
+        self._callback_server = None
         for rec in self.instances.values():
             rec["synth"] = None
 
