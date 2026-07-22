@@ -457,18 +457,22 @@ def main():
             sz = page.evaluate(f"nodes.get('{gid}').size")
             check(f"trigger card {gid} sizes to S", sz == "S", str(sz))
 
-        # the trigger-in handle rides the `every` (timing) row's line —
-        # the ping overrides that timer, so they share a row
+        # the timing row is LABELED "trigger" now (Cole nomenclature; the
+        # protocol field stays `every`), and the trigger-in handle rides
+        # that row's line — asserted against the RENDERED (cached) layout
+        # after the settle pass, not a fresh compute: the estimator handle
+        # was rendering 10px stale before the settle reroute existed.
+        page.wait_for_timeout(400)   # let the settle pass land
         aln = page.evaluate("""(() => {
           const n = nodes.get('tonic');
-          const lay = computeLayout(n);
+          const lay = n.lay;                       // RENDERED layout
           const row = [...n.el.querySelectorAll('.mini')].find(
-            r => (r.querySelector('label')||{}).title === 'every');
+            r => (r.querySelector('label')||{}).title === 'trigger');
           const rowY = n.y + row.offsetTop + row.offsetHeight / 2;
-          const t = lay.handles.find(H => H.sig === 'ping');
+          const t = lay && lay.handles.find(H => H.sig === 'ping');
           return {rowY, trigY: t && t.y};
         })()""")
-        check("deriver trigger-in aligns with the every row",
+        check("deriver trigger-in aligns with the trigger row (rendered)",
               aln["trigY"] is not None
               and abs(aln["trigY"] - aln["rowY"]) < 1.0, str(aln))
 
@@ -588,17 +592,19 @@ def main():
             check(f"estimator knob row: {knob}", knob in est["labels"],
                   str(est))
 
-        # the Literal's trigger-in also rides its `every` row line
+        # the Literal's trigger-in also rides its trigger row line
+        # (rendered layout, post-settle)
+        page.wait_for_timeout(400)
         laln = page.evaluate("""(() => {
           const n = nodes.get('literal');
-          const lay = computeLayout(n);
+          const lay = n.lay;
           const row = [...n.el.querySelectorAll('.mini')].find(
-            r => (r.querySelector('label')||{}).title === 'every');
+            r => (r.querySelector('label')||{}).title === 'trigger');
           const rowY = n.y + row.offsetTop + row.offsetHeight / 2;
-          const t = lay.handles.find(H => H.sig === 'ping');
+          const t = lay && lay.handles.find(H => H.sig === 'ping');
           return {rowY, trigY: t && t.y};
         })()""")
-        check("literal trigger-in aligns with the every row",
+        check("literal trigger-in aligns with the trigger row (rendered)",
               laln["trigY"] is not None
               and abs(laln["trigY"] - laln["rowY"]) < 1.0, str(laln))
 
@@ -640,7 +646,7 @@ def main():
         lit = page.evaluate(
             "[...nodes.get('literal').el.querySelectorAll('label')]"
             ".map(l => l.title)")
-        for rowlabel in ("every", "extract", "place", "value", "on empty"):
+        for rowlabel in ("trigger", "extract", "place", "value", "on empty"):
             check(f"literal row: {rowlabel}", rowlabel in lit, str(lit))
         page.evaluate("window.__sent.length = 0")
         page.evaluate("""() => {
