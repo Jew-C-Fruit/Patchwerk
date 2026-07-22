@@ -117,6 +117,10 @@
   .mini .track i { position: absolute; top: 50%; transform: translate(-50%, -50%);
     width: 7px; height: 7px; border-radius: 50%; background: var(--ink-2); }
   .mini .track i.zero { background: var(--danger); }
+  /* item 5: detent dots on stepped integer sliders */
+  .mini.stepped .track b.det { position: absolute; top: 50%; width: 2px; height: 2px;
+    border-radius: 1px; background: var(--ink-2); opacity: 0.45;
+    transform: translate(-50%, -50%); pointer-events: none; }
   .mini.mapped .track i { background: var(--mod); }
   .mini .v { width: 34px; flex: none; font-size: 8.5px; color: var(--ink-2);
     text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap;
@@ -712,6 +716,58 @@ function rowSlider(node, pname, opts) {
     track.addEventListener("pointercancel", done, {once: true});
   });
   uiParam[id] = setUIU;   // echoes must also move the drag anchor (curU)
+  return row;
+}
+// item 5: DETENTED integer slider — replaces click-to-cycle chips on
+// basically-numeric params. `values` is the ordered detent list (a plain
+// integer range, or a curated ladder like [1,2,4,8]); dragging moves
+// RELATIVELY through the detents (same zoom-safe math as rowSlider: clientX
+// deltas over world.style.zoom, never rect ratios) and each detent crossing
+// fires onPick exactly once. A bare click applies nothing.
+function rowStepSlider(node, pname, opts) {
+  // opts: {values, index, text(v), onPick(v)}
+  const id = `${node.gid}.${pname}`;
+  const vals = opts.values, N = vals.length;
+  const row = document.createElement("div");
+  row.className = "mini stepped";
+  row.innerHTML = `<label title="${esc(pname)}">${esc(pname)}</label>
+    <div class="track">${vals.map(() => `<b class="det"></b>`).join("")}<i></i></div>
+    <span class="v"></span>`;
+  const track = row.querySelector(".track"), thumb = track.querySelector("i"),
+        vEl = row.querySelector(".v");
+  track.querySelectorAll(".det").forEach((d, i) => {
+    d.style.left = (N > 1 ? (i / (N - 1)) * 100 : 50) + "%";
+  });
+  let cur = Math.max(0, Math.min(N - 1, opts.index | 0));
+  const setUI = (i, txt) => {
+    cur = Math.max(0, Math.min(N - 1, Math.round(i)));
+    thumb.style.left = (N > 1 ? (cur / (N - 1)) * 100 : 50) + "%";
+    thumb.classList.toggle("zero", vals[cur] === 0 && vals[0] !== 0);
+    vEl.textContent = txt !== undefined ? txt : opts.text(vals[cur]);
+  };
+  setUI(cur);
+  track.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+    sliderDrag = id;
+    try { track.setPointerCapture(e.pointerId); } catch (_) {}
+    const startX = e.clientX, startI = cur;
+    const mv = (ev) => {
+      const zs = parseFloat(world.style.zoom) || 1;      // true visual scale
+      const dx = (ev.clientX - startX) / zs;             // layout px
+      const per = (track.offsetWidth || 1) / Math.max(1, N - 1);
+      const i = Math.max(0, Math.min(N - 1, Math.round(startI + dx / per)));
+      if (i !== cur) { setUI(i); opts.onPick(vals[i]); }
+    };
+    track.addEventListener("pointermove", mv);
+    const done = () => {
+      track.removeEventListener("pointermove", mv);
+      sliderDrag = null;
+      flushRebuild();
+    };
+    track.addEventListener("pointerup", done, {once: true});
+    track.addEventListener("pointercancel", done, {once: true});
+  });
+  uiParam[id] = setUI;
   return row;
 }
 function rowChip(node, pname, opts) {
@@ -3431,14 +3487,11 @@ function buildKeysCard() {
     rowDevSelect("midi in", state.midi_inputs || [], state.midi_port,
       (name) => send({type: "set_midi", port: name, enabled: true})),
     rowChip({gid}, "octave", {text: `C${octave}`, static: true}),
-    rowChip({gid}, "transpose", {
-      text: String(state.transpose ?? 0),
-      onClick: (chip) => {
-        let t = parseInt(chip.textContent, 10) + 1;
-        if (t > 12) t = -12;
-        chip.textContent = String(t);
-        send({type: "set_transpose", semitones: t});
-      },
+    rowStepSlider({gid}, "transpose", {
+      values: Array.from({length: 25}, (_, i) => i - 12),
+      index: (state.transpose ?? 0) + 12,
+      text: (v) => (v > 0 ? "+" : "") + v + " st",
+      onPick: (v) => send({type: "set_transpose", semitones: v}),
     }),
   ];
   return addCard({gid, name: "Keys / MIDI", short: "Keys", sub: "controller",
@@ -3534,13 +3587,11 @@ function buildTonicCard(t) {
         send({type: "set_tonic", id: gid, every: v});
       },
     }),
-    rowChip({gid}, "octave", {
-      text: String(t.octave),
-      onClick: (chip) => {
-        const o = (parseInt(chip.textContent, 10) + 1) % 5;
-        chip.textContent = String(o);
-        send({type: "set_tonic", id: gid, octave: o});
-      },
+    rowStepSlider({gid}, "octave", {
+      values: [0, 1, 2, 3, 4],
+      index: t.octave | 0,
+      text: (v) => "C" + v,
+      onPick: (v) => send({type: "set_tonic", id: gid, octave: v}),
     }),
     rowChip({gid}, "listening", {
       text: t.listening || "triadic",
@@ -3627,7 +3678,6 @@ const LIT_TRANSPOSES = [-12, -7, -5, 0, 5, 7, 12];
 function buildLiteralCard(t) {
   const gid = t.id;
   const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
-  let valueChip = null;
   const valueText = () =>
     t.place === "fold" ? `C${t.fold_octave}` :
     t.place === "transpose" ? `${t.transpose >= 0 ? "+" : ""}${t.transpose}` : "—";
@@ -3663,23 +3713,33 @@ function buildLiteralCard(t) {
         chip.textContent = v;
         t.place = v;
         send({type: "set_literal", id: gid, place: v});
-        if (valueChip) valueChip.textContent = valueText();
+        // the value row's TYPE follows the mode — the broadcast rebuild
+        // swaps in the right widget (slider for fold/transpose, chip else)
       },
     }),
-    rowChip({gid}, "value", {
-      text: valueText(),
-      onClick: (chip) => {
-        if (t.place === "fold") {
-          t.fold_octave = ((t.fold_octave | 0) + 1) % 8;
-          send({type: "set_literal", id: gid, fold_octave: t.fold_octave});
-        } else if (t.place === "transpose") {
-          const i = LIT_TRANSPOSES.indexOf(t.transpose);
-          t.transpose = LIT_TRANSPOSES[(i + 1) % LIT_TRANSPOSES.length];
-          send({type: "set_literal", id: gid, transpose: t.transpose});
-        }
-        chip.textContent = valueText();
-      },
-    }),
+    // item 5: numeric modes get a DETENTED slider; absolute keeps the "—"
+    // chip (place changes rebuild the card, so the right row type shows)
+    t.place === "fold"
+      ? rowStepSlider({gid}, "value", {
+          values: [0, 1, 2, 3, 4, 5, 6, 7],
+          index: t.fold_octave | 0,
+          text: (v) => "C" + v,
+          onPick: (v) => {
+            t.fold_octave = v;
+            send({type: "set_literal", id: gid, fold_octave: v});
+          },
+        })
+      : t.place === "transpose"
+      ? rowStepSlider({gid}, "value", {
+          values: LIT_TRANSPOSES,
+          index: Math.max(0, LIT_TRANSPOSES.indexOf(t.transpose)),
+          text: (v) => (v >= 0 ? "+" : "") + v + " st",
+          onPick: (v) => {
+            t.transpose = v;
+            send({type: "set_literal", id: gid, transpose: v});
+          },
+        })
+      : rowChip({gid}, "value", {text: valueText(), static: true}),
     rowChip({gid}, "on empty", {
       text: t.hold_on_empty === false ? "release" : "hold",
       onClick: (chip) => {
@@ -3695,7 +3755,6 @@ function buildLiteralCard(t) {
                   kill: () => send({type: "remove_literal", id: gid}),
                   ports: [["in", "ctl", "notes"], ["out", "ctl", "note"],
                           ["in", "ping", "trigger"]]});
-  valueChip = n.el.querySelectorAll(".chip")[3] || null;
   // trigger-in rides the `every` row line, same as the Estimator's
   const trig = n.ports.find(p => p.sig === "ping");
   if (trig) { trig.quiet = true; trig.rowEl = rows[0]; }
@@ -3890,14 +3949,14 @@ function buildKeyshiftCard(k) {
         });
       },
     }),
-    rowChip({gid}, "length", {
-      text: k.length + (k.length === 1 ? " bar" : " bars"),
-      onClick: (chip) => {
-        const i = KS_LENGTHS.indexOf(k.length);
-        k.length = KS_LENGTHS[(i + 1) % KS_LENGTHS.length];
+    rowStepSlider({gid}, "length", {
+      values: KS_LENGTHS,
+      index: Math.max(0, KS_LENGTHS.indexOf(k.length)),
+      text: (v) => v + (v === 1 ? " bar" : " bars"),
+      onPick: (v) => {
+        k.length = v;
         while (k.steps.length < k.length) k.steps.push(null);
         k.steps.length = k.length;
-        chip.textContent = k.length + (k.length === 1 ? " bar" : " bars");
         sendKS();
         paintSteps(n, true);
       },
@@ -3973,14 +4032,11 @@ function buildDeckCard() {
   // no position chip in v3 — what the deck records/replays IS its wiring
   const l = state.looper, gid = "deck";
   const rows = [
-    rowChip({gid}, "bars", {
-      text: String(l.bars),
-      onClick: (chip) => {
-        const seq = [1, 2, 4, 8];
-        const v = seq[(seq.indexOf(parseInt(chip.textContent, 10)) + 1) % seq.length];
-        chip.textContent = String(v);
-        send({type: "set_looper", bars: v});
-      },
+    rowStepSlider({gid}, "bars", {
+      values: [1, 2, 4, 8],
+      index: Math.max(0, [1, 2, 4, 8].indexOf(l.bars)),
+      text: (v) => String(v),
+      onPick: (v) => send({type: "set_looper", bars: v}),
     }),
     rowSlider({gid}, "level", {
       unit: l.level, text: Math.round(l.level * 100) + "%",
