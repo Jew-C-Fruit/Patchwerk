@@ -585,23 +585,26 @@ function rowSlider(node, pname, opts) {
     thumb.classList.toggle("zero", u <= 0.02);
     vEl.textContent = txt;
   };
-  setUI(opts.unit, opts.text);
+  let curU = opts.unit;                       // last unit value shown (drag anchor)
+  const setUIU = (u, txt) => { curU = Math.min(1, Math.max(0, u)); setUI(curU, txt); };
+  setUIU(opts.unit, opts.text);
   track.addEventListener("pointerdown", (e) => {
     e.stopPropagation();
     sliderDrag = id;
     track.setPointerCapture(e.pointerId);
+    // RELATIVE drag: a bare click applies NOTHING; moving the pointer offsets
+    // the value from where the thumb started. clientX is ALWAYS visual px and
+    // world.style.zoom is ALWAYS the true scale (rect coords vary by Chrome
+    // version — pre/post-128 CSS-zoom conventions — so never use rect ratios);
+    // track.offsetWidth is layout px, matching clientX/zoom.
+    const startX = e.clientX, startU = curU;
     const mv = (ev) => {
-      const r = track.getBoundingClientRect();
-      const wr = world.getBoundingClientRect();
       const zs = parseFloat(world.style.zoom) || 1;      // true visual scale
-      const rs = wr.width / (UW * U) || 1;               // rect-units per layout px
-      const xw = (ev.clientX - wr.left) / zs;            // pointer, world layout px
-      const tL = (r.left - wr.left) / rs;                // track left, world layout px
-      const u = Math.min(1, Math.max(0, (xw - tL) / (track.offsetWidth || 1)));
-      setUI(u, opts.valText(u));
+      const dx = (ev.clientX - startX) / zs;             // pointer delta, layout px
+      const u = Math.min(1, Math.max(0, startU + dx / (track.offsetWidth || 1)));
+      setUIU(u, opts.valText(u));
       opts.onUnit(u);
     };
-    mv(e);
     track.addEventListener("pointermove", mv);
     const done = () => {
       track.removeEventListener("pointermove", mv);
@@ -611,7 +614,7 @@ function rowSlider(node, pname, opts) {
     track.addEventListener("pointerup", done, {once: true});
     track.addEventListener("pointercancel", done, {once: true});
   });
-  uiParam[id] = setUI;
+  uiParam[id] = setUIU;   // echoes must also move the drag anchor (curU)
   return row;
 }
 function rowChip(node, pname, opts) {
