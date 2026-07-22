@@ -16,6 +16,14 @@ Current coverage:
      zoom-derivation *inputs* can be asserted here, not the post-128 branch).
   3. Wiring grammar: connectAction refuses cross-kind drops.
   4. Key Shifter: card renders its step grid; steps paint from state.
+  5. Key Shifter sizing: S/M/L chips present; a LENGTH-32 track renders fully
+     inside the card at every size (no overflow), cells stay tappable, the
+     chip-set size survives a state rebuild (sizeLocked generalization).
+  6. Drone rework: the "tonic" signal kind is fully retired (PRIMARY_SIGS,
+     CSS vars, legend, header strip, connectAction); the drone card is an
+     ordinary MONO ctl note-sink (play-in, no follow chip); the deriver has
+     ONE ctl out; keys→drone and deriver→drone wire as plain ctl; ctl wires
+     into drones draw in the ctl family.
 """
 
 import glob
@@ -246,6 +254,140 @@ def main():
         })()""")
         check("keyshift grid has one cell per step", ks["count"] == 8, str(ks))
         check("keyshift assigned steps paint 'on'", ks["on"] == 2, str(ks))
+
+        # ================================================================
+        # 5 — Key Shifter sizing: 32 steps fit at S, M and L
+        # ================================================================
+        st32 = base_state(
+            [sg, echo],
+            [{"from": "signal_gen", "to": "echo"},
+             {"from": "echo", "to": "master"}],
+            keyshifts=[{"id": "keyshift", "key": 0, "length": 32,
+                        "steps": [2 if i % 4 == 0 else None
+                                  for i in range(32)], "active": 0}])
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st32)
+        page.wait_for_timeout(400)
+
+        chips = page.evaluate(
+            "[...nodes.get('keyshift').el.querySelectorAll('.szchips button')]"
+            ".map(b => b.dataset.sz)")
+        check("keyshift has S/M/L size chips", chips == ["S", "M", "L"],
+              str(chips))
+
+        def ks_fit(size):
+            return page.evaluate("""(size) => {
+              const n = nodes.get('keyshift');
+              n.el.querySelector(`.szchips button[data-sz="${size}"]`).click();
+              const grid = n.el.querySelector('.ksgrid');
+              const steps = [...grid.children];
+              const cr = n.el.getBoundingClientRect();
+              const last = steps[steps.length - 1].getBoundingClientRect();
+              const cell = steps[0].getBoundingClientRect();
+              const zs = parseFloat(world.style.zoom) || 1;
+              return {size: n.size, count: steps.length,
+                      cols: grid.style.gridTemplateColumns,
+                      overflow: last.bottom - cr.bottom,
+                      cellW: cell.width / zs, cellH: cell.height / zs,
+                      visible: steps[0].offsetParent !== null};
+            }""", size)
+
+        for size in ("L", "M", "S"):
+            r = ks_fit(size)
+            page.wait_for_timeout(250)   # let the resize transition settle
+            r = ks_fit(size)             # re-measure at rest
+            check(f"keyshift@{size}: resize applied", r["size"] == size, str(r))
+            check(f"keyshift@{size}: all 32 steps present", r["count"] == 32,
+                  str(r))
+            check(f"keyshift@{size}: grid inside the card (no overflow)",
+                  r["overflow"] <= 1, str(r))
+            check(f"keyshift@{size}: cells tappable (>=7px wide, >=6px tall)",
+                  r["cellW"] >= 7 and r["cellH"] >= 6, str(r))
+            check(f"keyshift@{size}: grid visible", r["visible"], str(r))
+
+        # a step stays clickable at S: click opens the key pop-out
+        page.evaluate("""() => {
+          nodes.get('keyshift').el.querySelectorAll('.ksstep')[1].click();
+        }""")
+        page.wait_for_timeout(80)
+        pop = page.evaluate(
+            "!!document.querySelector('#keypop') && "
+            "document.querySelector('#keypop').style.display !== 'none'")
+        check("keyshift@S: step click opens the key pop-out", pop)
+        page.keyboard.press("Escape")
+
+        # chip-set size survives a rebuild (state resend) via posMem
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st32)
+        page.wait_for_timeout(400)
+        kept = page.evaluate("nodes.get('keyshift').size")
+        check("keyshift chip-set size survives rebuild", kept == "S", kept)
+
+        # ================================================================
+        # 6 — drone rework: tonic retired; drone is a plain mono ctl sink
+        # ================================================================
+        drone = mod("drone", "Drone", "source", "service",
+                    {"freq": param(55, 16, 500), "amp": param(0.16),
+                     "glide": param(1.5, 0.05, 8.0)})
+        st_d = base_state(
+            [sg, drone, echo],
+            [{"from": "signal_gen", "to": "echo"},
+             {"from": "echo", "to": "master"},
+             {"from": "drone", "to": "master"}],
+            ctl_wires=[{"from": "keys", "to": "arp"},
+                       {"from": "arp", "to": "voice"},
+                       {"from": "arp", "to": "tonic"},
+                       {"from": "tonic", "to": "drone"}],
+            tonics=[{"id": "tonic", "every": "1 bar",
+                     "everies": ["1 bar"], "octave": 2, "root": "C"}])
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st_d)
+        page.wait_for_timeout(500)
+
+        check("PRIMARY_SIGS has no tonic kind",
+              page.evaluate("!PRIMARY_SIGS.has('tonic')"))
+        check("no --tonic CSS var remains", page.evaluate(
+            "!getComputedStyle(document.documentElement)"
+            ".getPropertyValue('--tonic').trim()"))
+        check("no tonic legend entry", page.evaluate(
+            "!document.querySelector('[data-legend=tonic]')"))
+        check("no header tonic-root strip", page.evaluate(
+            "!document.getElementById('tonic-root')"))
+
+        dports = page.evaluate(
+            "nodes.get('m:drone').ports.filter(p => !p.quiet)"
+            ".map(p => [p.dir, p.sig, p.label])")
+        check("drone in-port is ctl 'play' (no tonic port)",
+              ["in", "ctl", "play"] in dports
+              and not any(p[1] == "tonic" for p in dports), str(dports))
+        check("drone card has no follow chip", page.evaluate(
+            "![...nodes.get('m:drone').el.querySelectorAll('label')]"
+            ".some(l => l.title === 'follow')"))
+        tports = page.evaluate(
+            "nodes.get('tonic').ports.map(p => [p.dir, p.sig, p.label])")
+        check("deriver has ONE ctl out (root), no tonic/thru",
+              tports.count(["out", "ctl", "root"]) == 1
+              and not any(p[1] == "tonic" for p in tports), str(tports))
+
+        # the deriver→drone wire from state draws in the ctl family
+        wsig = page.evaluate(
+            "(wires.find(w => w.to.node.gid === 'm:drone'"
+            " && w.sig !== 'audio') || {}).sig")
+        check("wire into the drone rides the ctl family", wsig == "ctl", wsig)
+
+        # grammar: keys→drone and deriver→drone connect as ctl; nothing tonic
+        acts = page.evaluate("""(() => {
+          const drone = nodes.get('m:drone');
+          const pi = drone.ports.find(p => p.sig === 'ctl' && p.dir === 'in');
+          const mk = (gid) => ({node: nodes.get(gid),
+            port: nodes.get(gid).ports.find(p => p.dir === 'out' && p.sig === 'ctl')});
+          return {
+            keys: !!connectAction(mk('keys'), {node: drone, port: pi}),
+            tonic: !!connectAction(mk('tonic'), {node: drone, port: pi}),
+          };
+        })()""")
+        check("keys→drone play-in connects (ctl)", acts["keys"], str(acts))
+        check("deriver→drone play-in connects (ctl)", acts["tonic"], str(acts))
+        check("drone play-in is single-input (no + handle)", page.evaluate(
+            "!portAllowsPlus(nodes.get('m:drone').ports"
+            ".find(p => p.sig === 'ctl' && p.dir === 'in'))"))
 
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()

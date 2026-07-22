@@ -1,10 +1,11 @@
 """Drone: a sustained pedal tone with slow portamento.
 
 An ordinary spawnable audio source (multiple instances allowed) with one
-extra: a control-plane presence. Wire a Tonic Deriver's TONIC out into a
-drone instance's tonic-in and root changes drive that instance's `freq`
-(grid-quantized by the deriver); `glide` sets how slowly the drone slides
-there. No gate — the drone sounds for as long as its node exists (toggle
+extra: a control-plane presence as a MONO ctl note-sink (last-note
+priority — see app._DroneSink). Wire keys, the arp, a deriver, or a Key
+Shifter lane into the drone's play-in and note_ons retarget its `freq`;
+`glide` sets how slowly it slides there. note_off/all_off HOLD the last
+root — no gate; the drone sounds for as long as its node exists (toggle
 it off with the module's bypass switch).
 """
 

@@ -42,12 +42,11 @@ PATCHES_DIR = REPO_ROOT / "patches"
 # Node ids (v5): "keys" (all controllers: GUI keys, hardware MIDI, CP88),
 # "arp", "deck" (the loop deck), voice ids ("voice", "voice.2", ...), tonic
 # deriver ids ("tonic", "tonic.2", ...), and drone INSTANCE ids ("drone",
-# "drone.2", ... — tonic-in only). Control FLOW is defined by wires —
-# keys→(arp?)→(deck?)→voice, any topology. keys is never a destination
-# (that would re-enter the controllers); self-wires are forbidden.
-# deck→arp→deck is legal: the deck's _self_fire guard prevents replayed
-# notes from re-recording. Wire type rules: tonic outs (deriver TONIC out)
-# only connect to tonic ins (drone instances).
+# "drone.2", ... — MONO ctl note-sinks since the drone rework). Control
+# FLOW is defined by wires — keys→(arp?)→(deck?)→voice, any topology.
+# keys is never a destination (that would re-enter the controllers);
+# self-wires are forbidden. deck→arp→deck is legal: the deck's _self_fire
+# guard prevents replayed notes from re-recording.
 CTL_SOURCES = ("keys", "arp", "deck")
 CTL_TARGETS = ("arp", "deck")
 
@@ -154,6 +153,51 @@ class _FanOut(_NullSink):
         self._each(lambda s: s.set_bend(semitones))
 
 
+class _DroneSink(_NullSink):
+    """A drone instance's ctl-plane presence: a MONO note-sink with
+    last-note priority. note_on retargets the drone's `freq` (through the
+    synthdef's Lag/glide path, so portamento applies); note_off falls back
+    to the newest still-held note, and an EMPTY held-set HOLDS the last
+    root — the drone's on/off is its bypass toggle, not the note stream.
+    Retargeting goes through rack.set_param by instance key, so a respawned
+    node (bypass/hot-reload) is re-aimed automatically."""
+
+    def __init__(self, app, key: str) -> None:
+        self.app = app
+        self.key = key
+        self._held: list[int] = []   # ordered; last = the sounding root
+
+    def _aim(self, note: int) -> None:
+        rack = self.app.rack
+        if rack is None:
+            return
+        try:
+            rack.set_param(self.key, "freq", midi_to_freq(note))
+        except Exception:  # noqa: BLE001 — rack mid-rebuild; the next note lands
+            pass
+
+    def note_on(self, note: int, velocity: int = 100) -> None:
+        note = int(note)
+        if note in self._held:
+            self._held.remove(note)
+        self._held.append(note)
+        self._aim(note)
+
+    def note_off(self, note: int) -> None:
+        note = int(note)
+        was_top = bool(self._held) and self._held[-1] == note
+        if note in self._held:
+            self._held.remove(note)
+        # releasing a note that ISN'T the sounding root must not retarget;
+        # releasing the root falls back to the newest still-held note;
+        # releasing the last note holds (no silence)
+        if was_top and self._held:
+            self._aim(self._held[-1])
+
+    def all_off(self) -> None:
+        self._held.clear()   # hold the current root
+
+
 class _KeysNode(_FanOut):
     """The controllers' node: GUI keys, hardware MIDI, sensors — all enter
     the graph here. Sustain/bend stay GLOBAL (pedal and wheel are physical
@@ -235,7 +279,7 @@ class SynthApp:
         self.tonics: dict[str, TonicDeriver] = {}
         # v6: key shifters (spawnable 4-lane ctl modifiers)
         self.keyshifts: dict[str, KeyShifter] = {}
-        self.drone_follow: dict[str, bool] = {}  # drone instance id -> follow tonic
+        self._drone_sinks: dict[str, _DroneSink] = {}  # drone id -> mono sink
         self._legacy_drone = False               # set_drone compat pair active
         self._legacy_drone_id: str | None = None
         self.drums = DrumMachine(self)
@@ -407,11 +451,19 @@ class SynthApp:
     # -- control-plane wiring --------------------------------------------------
 
     def _is_drone_id(self, nid) -> bool:
-        """Is nid a drone INSTANCE id (the only tonic-in nodes)?"""
+        """Is nid a drone INSTANCE id (a mono ctl note-sink)?"""
         if not isinstance(nid, str) or not self.rack:
             return False
         return any(i.key == nid and i.type == "drone"
                    for i in self.rack.instances)
+
+    def _drone_sink(self, key: str) -> _DroneSink:
+        """The per-instance mono sink (held-note state persists across
+        events; the sink re-aims by key so node respawns are transparent)."""
+        s = self._drone_sinks.get(key)
+        if s is None:
+            s = self._drone_sinks[key] = _DroneSink(self, key)
+        return s
 
     @staticmethod
     def _split_ep(ep) -> tuple[str, int | None]:
@@ -444,10 +496,9 @@ class SynthApp:
     def _ctl_sinks(self, src: str) -> list:
         """Resolve a node's outgoing wires to note-sink objects, live.
         (Deck REPLAY resolution lives in looper._sink(), which reads the same
-        ctl_wires — this handles keys/arp/tonic/keyshift dispatch. Wires INTO
-        drone instances are tonic wires: root updates, not note events —
-        skipped. Keyshift lanes are addressed "id:lane": lane k in → lane k
-        out only, so multiple signals ride one shifter without merging.)"""
+        ctl_wires — this handles keys/arp/tonic/keyshift/drone dispatch.
+        Keyshift lanes are addressed "id:lane": lane k in → lane k out only,
+        so multiple signals ride one shifter without merging.)"""
         sinks = []
         for w in self.ctl_wires:
             if w["from"] != src:
@@ -464,6 +515,8 @@ class SynthApp:
                              else self._deck_raw_tap)
             elif t in self.tonics:
                 sinks.append(self.tonics[t])
+            elif self._is_drone_id(t):
+                sinks.append(self._drone_sink(t))  # mono last-note freq sink
             elif base in self.keyshifts and lane is not None:
                 try:
                     sinks.append(self.keyshifts[base].lane_in(lane))
@@ -489,15 +542,20 @@ class SynthApp:
                 # synchronously through the shifter
                 if self._split_ep(src)[0] == self._split_ep(dst)[0]:
                     raise ValueError(f"{src} → {dst} would loop on itself")
-                if self._is_drone_id(dst) and src not in self.tonics:
-                    raise ValueError(
-                        f"{dst!r} takes only a tonic input (wire a Tonic Deriver)")
                 w = {"from": src, "to": dst}
                 if w not in self.ctl_wires:
                     self.ctl_wires.append(w)
-                    if src in self.tonics and self._is_drone_id(dst):
-                        # fresh tonic wire: push the current root immediately
-                        self.tonics[src].drive_drones(only=dst)
+                    if self._is_drone_id(dst):
+                        # the play-in is single-input: a new wire means a new
+                        # controller — stale held notes from the previous one
+                        # must not resurface on later note_offs (hold freq)
+                        self._drone_sink(dst).all_off()
+                        if src in self.tonics:
+                            # fresh deriver→drone wire: aim the drone at the
+                            # current root immediately (don't wait for the grid)
+                            n = self.tonics[src].current_note()
+                            if n is not None:
+                                self._drone_sink(dst).note_on(n)
             elif action == "remove":
                 n0 = len(self.ctl_wires)
                 self.ctl_wires = [w for w in self.ctl_wires
@@ -511,6 +569,11 @@ class SynthApp:
                     if dst in self.voices and \
                             not any(w["to"] == dst for w in self.ctl_wires):
                         self.voices[dst].all_off()
+                    # unhooking a drone's input drops the source's held
+                    # notes (hold the sounding root; no stale fallback if a
+                    # later controller releases over old state)
+                    if self._is_drone_id(dst) and dst in self._drone_sinks:
+                        self._drone_sinks[dst].all_off()
                     # unhooking the deck's replay must not leave notes ringing
                     if src == "deck" and dst in self.voices:
                         if dst == "voice":
@@ -641,7 +704,7 @@ class SynthApp:
                 # the removed instance's control-plane presence goes with it
                 self.ctl_wires = [w for w in self.ctl_wires
                                   if key not in (w.get("from"), w.get("to"))]
-                self.drone_follow.pop(key, None)
+                self._drone_sinks.pop(key, None)
                 if self._legacy_drone_id == key:
                     self._legacy_drone_id = None
                     self._legacy_drone = False
@@ -820,11 +883,11 @@ class SynthApp:
             if d is None:
                 raise KeyError(f"no tonic deriver {tid!r}")
             d.shutdown()
-            # snip-heal candidates: note streams IN, thru wires OUT (the
-            # amber tonic→drone wires are a different signal kind — dropped)
+            # snip-heal candidates: note streams IN, note streams OUT (since
+            # the drone rework EVERY out is an ordinary ctl wire — a healed
+            # A→drone feeds the drone A's notes, which is exactly the model)
             ins = [w["from"] for w in self.ctl_wires if w.get("to") == tid]
-            outs = [w["to"] for w in self.ctl_wires
-                    if w.get("from") == tid and not self._is_drone_id(w.get("to"))]
+            outs = [w["to"] for w in self.ctl_wires if w.get("from") == tid]
             self.ctl_wires = [w for w in self.ctl_wires
                               if tid not in (w.get("from"), w.get("to"))]
             self._heal_ctl_snip(ins, outs)
@@ -877,16 +940,6 @@ class SynthApp:
             if ks is None:
                 raise KeyError(f"no key shifter {kid!r}")
             ks.configure(**settings)
-
-    def set_drone_follow(self, iid: str, on: bool) -> None:
-        """The drone card's tonic toggle: root updates drive freq or don't."""
-        with self._lock:
-            if not self._is_drone_id(iid):
-                raise KeyError(f"no drone instance {iid!r}")
-            self.drone_follow[iid] = bool(on)
-            if on:
-                for d in self.tonics.values():
-                    d.drive_drones(only=iid)
 
     def _guess_voice_target(self) -> str | None:
         """First source in the chain that looks note-playable (freq + gate)."""
@@ -1019,7 +1072,6 @@ class SynthApp:
                 return
             self._legacy_drone_id = inst.key
         did = self._legacy_drone_id
-        self.drone_follow.setdefault(did, True)
         for w in ({"from": "arp", "to": "tonic"}, {"from": "tonic", "to": did}):
             if w not in self.ctl_wires:
                 self.ctl_wires.append(w)
@@ -1194,8 +1246,6 @@ class SynthApp:
                             for pname, p in inst.module.params.items()
                         },
                     }
-                    if inst.type == "drone":
-                        entry["tonic_follow"] = self.drone_follow.get(inst.key, True)
                     chain.append(entry)
             return {
                 "patch": self.patch_name,
