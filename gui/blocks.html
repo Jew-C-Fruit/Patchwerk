@@ -2615,8 +2615,12 @@ function viewScale() {
   return (!panLocked && blocksFree != null) ? blocksFree
                                             : scaleFor(viewCols, viewRows);
 }
-function applyView() {
-  world.style.zoom = viewScale();
+function applyView(smooth) {
+  if (smooth) animateZoom(viewScale());
+  else {
+    if (zAnim) { cancelAnimationFrame(zAnim.raf); zAnim = null; }
+    world.style.zoom = viewScale();
+  }
   boardEl.style.overflow = (uiMode === "blocks" && panLocked) ? "hidden" : "auto";
   const pl = $("panlock");
   if (pl) { pl.textContent = panLocked ? "🔒" : "🔓"; pl.classList.toggle("on", panLocked); }
@@ -2652,10 +2656,44 @@ function saveView() {
     [viewCols, viewRows, panLocked ? 1 : 0, uiMode, flexZoom, flexWireStyle])); }
   catch (e) {}
 }
+// ---- SMOOTH zoom (Cole, 07-22): scroll is PAN (native); zoom comes from a
+// trackpad pinch (ctrl+wheel) or the dedicated +/- controls. Every zoom
+// eases toward its target via a rAF animator, anchored at the cursor (pinch)
+// or the board center (buttons/lock-snap). All math stays on
+// world.style.zoom + the board's own scrollLeft/Top — same convention-
+// neutral doctrine as worldXYev (never rect ratios; Chrome pre/post-128).
+let zAnim = null;                          // {target, ax, ay, raf}
+function setZoomKeepingAnchor(z1, ax, ay) {
+  const b = boardEl.getBoundingClientRect();
+  const z0 = parseFloat(world.style.zoom) || 1;
+  const wx = (boardEl.scrollLeft + (ax - b.left)) / z0;
+  const wy = (boardEl.scrollTop + (ay - b.top)) / z0;
+  world.style.zoom = z1;
+  boardEl.scrollLeft = wx * z1 - (ax - b.left);
+  boardEl.scrollTop  = wy * z1 - (ay - b.top);
+}
+function stepZoomAnim() {
+  if (!zAnim) return;
+  const z0 = parseFloat(world.style.zoom) || 1;
+  const zt = zAnim.target;
+  let z1 = z0 + (zt - z0) * 0.35;          // exponential ease-out
+  if (Math.abs(z1 - zt) < 0.002) z1 = zt;  // land exactly
+  setZoomKeepingAnchor(z1, zAnim.ax, zAnim.ay);
+  if (z1 !== zt) zAnim.raf = requestAnimationFrame(stepZoomAnim);
+  else zAnim = null;
+}
+function animateZoom(target, ax, ay) {
+  if (ax === undefined) {                  // default anchor: board center
+    const b = boardEl.getBoundingClientRect();
+    ax = b.left + b.width / 2; ay = b.top + b.height / 2;
+  }
+  if (zAnim) { zAnim.target = target; zAnim.ax = ax; zAnim.ay = ay; return; }
+  zAnim = { target, ax, ay, raf: requestAnimationFrame(stepZoomAnim) };
+}
 function zoomStep(dir) {
-  if (uiMode === "flex") {                 // flex: the +/- buttons free-zoom
-    flexZoom = Math.max(0.25, Math.min(3, flexZoom * (dir > 0 ? 1 / 1.15 : 1.15)));
-    applyView(); saveView();
+  if (uiMode === "flex") {                 // flex: the +/- buttons step-zoom
+    flexZoom = Math.max(0.25, Math.min(3, flexZoom * (dir > 0 ? 1 / 1.25 : 1.25)));
+    animateZoom(flexZoom); saveView();
     return;
   }
   blocksFree = null;                       // buttons return to grid-fit steps
@@ -2664,28 +2702,21 @@ function zoomStep(dir) {
   } else {         // zoom IN
     viewCols = Math.max(3, viewCols - 1); viewRows = Math.max(2, viewRows - 1);
   }
-  applyView();
-  if (dir < 0 && panLocked && modulesHidden()) { panLocked = false; applyView(); }
+  applyView(true);
+  if (dir < 0 && panLocked && modulesHidden()) { panLocked = false; applyView(true); }
   saveView();
 }
-// continuous zoom, anchored at the cursor. scrollLeft/Top are the board's own
-// (visual) px and world.style.zoom is OUR scale — same convention-neutral
-// doctrine as worldXYev (never rect ratios; Chrome pre/post-128 safe).
-function zoomAt(cx, cy, f) {
-  const b = boardEl.getBoundingClientRect();
-  const z0 = viewScale();
-  let z1;
+// pinch (ctrl+wheel): retarget the animator continuously — smooth chase
+function pinchZoom(cx, cy, f) {
   if (uiMode === "flex") {
-    flexZoom = z1 = Math.max(0.25, Math.min(3, flexZoom * f));
+    flexZoom = Math.max(0.25, Math.min(3, (zAnim ? zAnim.target : flexZoom) * f));
+    animateZoom(flexZoom, cx, cy);
   } else {
     const lo = scaleFor(BX, BY), hi = scaleFor(3, 2);
-    blocksFree = z1 = Math.max(lo, Math.min(hi, (blocksFree ?? viewScale()) * f));
+    const cur = zAnim ? zAnim.target : (blocksFree ?? viewScale());
+    blocksFree = Math.max(lo, Math.min(hi, cur * f));
+    animateZoom(blocksFree, cx, cy);
   }
-  const wx = (boardEl.scrollLeft + (cx - b.left)) / z0;
-  const wy = (boardEl.scrollTop + (cy - b.top)) / z0;
-  applyView();
-  boardEl.scrollLeft = wx * z1 - (cx - b.left);
-  boardEl.scrollTop  = wy * z1 - (cy - b.top);
   saveView();
 }
 // LOCKING blocks snaps the free zoom to the closest grid size (item 1 spec)
@@ -2727,7 +2758,7 @@ function viewAutoUnlockOnce() {   // first state load: off-view modules → unlo
   pl.addEventListener("click", (e) => {
     panLocked = !panLocked;
     if (panLocked) lockSnap();             // lock snaps to the closest grid size
-    applyView(); saveView(); e.target.blur();
+    applyView(true); saveView(); e.target.blur();
   });
   ws.addEventListener("click", (e) => {
     flexWireStyle = flexWireStyle === "route" ? "bezier" : "route";
@@ -2735,12 +2766,14 @@ function viewAutoUnlockOnce() {   // first state load: off-view modules → unlo
     rerouteAll(); saveView(); e.target.blur();
   });
   window.addEventListener("resize", applyView);
-  // wheel / trackpad-pinch zoom: flex always; blocks only when UNLOCKED
+  // scroll = PAN (native); ZOOM only on trackpad pinch (arrives as
+  // ctrl+wheel) — flex always, blocks only when UNLOCKED. preventDefault
+  // on every pinch so the browser never page-zooms.
   boardEl.addEventListener("wheel", (e) => {
-    if (uiMode === "blocks" && panLocked) return;
+    if (!e.ctrlKey) return;                // plain scroll/two-finger: pan
     e.preventDefault();
-    zoomAt(e.clientX, e.clientY,
-           Math.exp(-e.deltaY * (e.ctrlKey ? 0.012 : 0.002)));
+    if (uiMode === "blocks" && panLocked) return;
+    pinchZoom(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.012));
   }, { passive: false });
   try {
     const v = JSON.parse(localStorage.getItem("blocksView") || "null");
