@@ -2365,18 +2365,21 @@ function connectAction(out, inn) {
     return () => send({type: "graph_wire", action: "add", from, to});
   }
   if (sig === "mod") {
+    // LFO out → a param's quiet handle. Fan-out is free (one LFO, many
+    // params); the param side is single-input — the server STEALS an
+    // already-mapped param from its old LFO on add.
     if (!pi.quiet || !inn.node.chainKey) return null;
     const src = out.node;
-    return () => {
-      // park the LFO card's position where it was drawn so the server-born
-      // card (id "<key>.<param>") appears in place
-      if (src.bx !== undefined && src.bx !== null)
-        posMem["lfo:" + inn.node.chainKey + "." + pi.param] = memOf(src);
-      if (src.armed) { removeNode(src); rerouteAll(); }
-      else if (src.gid.startsWith("lfo:"))
-        send({type: "lfo_unassign", id: src.gid.slice(4)});  // re-target a live LFO
-      send({type: "lfo_assign", key: inn.node.chainKey, name: pi.param});
-    };
+    if (!src.gid.startsWith("lfo:")) return null;
+    const lid = src.gid.slice(4);
+    const l = ((state && state.lfos) || []).find(x => x.id === lid);
+    if (l && lfoIsLegacy(l))   // pre-item-7 server: re-target the assignment
+      return () => {
+        send({type: "lfo_unassign", id: lid});
+        send({type: "lfo_assign", key: inn.node.chainKey, name: pi.param});
+      };
+    return () => send({type: "lfo_wire", action: "add", id: lid,
+                       key: inn.node.chainKey, name: pi.param});
   }
   if (sig === "ping") {
     // ping-out (button/clock) lands ONLY on a trigger-in — strict grammar:
@@ -2569,6 +2572,15 @@ function sendParam(key, pname, unit) {
     send({type: "set_param", key, name: pname, unit}));
 }
 
+// a mapped param's slider steers its LFO destination's CENTER (item 7) —
+// keep the local state's dest center in step so the band/anim track the
+// slider between state broadcasts (set_param never triggers a snapshot)
+function syncLfoCenter(key, pname, u) {
+  for (const l of ((state && state.lfos) || []))
+    for (const d of (l.dests || []))
+      if (d.key === key && d.param === pname) d.center = u;
+}
+
 // -- per-node builders --------------------------------------------------------
 function buildChainCard(mod) {
   const gid = "m:" + mod.key;
@@ -2610,6 +2622,7 @@ function buildChainCard(mod) {
         valText: (u) => fmt(fromUnit(p, u)),
         onUnit: (u) => {
           p.value = fromUnit(p, u);
+          if (p.lfo) syncLfoCenter(mod.key, pname, u);
           sendParam(mod.key, pname, u);
           throttled("act", refreshActivity, 80);
         },
@@ -3335,9 +3348,25 @@ function checkSrMismatch() {
   } else if (el) el.remove();
 }
 
+// item 7: the LFO is a STANDALONE node — spawn/remove like any deriver,
+// fan its ∿ out onto any number of params. NO center knob: every
+// destination orbits its own slider value. Old servers (pre-item-7) send
+// per-assignment entries ({key, param, center}) — tolerated as a one-dest
+// legacy card so a new GUI can front an old backend (check_real fixture).
+function lfoDests(l) {
+  return l.dests || (l.key ? [{key: l.key, param: l.param,
+                               center: l.center}] : []);
+}
+function lfoIsLegacy(l) { return !l.dests && !!l.key; }
 function buildLfoCard(l) {
   const gid = "lfo:" + l.id;
+  const legacy = lfoIsLegacy(l);
   const RATE = {min: 0.02, max: 20, curve: "exp"};
+  const ds = lfoDests(l);
+  const suffix = String(l.id).includes(".") ? " " + l.id.split(".")[1] : "";
+  const sub = !ds.length ? "drag ∿ onto a param"
+    : ds.length === 1 ? `→ ${ds[0].key}.${ds[0].param}`
+    : `→ ${ds.length} params`;
   const rows = [
     rowSlider({gid}, "rate", {
       unit: toUnit(RATE, l.rate), text: l.rate.toFixed(2) + "Hz",
@@ -3355,14 +3384,6 @@ function buildLfoCard(l) {
         throttled("lfo" + l.id + "d", () => send({type: "lfo_set", id: l.id, depth: u}));
       },
     }),
-    rowSlider({gid}, "center", {
-      unit: l.center, text: ((l.center * 100) | 0) + "%",
-      valText: (u) => ((u * 100) | 0) + "%",
-      onUnit: (u) => {
-        l.center = u;
-        throttled("lfo" + l.id + "c", () => send({type: "lfo_set", id: l.id, center: u}));
-      },
-    }),
     rowChip({gid}, "shape", {
       text: l.shapes[l.shape] ?? "sine",
       onClick: (chip) => {
@@ -3372,21 +3393,10 @@ function buildLfoCard(l) {
       },
     }),
   ];
-  return addCard({gid, name: "LFO ∿", short: "LFO", sub: `→ ${l.key}.${l.param}`,
+  return addCard({gid, name: "LFO ∿" + suffix, short: "LFO" + suffix, sub,
     fam: "service", rows, ports: [["out", "mod", "mod"]],
-    kill: () => send({type: "lfo_unassign", id: l.id})});
-}
-
-let armN = 1;
-function buildArmedLfo() {
-  const gid = "lfoarm:" + armN++;
-  const n = addCard({gid, name: "LFO ∿", short: "LFO", sub: "drag ∿ port onto a param",
-    fam: "service", rows: [], ports: [["out", "mod", "mod"]], persistent: true,
-    kill: (nd) => { removeNode(nd); rerouteAll(); }});
-  n.armed = true;
-  autoPlace(n, 1);
-  rerouteAll();
-  return n;
+    kill: () => send(legacy ? {type: "lfo_unassign", id: l.id}
+                            : {type: "remove_lfo", id: l.id})});
 }
 
 // -- monitors (client-side, not in server state) --------------------------------
@@ -3483,7 +3493,8 @@ function rebuildGraph() {
   for (let i = 0; i < lfoNodes.length; i++) {
     const n = lfoNodes[i], l = state.lfos[i];
     if (applyMem(n)) continue;
-    const tgt = nodes.get("m:" + l.key);
+    const ds = lfoDests(l);
+    const tgt = ds.length ? nodes.get("m:" + ds[0].key) : null;
     autoPlace(n, tgt && tgt.bx != null ? Math.max(0, tgt.bx - 1) : 1,
               tgt && tgt.by != null ? tgt.by : 0);
   }
@@ -3567,37 +3578,27 @@ function rebuildGraph() {
   const dNode = dTarget != null ? (audioNode(dTarget) || master) : null;
   if (dNode) W(drums, "audio", dNode, "audio",
     {cut: () => send({type: "set_drums", target: null})});
-  // mod: one wire per LFO assignment → the target param's quiet handle
+  // mod: one wire per LFO DESTINATION (fan-out) → each param's quiet
+  // handle. Cutting a wire removes just that destination — the LFO card
+  // stays (it's a standalone node now). Legacy (pre-item-7) entries cut
+  // with lfo_unassign, which removes their whole one-dest assignment.
   for (let i = 0; i < lfoNodes.length; i++) {
-    const l = state.lfos[i];
-    const tgt = nodes.get("m:" + l.key);
-    if (!tgt) continue;
-    addWire({node: lfoNodes[i], port: port(lfoNodes[i], "out", "mod")},
-            {node: tgt, port: tgt.ports.find(p => p.quiet && p.param === l.param)},
-            {lfoId: l.id, cut: () => {
-              // cut the WIRE, not the module: the assignment dies, but an
-              // armed (unwired) LFO card takes the old card's slot
-              const old = lfoNodes[i];
-              _lfoRespawn = old ? { bx: old.bx, by: old.by, half: old.half || "top" } : {};
-              send({type: "lfo_unassign", id: l.id});
-            }});
+    const l = state.lfos[i], legacy = lfoIsLegacy(l);
+    for (const d of lfoDests(l)) {
+      const tgt = nodes.get("m:" + d.key);
+      if (!tgt) continue;
+      addWire({node: lfoNodes[i], port: port(lfoNodes[i], "out", "mod")},
+              {node: tgt, port: tgt.ports.find(p => p.quiet && p.param === d.param)},
+              {lfoId: l.id, cut: () => send(legacy
+                 ? {type: "lfo_unassign", id: l.id}
+                 : {type: "lfo_wire", action: "remove", id: l.id,
+                    key: d.key, name: d.param})});
+    }
   }
 
   rerouteAll();
   requestAnimationFrame(() => refreshActivity());
   if (typeof viewAutoUnlockOnce === "function") viewAutoUnlockOnce();
-  if (_lfoRespawn) {              // wire-cut on an LFO: re-arm in its old slot
-    const k = _lfoRespawn; _lfoRespawn = null;
-    const a = buildArmedLfo();
-    if (k.bx !== undefined && k.bx !== null) {
-      const occ = occOf(currentPos(a.gid));
-      const pl = { size: a.size, bx: k.bx, by: k.by,
-                   half: a.size === "S" ? (k.half || "top") : null };
-      if (inBoundsPl(pl) && !halfCells(pl).some(c => occ.get(c) !== undefined)) {
-        a.bx = pl.bx; a.by = pl.by; a.half = pl.half; place(a); rerouteAll();
-      }
-    }
-  }
   saveLayout();
 }
 
@@ -3617,7 +3618,7 @@ function renderPalette() {
   h3("voices");
   btn("Mono Voice", FAMILY.ctl, () => send({type: "spawn_voice"}));
   h3("control");
-  btn("LFO ∿", FAMILY.service, () => buildArmedLfo());
+  btn("LFO ∿", FAMILY.service, () => send({type: "spawn_lfo"}));
   btn("Estimator", "#9085e9", () => send({type: "spawn_tonic"}));
   btn("Literal", "#9085e9", () => send({type: "spawn_literal"}));
   btn("Key Shifter", FAMILY.ctl, () => send({type: "spawn_keyshift"}));
@@ -3739,6 +3740,7 @@ function onParam(m) {
     const mod = state.chain.find(c => c.key === m.key);
     if (mod && mod.params[m.name]) mod.params[m.name].value = m.value;
   }
+  syncLfoCenter(m.key, m.name, m.unit);   // mapped param: echo steers center
   if (sliderDrag !== id && uiParam[id]) uiParam[id](m.unit, fmt(m.value));
   throttled("act", refreshActivity, 80);
 }
@@ -3894,7 +3896,6 @@ function refreshActivity() {
 }
 
 // ---------- monitors: scope polling + canvas painting ----------
-let _lfoRespawn = null;   // slot to re-arm an LFO into after an unassign-cut
 let scopeData = {};   // key -> samples
 // ---- psine preview: JS mirror of the modules' coefficient laws ----------
 function psineCoeffs(mtype, p) {
@@ -3957,43 +3958,48 @@ function animateLfos(now) {
   const lfos = (state && state.lfos) || [];
   const live = new Set();
   for (const l of lfos) {
-    const n = nodes.get("m:" + l.key) || nodes.get(l.key);
-    if (!n) continue;
-    const port = (n.ports || []).find(p => p.quiet && p.param === l.param);
-    const row = port && port.rowEl;
-    if (!row || !row.isConnected) continue;
     let st = _lfoAnim.get(l.id);
     if (!st) { st = { t0: now, seed: Math.random() * 100, lastStep: -1, stepV: 0 };
                _lfoAnim.set(l.id, st); }
-    if (!row._lfoBand) {           // decorate: amplitude band + center marker
-      const track = row.querySelector(".track");
-      if (!track) continue;
-      row._lfoBand = document.createElement("b");
-      row._lfoBand.className = "lfoband";
-      row._lfoCenter = document.createElement("u");
-      row._lfoCenter.className = "lfocenter";
-      track.append(row._lfoBand, row._lfoCenter);
-    }
-    row._lfoRef = { gid: n.gid, key: l.key, param: l.param };
-    _lfoRows.add(row);
-    live.add(row);
-    const lo = Math.max(0, l.center - l.depth / 2);
-    const hi = Math.min(1, l.center + l.depth / 2);
-    row._lfoBand.style.left = (lo * 100) + "%";
-    row._lfoBand.style.width = (Math.max(0.01, hi - lo) * 100) + "%";
-    row._lfoCenter.style.left = (Math.min(1, Math.max(0, l.center)) * 100) + "%";
     const ph = ((now - st.t0) / 1000) * (l.rate || 1);
-    const u = Math.min(1, Math.max(0, l.center + lfoOscV(l.shape, ph, st) * l.depth * 0.5));
-    if (sliderDrag === `${n.gid}.${l.param}`) continue;   // never fight the user
-    const thumb = row.querySelector(".track i"), vEl = row.querySelector(".v");
-    if (thumb) {
-      thumb.style.left = (u * 100) + "%";
-      thumb.classList.toggle("zero", u <= 0.02);
+    const osc = lfoOscV(l.shape, ph, st);   // ONE oscillator per LFO —
+    for (const d of lfoDests(l)) {          // every destination rides it
+      const n = nodes.get("m:" + d.key) || nodes.get(d.key);
+      if (!n) continue;
+      const port = (n.ports || []).find(p => p.quiet && p.param === d.param);
+      const row = port && port.rowEl;
+      if (!row || !row.isConnected) continue;
+      if (!row._lfoBand) {         // decorate: amplitude band + center marker
+        const track = row.querySelector(".track");
+        if (!track) continue;
+        row._lfoBand = document.createElement("b");
+        row._lfoBand.className = "lfoband";
+        row._lfoCenter = document.createElement("u");
+        row._lfoCenter.className = "lfocenter";
+        track.append(row._lfoBand, row._lfoCenter);
+      }
+      row._lfoRef = { gid: n.gid, key: d.key, param: d.param };
+      _lfoRows.add(row);
+      live.add(row);
+      // center = THIS destination's slider value (item 7: no center knob)
+      const c = d.center !== undefined ? d.center : (l.center || 0.5);
+      const lo = Math.max(0, c - l.depth / 2);
+      const hi = Math.min(1, c + l.depth / 2);
+      row._lfoBand.style.left = (lo * 100) + "%";
+      row._lfoBand.style.width = (Math.max(0.01, hi - lo) * 100) + "%";
+      row._lfoCenter.style.left = (Math.min(1, Math.max(0, c)) * 100) + "%";
+      const u = Math.min(1, Math.max(0, c + osc * l.depth * 0.5));
+      if (sliderDrag === `${n.gid}.${d.param}`) continue;  // never fight the user
+      const thumb = row.querySelector(".track i"), vEl = row.querySelector(".v");
+      if (thumb) {
+        thumb.style.left = (u * 100) + "%";
+        thumb.classList.toggle("zero", u <= 0.02);
+      }
+      const m = ((state && state.chain) || []).find(x => x.key === d.key);
+      const p = m && m.params && m.params[d.param];
+      if (p && vEl) vEl.textContent = fmt(fromUnit(p, u));  // rolling numbers
+      (n._lfoU = n._lfoU || {})[d.param] = u;               // psine preview hook
     }
-    const m = ((state && state.chain) || []).find(x => x.key === l.key);
-    const p = m && m.params && m.params[l.param];
-    if (p && vEl) vEl.textContent = fmt(fromUnit(p, u));  // rolling numbers
-    (n._lfoU = n._lfoU || {})[l.param] = u;               // psine preview hook
   }
   for (const row of [..._lfoRows]) {
     if (live.has(row)) continue;               // assignment gone: undecorate

@@ -56,6 +56,14 @@ Protocol (JSON messages):
     {"type": "set_voice_target", "key": "pluck", "voice": "voice.2"}
         (re-aim a mono voice; "voice" when omitted)
     {"type": "set_drums", "target": "echo"|"master"|null}  (drums audio out routing)
+    {"type": "spawn_lfo"} / {"type": "remove_lfo", "id": "lfo.2"}
+    {"type": "lfo_set", "id": "lfo", "rate": 1.0, "depth": 0.25, "shape": 0}
+        (routable LFO, item 7: a standalone modulation node — NO center
+         knob; each destination orbits its own slider value)
+    {"type": "lfo_wire", "action": "add"|"remove", "id": "lfo",
+     "key": "lowpass.2", "name": "cutoff"}
+        (modulation fan-out: one LFO drives any number of params; a param
+         is single-input — wiring an already-mapped param steals it)
 
   server -> client:
     {"type": "state", ...full snapshot...}       (on connect and after changes)
@@ -270,15 +278,20 @@ class GuiServer:
         elif t == "ctl_wire":
             self.synth.set_ctl_wire(m.get("action", "add"), m.get("from"), m.get("to"))
             await self._broadcast_state()
-        elif t == "lfo_assign":
-            await loop.run_in_executor(None, lambda: self.synth.lfo_assign(m["key"], m["name"]))
+        elif t == "spawn_lfo":
+            self.synth.spawn_lfo()
             await self._broadcast_state()
-        elif t == "lfo_unassign":
-            await loop.run_in_executor(None, lambda: self.synth.lfo_unassign(m["id"]))
+        elif t == "remove_lfo":
+            await loop.run_in_executor(None, lambda: self.synth.remove_lfo(m["id"]))
+            await self._broadcast_state()
+        elif t == "lfo_wire":
+            await loop.run_in_executor(
+                None, lambda: self.synth.lfo_wire(
+                    m.get("action", "add"), m["id"], m["key"], m["name"]))
             await self._broadcast_state()
         elif t == "lfo_set":
             self.synth.lfo_set(m["id"], rate=m.get("rate"), depth=m.get("depth"),
-                               center=m.get("center"), shape=m.get("shape"))
+                               shape=m.get("shape"))
         elif t == "save_preset":
             await loop.run_in_executor(None, self.synth.save_preset, m["name"])
             await self._broadcast_state()

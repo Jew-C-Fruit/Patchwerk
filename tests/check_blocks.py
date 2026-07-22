@@ -34,6 +34,15 @@ Current coverage:
      (presence/scores toggle, committed vs leading marking, confidence);
      the Literal card's chips cycle and send set_literal; both derivers
      take notes/emit notes/accept ping triggers in the grammar.
+  9. Routable LFO (item 7): the LFO is a standalone node (palette spawns
+     via spawn_lfo, kill sends remove_lfo); the card has rate/depth/shape
+     and NO center row; one card fans out to MANY destinations (a mod wire
+     per dest, each cut sending a targeted lfo_wire remove); LFO-out onto
+     a param connects via lfo_wire add; a mapped param's slider steers the
+     destination's center (locally synced between broadcasts) and its row
+     wears the amplitude band; pre-item-7 per-assignment entries (the
+     check_real fixture's shape) still render as one-dest legacy cards
+     whose wires/kill fall back to lfo_unassign.
 """
 
 import glob
@@ -625,6 +634,134 @@ def main():
         })()""")
         check("literal has a quiet ping trigger-in",
               trig == {"dir": "in", "quiet": True}, str(trig))
+
+        # ================================================================
+        # 9 — routable LFO: standalone node, fan-out, center = dest slider
+        # ================================================================
+        sg_m = mod("signal_gen", "Signal Gen", "source", "voice",
+                   {"freq": param(220, 20, 2000), "amp": param(0.5)})
+        sg_m["params"]["amp"]["lfo"] = True          # mapped by the LFO below
+        echo_m = mod("echo", "Echo", "effect", "time",
+                     {"mix": param(0.4)})
+        echo_m["params"]["mix"]["lfo"] = True
+        st_lfo = base_state(
+            [sg_m, echo_m],
+            [{"from": "signal_gen", "to": "echo"},
+             {"from": "echo", "to": "master"}],
+            lfos=[{"id": "lfo", "rate": 1.0, "shape": 0, "depth": 0.5,
+                   "shapes": ["sine", "tri", "ramp", "square", "s&h"],
+                   "dests": [{"key": "signal_gen", "param": "amp",
+                              "center": 0.5},
+                             {"key": "echo", "param": "mix",
+                              "center": 0.3}]},
+                  {"id": "lfo.2", "rate": 4.0, "shape": 1, "depth": 0.2,
+                   "shapes": ["sine", "tri", "ramp", "square", "s&h"],
+                   "dests": []}])
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st_lfo)
+        page.wait_for_timeout(500)
+
+        for gid in ("lfo:lfo", "lfo:lfo.2"):
+            check(f"LFO card renders: {gid}", page.evaluate(f"nodes.has('{gid}')"))
+        rows = page.evaluate(
+            "[...nodes.get('lfo:lfo').el.querySelectorAll('label')]"
+            ".map(l => l.title)")
+        check("LFO card has rate/depth/shape rows",
+              all(r in rows for r in ("rate", "depth", "shape")), str(rows))
+        check("LFO card has NO center row", "center" not in rows, str(rows))
+
+        modw = page.evaluate(
+            "wires.filter(w => w.sig === 'mod' && w.lfoId === 'lfo')"
+            ".map(w => w.to.node.gid)")
+        check("one LFO fans out to BOTH destinations",
+              sorted(modw) == ["m:echo", "m:signal_gen"], str(modw))
+        check("the unwired LFO draws no wires", page.evaluate(
+            "wires.filter(w => w.lfoId === 'lfo.2').length") == 0)
+
+        # cutting one fan-out wire sends a TARGETED lfo_wire remove
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("""() => {
+          wires.find(w => w.lfoId === 'lfo'
+                     && w.to.node.gid === 'm:echo').cutAction();
+        }""")
+        sent = page.evaluate("window.__sent")
+        check("wire cut sends lfo_wire remove for that dest only",
+              {"type": "lfo_wire", "action": "remove", "id": "lfo",
+               "key": "echo", "name": "mix"} in sent, str(sent))
+
+        # LFO-out onto a param's quiet handle connects via lfo_wire add
+        page.evaluate("window.__sent.length = 0")
+        did = page.evaluate("""(() => {
+          const src = nodes.get('lfo:lfo.2');
+          const tgt = nodes.get('m:signal_gen');
+          const act = connectAction(
+            {node: src, port: src.ports.find(p => p.sig === 'mod')},
+            {node: tgt, port: tgt.ports.find(p => p.quiet && p.param === 'freq')});
+          if (act) act();
+          return !!act;
+        })()""")
+        sent = page.evaluate("window.__sent")
+        check("LFO-out → param connects (lfo_wire add)",
+              did and {"type": "lfo_wire", "action": "add", "id": "lfo.2",
+                       "key": "signal_gen", "name": "freq"} in sent, str(sent))
+
+        # palette spawns via the server; card kill removes via the server
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("""() => {
+          [...document.querySelectorAll('#palette button')]
+            .find(b => b.textContent.includes('LFO')).click();
+        }""")
+        sent = page.evaluate("window.__sent")
+        check("palette LFO button sends spawn_lfo",
+              {"type": "spawn_lfo"} in sent, str(sent))
+
+        # mapped row wears the band; its center marker sits at the DEST center
+        page.wait_for_timeout(300)   # let the anim frame decorate
+        band = page.evaluate("""(() => {
+          const n = nodes.get('m:echo');
+          const p = n.ports.find(q => q.quiet && q.param === 'mix');
+          const row = p && p.rowEl;
+          return row && row._lfoBand ? {
+            mapped: row.classList.contains('mapped'),
+            center: row._lfoCenter.style.left,
+          } : null;
+        })()""")
+        check("mapped param row wears the LFO band",
+              band and band["mapped"], str(band))
+        check("band center = the destination's own center",
+              band and band["center"] == "30%", str(band))
+
+        # dragging the mapped slider steers the LOCAL dest center too
+        g = slider_geom(page, "m:signal_gen", "amp")
+        page.mouse.move(g["x"], g["y"])
+        page.mouse.down()
+        page.mouse.move(g["x"] + g["w"] * g["zoom"] * 0.3, g["y"], steps=6)
+        page.mouse.up()
+        page.wait_for_timeout(120)
+        c = page.evaluate(
+            "state.lfos[0].dests.find(d => d.key === 'signal_gen').center")
+        check("mapped slider drag steers the dest center locally",
+              abs(c - (0.5 + 0.3)) < 0.05, str(c))
+
+        # legacy tolerance: a pre-item-7 per-assignment entry still renders
+        st_old = base_state(
+            [sg_m, echo_m],
+            [{"from": "signal_gen", "to": "echo"},
+             {"from": "echo", "to": "master"}],
+            lfos=[{"id": "signal_gen.amp", "key": "signal_gen",
+                   "param": "amp", "rate": 0.3, "shape": 0, "depth": 0.8,
+                   "center": 0.5,
+                   "shapes": ["sine", "tri", "ramp", "square", "s&h"]}])
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st_old)
+        page.wait_for_timeout(400)
+        check("legacy (pre-item-7) LFO entry renders a card",
+              page.evaluate("nodes.has('lfo:signal_gen.amp')"))
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate(
+            "wires.find(w => w.lfoId === 'signal_gen.amp').cutAction()")
+        sent = page.evaluate("window.__sent")
+        check("legacy wire cut falls back to lfo_unassign",
+              {"type": "lfo_unassign", "id": "signal_gen.amp"} in sent,
+              str(sent))
 
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()
