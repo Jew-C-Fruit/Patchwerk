@@ -197,6 +197,33 @@
   .pingpad:hover { filter: brightness(1.25); }
   .pingpad.pulse { animation: pingpulse .22s ease; }
   @keyframes pingpulse { 30% { text-shadow: 0 0 9px var(--ping); transform: scale(1.35); } }
+  /* item 6: Button binding shown LARGE as a computer-key KEYCAP; clicking
+     it FIRES. The binding label underneath is the rebind affordance. */
+  .keycap { width: 32px; height: 22px; margin: 0 auto; border-radius: 5px;
+    background: var(--hairline); border: 1px solid var(--ink-2);
+    box-shadow: inset 0 -2px 0 rgba(0,0,0,0.45), 0 1px 2px rgba(0,0,0,0.35);
+    display: flex; align-items: center; justify-content: center; gap: 1px;
+    font-size: 13px; font-weight: 700; line-height: 1; color: var(--ink-1);
+    cursor: pointer; user-select: none; -webkit-user-select: none; }
+  .keycap:hover { filter: brightness(1.25); }
+  .keycap.unbound { color: var(--ink-2); font-weight: 400; }
+  .keycap small { font-size: 6.5px; font-weight: 700; color: var(--ink-2);
+    align-self: flex-start; margin-top: 3px; letter-spacing: 0.3px; }
+  .keycap.pulse { animation: keycappulse .22s ease; }
+  @keyframes keycappulse { 30% { box-shadow: 0 0 10px var(--ping),
+    inset 0 -2px 0 rgba(0,0,0,0.45); border-color: var(--ping);
+    transform: scale(1.12); } }
+  .bindline { text-align: center; font-size: 8.5px; line-height: 1.15;
+    color: var(--ink-2); cursor: pointer; margin-top: 2px;
+    user-select: none; -webkit-user-select: none; }
+  .bindline:hover { color: var(--ink-1); }
+  /* item 6: the heartbeat/fire icon rides next to the OUT handle — placed
+     by renderHandles against the rendered ping-out handle each relayout */
+  .fireicon { position: absolute; width: 12px; height: 12px; display: flex;
+    align-items: center; justify-content: center; font-size: 10px;
+    line-height: 1; color: var(--ping); opacity: 0.85; pointer-events: none;
+    z-index: 6; }
+  .fireicon.pulse { animation: pingpulse .22s ease; }
   /* pad-less trigger cards (threshold) pulse their whole card on fire */
   .mod.pulse { animation: cardping .25s ease; }
   @keyframes cardping { 30% { box-shadow: 0 0 12px var(--ping); } }
@@ -2210,6 +2237,24 @@ function renderHandles() {
       HANDLE_LIST.push(H);
       layer.appendChild(el);
     }
+    // item 6: the button's ◉ heartbeat icon rides just INSIDE the card,
+    // next to the rendered ping-out handle (whichever edge it picked)
+    if (n.fireIcon) {
+      const H = n.lay.handles.find(h => h.sig === "ping" && h.side === "out");
+      if (H) {
+        const cx = n.el.offsetLeft, cy = n.el.offsetTop;
+        if (H.edge === "B") {
+          n.fireIcon.style.left = (H.x - cx - 6) + "px";
+          n.fireIcon.style.top = (H.y - cy - 17) + "px";
+        } else if (H.edge === "T") {
+          n.fireIcon.style.left = (H.x - cx - 6) + "px";
+          n.fireIcon.style.top = (H.y - cy + 5) + "px";
+        } else {   // R (default) / L
+          n.fireIcon.style.left = (H.x - cx + (H.edge === "L" ? 5 : -17)) + "px";
+          n.fireIcon.style.top = (H.y - cy - 6) + "px";
+        }
+      }
+    }
   }
 }
 
@@ -3787,39 +3832,78 @@ function cancelPingArm(silent) {
   if (setter) setter(0, bindingLabel(b && b.binding));
 }
 function pingFlash(src) {
-  // pad-less trigger cards (threshold) pulse the whole card instead
+  // pad-less trigger cards (threshold) pulse the whole card instead;
+  // buttons pulse their keycap AND the fire icon by the out handle (item 6)
   const n = nodes.get(src);
   if (!n) return;
-  const el = n.el.querySelector(".pingpad") || n.el;
-  el.classList.remove("pulse");
-  void el.offsetWidth;
-  el.classList.add("pulse");
+  const els = [n.el.querySelector(".keycap") ||
+               n.el.querySelector(".pingpad") || n.el];
+  if (n.fireIcon) els.push(n.fireIcon);
+  for (const el of els) {
+    el.classList.remove("pulse");
+    void el.offsetWidth;
+    el.classList.add("pulse");
+  }
+}
+// item 6: the keycap glyph — the bound key's character (or CC number)
+// rendered LARGE, like a computer key
+function keycapGlyph(b) {
+  if (!b) return {big: "＋", cc: false};
+  if (b.kind === "cc") return {big: String(b.cc), cc: true};
+  if (b.kind === "key") {
+    const code = String(b.code);
+    const PUNCT = {Comma: ",", Period: ".", Slash: "/", Semicolon: ";",
+      Quote: "'", BracketLeft: "[", BracketRight: "]", Backslash: "\\",
+      Minus: "-", Equal: "=", Backquote: "`", Enter: "⏎", Tab: "⇥",
+      ArrowUp: "↑", ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→"};
+    if (code in PUNCT) return {big: PUNCT[code], cc: false};
+    return {big: code.replace(/^(Key|Digit|Numpad)/, ""), cc: false};
+  }
+  return {big: "?", cc: false};
 }
 function buildButtonCard(b) {
+  // item 6: the binding IS the card face — a big KEYCAP (click = FIRE)
+  // over a small binding label (click = re-pair). The ◉ heartbeat icon
+  // moved out next to the OUT handle (renderHandles places it).
   const gid = b.id;
   const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
-  const rows = [
-    rowChip({gid}, "bind", {
-      text: (b.armed || pingArm === gid) ? "press a key/CC…"
-                                         : bindingLabel(b.binding),
-      onClick: () => {
-        if (pingArm === gid) cancelPingArm();
-        else startPingArm(gid);
-      },
-    }),
-  ];
   const n = addCard({gid, name: "Button" + suffix, short: "Btn" + suffix,
-    sub: "trigger · bindable", fam: "service", rows,
-    vizHTML: `<div class="pingpad" title="fire">◉</div>`,
+    sub: "trigger · bindable", fam: "service", rows: [],
+    vizHTML: `<div class="keycap" title="fire"></div>
+      <div class="bindline" title="click to rebind"></div>`,
     kill: () => send({type: "remove_button", id: gid}),
     ports: [["out", "ping", "ping"]]});
-  const pad = n.el.querySelector(".pingpad");
-  pad.addEventListener("pointerdown", (e) => e.stopPropagation());
-  pad.addEventListener("click", (e) => {
+  const cap = n.el.querySelector(".keycap"),
+        line = n.el.querySelector(".bindline");
+  const syncCap = () => {
+    const bb = ((state && state.buttons) || []).find(x => x.id === gid) || b;
+    const arm = bb.armed || pingArm === gid;
+    const g = arm ? {big: "…", cc: false} : keycapGlyph(bb.binding);
+    cap.innerHTML = (g.cc ? `<small>CC</small>` : "") + esc(g.big);
+    cap.classList.toggle("unbound", !arm && !bb.binding);
+    line.textContent = arm ? "press a key/CC…" : bindingLabel(bb.binding);
+  };
+  syncCap();
+  // pairing flows (startPingArm/cancelPingArm/handlePingKey) talk through
+  // this setter; the text is re-derived, so the args are ignored
+  uiParam[gid + ".bind"] = () => syncCap();
+  cap.addEventListener("pointerdown", (e) => e.stopPropagation());
+  cap.addEventListener("click", (e) => {
     e.stopPropagation();
     send({type: "fire_button", id: gid});
     pingFlash(gid);
   });
+  line.addEventListener("pointerdown", (e) => e.stopPropagation());
+  line.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (pingArm === gid) cancelPingArm();
+    else startPingArm(gid);
+  });
+  const fi = document.createElement("div");
+  fi.className = "fireicon";
+  fi.textContent = "◉";
+  n.el.appendChild(fi);
+  n.fireIcon = fi;
   return n;
 }
 function buildClockCard(c) {

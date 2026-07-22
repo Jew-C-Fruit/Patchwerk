@@ -163,6 +163,25 @@ def test_clock_ticks():
     app.set_clock(cid, division="nope")
     check("bad division ignored", c.division == "1/16")
 
+    # item 6: multi-bar periods — the clock's OWN ladder extends past 1/1
+    from synthbase.ping import CLOCK_DIVISIONS
+    from synthbase.transport import DIVISIONS
+    for d, beats in (("2/1", 8.0), ("4/1", 16.0), ("8/1", 32.0)):
+        app.set_clock(cid, division=d)
+        check(f"multi-bar division {d} accepted", c.division == d)
+        check(f"{d} is {beats} beats", CLOCK_DIVISIONS[d] == beats)
+    ds = c.settings()["divisions"]
+    check("clock ladder = multi-bar + full global ladder",
+          ds[:3] == ["8/1", "4/1", "2/1"] and ds[3:] == list(DIVISIONS))
+    check("global DIVISIONS untouched (no multi-bar leak)",
+          not any(d in DIVISIONS for d in ("2/1", "4/1", "8/1"))
+          and "2/1" not in app.transport.settings()["divisions"])
+    # grid math: a 2/1 clock phase-locks to multiples of 8 beats from beat 0
+    gb, _ = app.transport.next_grid(CLOCK_DIVISIONS["2/1"])
+    check("multi-bar grid point is a whole multiple of its period",
+          gb % 8.0 == 0.0 and gb > app.transport.beats_now())
+    app.set_clock(cid, division="1/16")   # restore for shutdown path
+
     fires = []
     c.fire = lambda: fires.append(time.monotonic())   # count ticks
     time.sleep(0.65)
@@ -190,12 +209,12 @@ def test_preset_roundtrip():
     bid = app.spawn_button()
     app.set_button(bid, binding={"kind": "cc", "cc": 30})
     cid = app.spawn_clock()
-    app.set_clock(cid, division="1/8")
+    app.set_clock(cid, division="4/1")   # a multi-bar period must round-trip
     data = presets.snapshot(app)
     check("snapshot carries buttons",
           data["buttons"] == [{"id": bid, "binding": {"kind": "cc", "cc": 30}}])
     check("snapshot carries clocks",
-          data["clocks"] == [{"id": cid, "division": "1/8"}])
+          data["clocks"] == [{"id": cid, "division": "4/1"}])
 
     app2 = SynthApp(use_midi=False, use_reload=False)
     app2._build_patch = lambda name: None
@@ -205,7 +224,7 @@ def test_preset_roundtrip():
           and app2.buttons[bid].binding == {"kind": "cc", "cc": 30})
     check("restore respawns the clock with its division",
           app2.clocks.get(cid) is not None
-          and app2.clocks[cid].division == "1/8")
+          and app2.clocks[cid].division == "4/1")
     for c in (*app.clocks.values(), *app2.clocks.values()):
         c.shutdown()
 

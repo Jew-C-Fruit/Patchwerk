@@ -19,8 +19,10 @@ Two source nodes:
   (unit crosses 0.5 upward) so continuous controllers don't machine-gun.
 
 * ClockTrigger ("clock", "clock.2", ...) — fires on a selectable transport
-  DIVISIONS subdivision, phase-locked via transport.next_grid (never a
-  free-running timer, so ticks stay aligned across tempo changes).
+  grid division, phase-locked via transport.next_grid (never a free-running
+  timer, so ticks stay aligned across tempo changes). Its ladder is
+  CLOCK_DIVISIONS: the global DIVISIONS plus multi-bar periods past 1/1
+  (item 6) — clock-only; arp/deriver ladders are deliberately untouched.
 
 Both emit {"kind": "ping", "src": "<id>"} viz taps on fire.
 """
@@ -31,6 +33,15 @@ import threading
 import time
 
 from .transport import DIVISIONS
+
+# The clock's own division ladder (item 6): multi-bar periods above 1/1,
+# then the full global ladder. Entries are WHOLE-NOTE multiples (2/1 = 8
+# beats...) — meter-independent, consistent with the existing 1/1 = 4-beats
+# convention — and phase-lock to multiples from beat 0 via next_grid, so a
+# 4/1 clock always fires on the same downbeats no matter when it spawned.
+# The global DIVISIONS stays untouched on purpose: arp and deriver ladders
+# must not grow multi-bar entries (Cole, 07-22).
+CLOCK_DIVISIONS = {"8/1": 32.0, "4/1": 16.0, "2/1": 8.0, **DIVISIONS}
 
 
 class ButtonTrigger:
@@ -122,13 +133,13 @@ class ClockTrigger:
                 pass
 
     def configure(self, division=None) -> None:
-        if division in DIVISIONS and division != self.division:
+        if division in CLOCK_DIVISIONS and division != self.division:
             self.division = division
             self._kick.set()   # interrupt the current sleep, re-grid at once
 
     def settings(self) -> dict:
         return {"id": self.id, "division": self.division,
-                "divisions": list(DIVISIONS)}
+                "divisions": list(CLOCK_DIVISIONS)}
 
     def shutdown(self) -> None:
         self._quit.set()
@@ -158,7 +169,7 @@ class ClockTrigger:
     def _run(self) -> None:
         transport = self.app.transport
         while not self._quit.is_set():
-            beats = DIVISIONS.get(self.division, 1.0)
+            beats = CLOCK_DIVISIONS.get(self.division, 1.0)
             gb, t = transport.next_grid(beats)
             r = self._sleep_until(t)
             if r == "quit":
