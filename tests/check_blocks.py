@@ -1487,6 +1487,44 @@ def main():
         check("live choice survives the state rebuild",
               btn13 == "● live", str(btn13))
 
+        # ================================================================
+        # 14 — Loop Deck mini track display when collapsed (item 4)
+        # ================================================================
+        dk = page.evaluate("""(() => {
+          const n = nodes.get('deck');
+          const vs = n.el.querySelector('.viz-sec');
+          const cv = n.el.querySelector('canvas[data-viz=deck]');
+          return {mini: n.el.classList.contains('miniviz'),
+                  shown: getComputedStyle(vs).display !== 'none',
+                  h: cv.clientHeight, expanded: !!n.expanded};
+        })()""")
+        check("collapsed deck keeps its track view visible (mini strip)",
+              not dk["expanded"] and dk["shown"] and dk["mini"]
+              and 0 < dk["h"] <= 24, str(dk))
+        page.evaluate(
+            "nodes.get('deck').el.querySelector('.expander').click()")
+        page.wait_for_timeout(250)
+        dk2 = page.evaluate("""(() => {
+          const n = nodes.get('deck');
+          const cv = n.el.querySelector('canvas[data-viz=deck]');
+          return {mini: n.el.classList.contains('miniviz'),
+                  h: cv.clientHeight, expanded: !!n.expanded};
+        })()""")
+        check("expanding the deck grows the full track view",
+              dk2["expanded"] and not dk2["mini"] and dk2["h"] >= 40,
+              str(dk2))
+        page.evaluate(
+            "nodes.get('deck').el.querySelector('.expander').click()")
+        page.wait_for_timeout(250)
+        dk3 = page.evaluate("""(() => {
+          const n = nodes.get('deck');
+          const cv = n.el.querySelector('canvas[data-viz=deck]');
+          return {mini: n.el.classList.contains('miniviz'),
+                  h: cv.clientHeight};
+        })()""")
+        check("collapsing returns to the mini strip (not hidden)",
+              dk3["mini"] and 0 < dk3["h"] <= 24, str(dk3))
+
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()
 

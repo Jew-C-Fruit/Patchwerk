@@ -286,6 +286,10 @@
   .mod .viz-sec { flex: 1 1 auto; min-height: 0; overflow: hidden; }
   .mod .viz-sec canvas.vz { height: 100%; display: block; }
   .mod.measuring .viz-sec canvas.vz { height: 54px !important; } /* deterministic sizeFor */
+  /* item 4: miniViz cards (deck) keep a COMPACT track strip when collapsed
+     instead of hiding the viz — 3-class rule outranks the measuring pin */
+  .mod.miniviz .viz-sec canvas.vz { height: 20px !important; }
+  .mod.measuring.miniviz .viz-sec canvas.vz { height: 20px !important; }
   /* drums: sequencer scales with card size — full @L, mini @M, hidden @S.
      lane label sits LEFT of its 16-step row (2-col grid over the flex markup) */
   .mod[data-gid="drums"] .viz-sec { display: grid !important; grid-template-columns: 27px 1fr;
@@ -769,7 +773,10 @@ function addCard(cfg) {
     vs.className = "viz-sec";
     vs.innerHTML = cfg.vizHTML;
     el.appendChild(vs);
-    if (cfg.expandable && !cfg.expanded) vs.style.display = "none";
+    if (cfg.expandable && !cfg.expanded) {
+      if (cfg.miniViz) el.classList.add("miniviz");   // compact strip, not hidden
+      else vs.style.display = "none";
+    }
   }
   world.appendChild(el);
   const node = {gid: cfg.gid, name: cfg.name, short: cfg.short || cfg.name.split(" ")[0],
@@ -783,7 +790,10 @@ function addCard(cfg) {
       e.stopPropagation();
       node.expanded = !node.expanded;
       ex.textContent = node.expanded ? "▾" : "▸";
-      if (vs) vs.style.display = node.expanded ? "" : "none";
+      if (vs) {
+        if (cfg.miniViz) el.classList.toggle("miniviz", !node.expanded);
+        else vs.style.display = node.expanded ? "" : "none";
+      }
       requestAnimationFrame(() => {
         if (uiMode === "flex") { place(node); rerouteAll(); return; }  // auto height
         const want = (node.expanded && cfg.wide) ? "L" : sizeFor(node);
@@ -4001,6 +4011,7 @@ function buildDeckCard() {
   rows.push(btns);
   const n = addCard({gid, name: "Loop Deck", short: "Deck", sub: "midi looper · " + l.state,
     fam: "ctl", rows, expandable: true, expanded: expandMem.deck,
+    miniViz: true,   // item 4: collapsed deck shows a mini track strip
     vizHTML: `<canvas class="vz" data-viz="deck" height="54"></canvas>`,
     ports: [["in", "ctl", "notes"], ["out", "ctl", "replay"]]});
   n.subEl = n.el.querySelector(".sub");
@@ -5091,8 +5102,9 @@ function drawVizLoop(now) {
     const cv = n.el.querySelector("canvas.vz");
     if (!cv) continue;
     const viz = cv.dataset.viz;
-    if ((viz === "deck" || n.montype) && n.expanded === false && n.el.querySelector(".expander"))
-      continue;   // collapsed expandable → hidden canvas
+    if (n.montype && n.expanded === false && n.el.querySelector(".expander"))
+      continue;   // collapsed monitor → hidden canvas (deck now draws its
+                  // mini strip when collapsed — item 4)
     if (!cv.clientWidth) continue;
     if (cv.width !== cv.clientWidth) cv.width = cv.clientWidth;
     const _ch = cv.clientHeight;
