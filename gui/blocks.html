@@ -2615,15 +2615,15 @@ function viewScale() {
   return (!panLocked && blocksFree != null) ? blocksFree
                                             : scaleFor(viewCols, viewRows);
 }
-function applyView(smooth) {
-  if (smooth) animateZoom(viewScale());
-  else {
-    if (zAnim) { cancelAnimationFrame(zAnim.raf); zAnim = null; }
-    world.style.zoom = viewScale();
-  }
+function applyViewChrome() {               // overflow + lock icon only
   boardEl.style.overflow = (uiMode === "blocks" && panLocked) ? "hidden" : "auto";
   const pl = $("panlock");
   if (pl) { pl.textContent = panLocked ? "🔒" : "🔓"; pl.classList.toggle("on", panLocked); }
+}
+function applyView() {                     // instant: boot/resize/mode switch
+  if (zAnim) { cancelAnimationFrame(zAnim.raf); zAnim = null; }
+  world.style.zoom = viewScale();
+  applyViewChrome();
 }
 function visibleWorldRect() {
   const s = viewScale();
@@ -2662,33 +2662,49 @@ function saveView() {
 // or the board center (buttons/lock-snap). All math stays on
 // world.style.zoom + the board's own scrollLeft/Top — same convention-
 // neutral doctrine as worldXYev (never rect ratios; Chrome pre/post-128).
-let zAnim = null;                          // {target, ax, ay, raf}
-function setZoomKeepingAnchor(z1, ax, ay) {
-  const b = boardEl.getBoundingClientRect();
-  const z0 = parseFloat(world.style.zoom) || 1;
-  const wx = (boardEl.scrollLeft + (ax - b.left)) / z0;
-  const wy = (boardEl.scrollTop + (ay - b.top)) / z0;
-  world.style.zoom = z1;
-  boardEl.scrollLeft = wx * z1 - (ax - b.left);
-  boardEl.scrollTop  = wy * z1 - (ay - b.top);
-}
+// The animator runs in WORLD coordinates: it eases the zoom AND the world
+// point sitting at the viewport's upper-left corner toward their targets
+// (a 90-frame cap guards unreachable, browser-clamped scroll targets).
+let zAnim = null;                          // {zt, wx, wy, n, raf}
 function stepZoomAnim() {
   if (!zAnim) return;
   const z0 = parseFloat(world.style.zoom) || 1;
-  const zt = zAnim.target;
-  let z1 = z0 + (zt - z0) * 0.35;          // exponential ease-out
-  if (Math.abs(z1 - zt) < 0.002) z1 = zt;  // land exactly
-  setZoomKeepingAnchor(z1, zAnim.ax, zAnim.ay);
-  if (z1 !== zt) zAnim.raf = requestAnimationFrame(stepZoomAnim);
+  const wl0 = boardEl.scrollLeft / z0, wt0 = boardEl.scrollTop / z0;
+  let z1 = z0 + (zAnim.zt - z0) * 0.35;    // exponential ease-out
+  let wl1 = wl0 + (zAnim.wx - wl0) * 0.35;
+  let wt1 = wt0 + (zAnim.wy - wt0) * 0.35;
+  zAnim.n++;
+  // scroll tolerance in VISUAL px — scrollLeft is integer-quantized by the
+  // browser, so a world-px threshold below 1/zoom can never be met
+  const done = zAnim.n > 90 ||
+    (Math.abs(z1 - zAnim.zt) < 0.002 &&
+     Math.abs(wl1 - zAnim.wx) * z1 < 1.5 && Math.abs(wt1 - zAnim.wy) * z1 < 1.5);
+  if (done) { z1 = zAnim.zt; wl1 = zAnim.wx; wt1 = zAnim.wy; }  // land exactly
+  world.style.zoom = z1;
+  boardEl.scrollLeft = wl1 * z1;
+  boardEl.scrollTop  = wt1 * z1;
+  if (!done) zAnim.raf = requestAnimationFrame(stepZoomAnim);
   else zAnim = null;
 }
-function animateZoom(target, ax, ay) {
-  if (ax === undefined) {                  // default anchor: board center
-    const b = boardEl.getBoundingClientRect();
-    ax = b.left + b.width / 2; ay = b.top + b.height / 2;
-  }
-  if (zAnim) { zAnim.target = target; zAnim.ax = ax; zAnim.ay = ay; return; }
-  zAnim = { target, ax, ay, raf: requestAnimationFrame(stepZoomAnim) };
+function animateZoomTo(zt, wx, wy) {       // explicit world-corner target
+  if (zAnim) { Object.assign(zAnim, { zt, wx, wy, n: 0 }); return; }
+  zAnim = { zt, wx, wy, n: 0, raf: requestAnimationFrame(stepZoomAnim) };
+}
+function animateZoom(zt) {                 // zoom holding the CURRENT corner
+  const z0 = parseFloat(world.style.zoom) || 1;
+  animateZoomTo(zt, boardEl.scrollLeft / z0, boardEl.scrollTop / z0);
+}
+// LOCKED blocks view = whole blocks only: gutter-aligned on all sides.
+// Width at scaleFor(cols,rows) is exactly cols·PITCH+GUT, so aligning the
+// corner to a block origin puts gutters on every edge of the viewport.
+function alignLockedView() {
+  const zt = scaleFor(viewCols, viewRows);
+  const z0 = parseFloat(world.style.zoom) || 1;
+  const c0 = Math.max(0, Math.min(BX - viewCols,
+    Math.round((boardEl.scrollLeft / z0) / (PITCH * U))));
+  const r0 = Math.max(0, Math.min(BY - viewRows,
+    Math.round((boardEl.scrollTop / z0) / (PITCH * U))));
+  animateZoomTo(zt, c0 * PITCH * U, r0 * PITCH * U);
 }
 function zoomStep(dir) {
   if (uiMode === "flex") {                 // flex: the +/- buttons step-zoom
@@ -2702,32 +2718,43 @@ function zoomStep(dir) {
   } else {         // zoom IN
     viewCols = Math.max(3, viewCols - 1); viewRows = Math.max(2, viewRows - 1);
   }
-  applyView(true);
-  if (dir < 0 && panLocked && modulesHidden()) { panLocked = false; applyView(true); }
+  // the canvas pulls in/out RELATIVE TO THE 0,0 UPPER CORNER of the view
+  // (Cole 07-22): the corner holds, rows/columns appear at bottom/right —
+  // and a LOCKED view stays gutter-aligned
+  if (panLocked) alignLockedView();        // stays LOCKED — never auto-unlocks
+  else animateZoom(scaleFor(viewCols, viewRows));
+  applyViewChrome();
   saveView();
 }
-// pinch (ctrl+wheel): retarget the animator continuously — smooth chase
+// pinch (ctrl+wheel): retarget the animator continuously — smooth chase,
+// the world point under the cursor stays under the cursor
 function pinchZoom(cx, cy, f) {
+  const b = boardEl.getBoundingClientRect();
+  const z0 = parseFloat(world.style.zoom) || 1;
+  let zt;
   if (uiMode === "flex") {
-    flexZoom = Math.max(0.25, Math.min(3, (zAnim ? zAnim.target : flexZoom) * f));
-    animateZoom(flexZoom, cx, cy);
+    flexZoom = zt = Math.max(0.25, Math.min(3, (zAnim ? zAnim.zt : flexZoom) * f));
   } else {
     const lo = scaleFor(BX, BY), hi = scaleFor(3, 2);
-    const cur = zAnim ? zAnim.target : (blocksFree ?? viewScale());
-    blocksFree = Math.max(lo, Math.min(hi, cur * f));
-    animateZoom(blocksFree, cx, cy);
+    const cur = zAnim ? zAnim.zt : (blocksFree ?? viewScale());
+    blocksFree = zt = Math.max(lo, Math.min(hi, cur * f));
   }
+  const wpx = (boardEl.scrollLeft + (cx - b.left)) / z0;   // world pt under cursor
+  const wpy = (boardEl.scrollTop + (cy - b.top)) / z0;
+  animateZoomTo(zt, wpx - (cx - b.left) / zt, wpy - (cy - b.top) / zt);
   saveView();
 }
 // LOCKING blocks snaps the free zoom to the closest grid size (item 1 spec)
 function lockSnap() {
-  if (blocksFree == null) return;
-  let best = [viewCols, viewRows], bd = Infinity;
-  for (let c = 3; c <= BX; c++) for (let r = 2; r <= BY; r++) {
-    const d = Math.abs(scaleFor(c, r) - blocksFree);
-    if (d < bd) { bd = d; best = [c, r]; }
+  if (blocksFree != null) {
+    let best = [viewCols, viewRows], bd = Infinity;
+    for (let c = 3; c <= BX; c++) for (let r = 2; r <= BY; r++) {
+      const d = Math.abs(scaleFor(c, r) - blocksFree);
+      if (d < bd) { bd = d; best = [c, r]; }
+    }
+    viewCols = best[0]; viewRows = best[1]; blocksFree = null;
   }
-  viewCols = best[0]; viewRows = best[1]; blocksFree = null;
+  alignLockedView();   // gutter-align all sides: only whole blocks visible
 }
 let _viewChecked = false;
 function viewAutoUnlockOnce() {   // first state load: off-view modules → unlock
@@ -2757,8 +2784,8 @@ function viewAutoUnlockOnce() {   // first state load: off-view modules → unlo
   zi.addEventListener("click", (e) => { zoomStep(-1); e.target.blur(); });
   pl.addEventListener("click", (e) => {
     panLocked = !panLocked;
-    if (panLocked) lockSnap();             // lock snaps to the closest grid size
-    applyView(true); saveView(); e.target.blur();
+    if (panLocked) lockSnap();   // snap scale to grid + gutter-align (animated)
+    applyViewChrome(); saveView(); e.target.blur();
   });
   ws.addEventListener("click", (e) => {
     flexWireStyle = flexWireStyle === "route" ? "bezier" : "route";

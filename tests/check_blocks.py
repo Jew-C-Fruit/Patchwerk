@@ -1172,7 +1172,8 @@ def main():
         zb2 = page.evaluate("parseFloat(world.style.zoom) || 1")
         check("blocks UNLOCKED: pinch free-zooms", zb2 > zb1, f"{zb1}->{zb2}")
         page.click("#panlock")     # lock again → snap to closest grid size
-        page.wait_for_timeout(500)
+        page.wait_for_function("() => zAnim === null", timeout=4000)
+        page.wait_for_timeout(50)
         snap_ok = page.evaluate("""(() => {
           const z = parseFloat(world.style.zoom) || 1;
           for (let c = 3; c <= BX; c++) for (let r = 2; r <= BY; r++)
@@ -1180,6 +1181,57 @@ def main():
           return false;
         })()""")
         check("locking snaps the zoom to the closest grid size", snap_ok)
+
+        # locking gutter-aligns the viewport on ALL sides (whole blocks only)
+        align = page.evaluate("""(() => {
+          const z = parseFloat(world.style.zoom) || 1;
+          const brd = document.getElementById('board');
+          return {c: (brd.scrollLeft / z) / (PITCH * U),
+                  r: (brd.scrollTop / z) / (PITCH * U), locked: panLocked};
+        })()""")
+        check("locking gutter-aligns the view to whole blocks",
+              align["locked"] and abs(align["c"] - round(align["c"])) < 0.02
+              and abs(align["r"] - round(align["r"])) < 0.02, str(align))
+
+        # +/- canvas buttons: never unlock; a locked view stays gutter-aligned
+        page.click("#zoomout")
+        page.wait_for_function("() => zAnim === null", timeout=4000)
+        page.wait_for_timeout(50)
+        zo = page.evaluate("""(() => {
+          const z = parseFloat(world.style.zoom) || 1;
+          const brd = document.getElementById('board');
+          return {locked: panLocked,
+                  grid: Math.abs(scaleFor(viewCols, viewRows) - z) < 1e-4,
+                  c: (brd.scrollLeft / z) / (PITCH * U),
+                  r: (brd.scrollTop / z) / (PITCH * U)};
+        })()""")
+        check("+/- while LOCKED stays locked, on-grid and gutter-aligned",
+              zo["locked"] and zo["grid"]
+              and abs(zo["c"] - round(zo["c"])) < 0.02
+              and abs(zo["r"] - round(zo["r"])) < 0.02, str(zo))
+
+        # +/- pull in/out relative to the view's 0,0 upper corner (unlocked)
+        page.click("#panlock")     # unlock
+        page.wait_for_timeout(80)
+        c0 = page.evaluate("""(() => {
+          const z = parseFloat(world.style.zoom) || 1;
+          const brd = document.getElementById('board');
+          return [brd.scrollLeft / z, brd.scrollTop / z];
+        })()""")
+        page.click("#zoomin")
+        page.wait_for_function("() => zAnim === null", timeout=4000)
+        page.wait_for_timeout(50)
+        c1 = page.evaluate("""(() => {
+          const z = parseFloat(world.style.zoom) || 1;
+          const brd = document.getElementById('board');
+          // scrollbars can appear on zoom-in (overflow auto), shifting
+          // clientWidth → compare scales with a scrollbar-wide tolerance
+          return [brd.scrollLeft / z, brd.scrollTop / z,
+                  Math.abs(scaleFor(viewCols, viewRows) - z) / z < 0.03];
+        })()""")
+        check("+/- holds the view's upper corner (0,0-relative pull)",
+              abs(c1[0] - c0[0]) < 1.0 and abs(c1[1] - c0[1]) < 1.0 and c1[2],
+              f"{c0} -> {c1}")
 
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()
