@@ -62,7 +62,11 @@
   #palette button:hover { border-color: var(--ink-2); }
   #palette button i { width: 8px; height: 8px; border-radius: 2px; flex: none; }
 
-  #board { position: absolute; inset: 54px 0 0 0; overflow: auto; }
+  /* overflow-anchor OFF: the smooth-zoom animator writes scrollLeft/Top every
+     frame — Chrome's scroll anchoring would fight those writes and make the
+     whole canvas float around during zoom */
+  #board { position: absolute; inset: 54px 0 0 0; overflow: auto;
+    overflow-anchor: none; }
   #world { position: relative; width: 2600px; height: 1800px;
     background-image: linear-gradient(var(--grid) 1px, transparent 1px),
                       linear-gradient(90deg, var(--grid) 1px, transparent 1px);
@@ -248,6 +252,10 @@
   .mod { width: auto; transition: left 150ms ease, top 150ms ease,
          width 150ms ease, height 150ms ease; overflow: hidden; }
   .mod.dragging { transition: width 150ms ease, height 150ms ease; }
+  /* mode switches swap geometry INSTANTLY: card transitions would otherwise
+     animate while wires/handles are computed from mid-transition offsetWidth/
+     Height — wires land disconnected (Cole, 07-22) */
+  body.modeswitch .mod { transition: none !important; }
   /* NO SCROLLBARS: cards take the smallest footprint that fits everything
      (sizeFor measures), so bodies never scroll — and never show a bar */
   .mod .body { overflow: hidden; max-height: calc(100% - 24px); }
@@ -2582,6 +2590,21 @@ document.addEventListener("pointerup", () => {
   world.style.width = (UW * U) + "px";
   world.style.height = (UH * U) + "px";
   world.style.backgroundSize = `${U}px ${U}px`;
+  // overlay layers get EXPLICIT px sizes (not inset/100%): percentage
+  // resolution inside a CSS-zoomed subtree has shifted across Chrome's
+  // zoom standardization — explicit px keeps wires/handles/tags pinned to
+  // the exact same coordinate space as the cards on every Chrome
+  for (const id of ["wires", "wiretop", "handles", "wlabels"]) {
+    const el = $(id);
+    if (!el) continue;
+    el.style.width = (UW * U) + "px";
+    el.style.height = (UH * U) + "px";
+    if (el.tagName === "svg" || el.tagName === "SVG") {
+      el.setAttribute("width", UW * U);
+      el.setAttribute("height", UH * U);
+      el.setAttribute("viewBox", `0 0 ${UW * U} ${UH * U}`);
+    }
+  }
   const holder = $("blocks");
   for (let x = 0; x < BX; x++) for (let y = 0; y < BY; y++) {
     const d = document.createElement("div");
@@ -2829,9 +2852,14 @@ function setMode(m) {
   uiMode = m;
   clearSel();
   syncModeUI();
+  // geometry swaps INSTANTLY: suppress the .mod left/top/size transitions so
+  // offsetWidth/Height are FINAL when handles/wires measure them (otherwise
+  // wires land disconnected — computed from mid-transition card geometry)
+  document.body.classList.add("modeswitch");
   if (m === "flex") {
     for (const n of nodes.values()) placeFlex(n);   // seeds from blocks layout
     deoverlapFlex();                                 // fresh seeds settle down
+    for (const n of nodes.values()) if (n.onResize) n.onResize();
   } else {
     for (const n of nodes.values()) {
       n.el.style.height = "";
@@ -2843,6 +2871,11 @@ function setMode(m) {
   }
   applyView();
   rerouteAll();
+  requestAnimationFrame(() => requestAnimationFrame(() =>
+    document.body.classList.remove("modeswitch")));
+  // SETTLE PASS (mirrors rebuildGraph): fonts/title-shrink/viz reflow can
+  // shift card heights a beat after the swap — recompute once settled
+  setTimeout(rerouteAll, 300);
   saveView(); saveLayout();
 }
 $("mode-blocks").addEventListener("click", () => setMode("blocks"));
