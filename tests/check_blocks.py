@@ -540,22 +540,20 @@ def main():
                     "ctl_to_ping", "ping_to_audio"):
             check(f"grammar refuses {bad}", not combos[bad], str(combos))
 
-        # pad click fires
+        # keycap click fires (item 6: the keycap replaced the ◉ pad as the
+        # button's manual fire surface)
         page.evaluate("window.__sent.length = 0")
         page.evaluate(
-            "nodes.get('button').el.querySelector('.pingpad').click()")
+            "nodes.get('button').el.querySelector('.keycap').click()")
         sent = page.evaluate("window.__sent")
-        check("pad click sends fire_button",
+        check("keycap click sends fire_button",
               {"type": "fire_button", "id": "button"} in sent, str(sent))
 
-        # pairing: arm, then an ASSIGNED (note) key must NOT bind…
+        # pairing: arm via the bindline, then an ASSIGNED (note) key must
+        # NOT bind…
         page.evaluate("window.__sent.length = 0")
-        page.evaluate("""() => {
-          const chip = [...nodes.get('button').el.querySelectorAll('label')]
-            .find(l => l.title === 'bind').parentElement
-            .querySelector('.chip');
-          chip.click();
-        }""")
+        page.evaluate(
+            "nodes.get('button').el.querySelector('.bindline').click()")
         page.wait_for_timeout(60)
         sent = page.evaluate("window.__sent")
         check("arming sends set_button armed",
@@ -1615,6 +1613,122 @@ def main():
         })()""")
         check("bare click on a stepped slider applies nothing",
               not clicked, str(clicked))
+
+        # ================================================================
+        # 16 — trigger card polish (item 6): Button keycap + Clock multi-bar
+        # ================================================================
+        clock_ladder = ["8/1", "4/1", "2/1", "1/1", "1/2", "1/4.", "1/4",
+                        "1/4T", "1/8.", "1/8", "1/8T", "1/16", "1/16T",
+                        "1/32"]
+        st16 = base_state(
+            [sg, echo],
+            [{"from": "signal_gen", "to": "echo"},
+             {"from": "echo", "to": "master"}],
+            buttons=[{"id": "button", "binding": {"kind": "key",
+                                                  "code": "KeyN"},
+                      "armed": False},
+                     {"id": "button.2", "binding": None, "armed": False},
+                     {"id": "button.3", "binding": {"kind": "cc", "cc": 21},
+                      "armed": False}],
+            clocks=[{"id": "clock", "division": "1/32",
+                     "divisions": clock_ladder}])
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st16)
+        page.wait_for_timeout(500)
+
+        # keycap renders the binding LARGE: key glyph / CC number / unbound
+        caps = page.evaluate("""(() => {
+          const g = (gid) => {
+            const n = nodes.get(gid);
+            const cap = n.el.querySelector('.keycap');
+            return {txt: cap.textContent, unbound:
+                      cap.classList.contains('unbound'),
+                    cc: !!cap.querySelector('small'),
+                    line: n.el.querySelector('.bindline').textContent,
+                    size: n.size};
+          };
+          return {b: g('button'), b2: g('button.2'), b3: g('button.3')};
+        })()""")
+        check("bound key renders its glyph on the keycap",
+              caps["b"]["txt"] == "N" and not caps["b"]["cc"], str(caps))
+        check("binding label sits underneath",
+              caps["b"]["line"] == "key N", str(caps))
+        check("unbound keycap shows ＋ / pair…",
+              caps["b2"]["txt"] == "＋" and caps["b2"]["unbound"]
+              and caps["b2"]["line"] == "pair…", str(caps))
+        check("CC binding renders CC prefix + number",
+              caps["b3"]["cc"] and "21" in caps["b3"]["txt"], str(caps))
+        check("button cards still measure into S",
+              all(caps[k]["size"] == "S" for k in ("b", "b2", "b3")),
+              str(caps))
+
+        # the ◉ heartbeat icon rides next to the rendered ping-out handle
+        fi = page.evaluate("""(() => {
+          const n = nodes.get('button');
+          const H = n.lay.handles.find(h => h.sig === 'ping'
+                                            && h.side === 'out');
+          const el = n.fireIcon;
+          if (!H || !el) return null;
+          const ix = n.el.offsetLeft + el.offsetLeft + 6;
+          const iy = n.el.offsetTop + el.offsetTop + 6;
+          return {d: Math.hypot(ix - H.x, iy - H.y),
+                  inX: el.offsetLeft >= 0
+                       && el.offsetLeft + 12 <= n.el.offsetWidth,
+                  inY: el.offsetTop >= 0
+                       && el.offsetTop + 12 <= n.el.offsetHeight};
+        })()""")
+        check("fire icon sits next to the out handle (<24px)",
+              fi is not None and fi["d"] < 24, str(fi))
+        check("fire icon stays inside the card", fi is not None
+              and fi["inX"] and fi["inY"], str(fi))
+
+        # firing pulses BOTH the keycap and the fire icon
+        pulsed = page.evaluate("""(() => {
+          const n = nodes.get('button');
+          n.el.querySelector('.keycap').click();
+          return {cap: n.el.querySelector('.keycap')
+                        .classList.contains('pulse'),
+                  icon: n.fireIcon.classList.contains('pulse')};
+        })()""")
+        check("fire pulses keycap + heartbeat icon",
+              pulsed["cap"] and pulsed["icon"], str(pulsed))
+
+        # arming flips the keycap to … and Escape restores it
+        page.evaluate(
+            "nodes.get('button.2').el.querySelector('.bindline').click()")
+        armed = page.evaluate("""(() => {
+          const n = nodes.get('button.2');
+          return {cap: n.el.querySelector('.keycap').textContent,
+                  line: n.el.querySelector('.bindline').textContent};
+        })()""")
+        check("arming shows … / press a key/CC…",
+              armed == {"cap": "…", "line": "press a key/CC…"}, str(armed))
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(60)
+        armed = page.evaluate("""(() => {
+          const n = nodes.get('button.2');
+          return {cap: n.el.querySelector('.keycap').textContent,
+                  line: n.el.querySelector('.bindline').textContent};
+        })()""")
+        check("Escape cancels pairing back to ＋ / pair…",
+              armed == {"cap": "＋", "line": "pair…"}, str(armed))
+
+        # clock multi-bar: the extended ladder cycles through the chip —
+        # from the ladder's end (1/32) one click wraps to 8/1
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("""(() => {
+          const n = nodes.get('clock');
+          const chip = [...n.el.querySelectorAll('label')]
+            .find(l => l.title === 'division').parentElement
+            .querySelector('.chip');
+          chip.click();
+        })()""")
+        sent16 = page.evaluate(
+            "window.__sent.filter(m => m.type === 'set_clock')")
+        check("division chip cycles into the multi-bar entries (1/32→8/1)",
+              sent16 and sent16[-1] == {"type": "set_clock", "id": "clock",
+                                        "division": "8/1"}, str(sent16))
+        sz16 = page.evaluate("nodes.get('clock').size")
+        check("clock card still measures into S", sz16 == "S", str(sz16))
 
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()
