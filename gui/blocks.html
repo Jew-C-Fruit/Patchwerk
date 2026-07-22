@@ -318,9 +318,15 @@
   .mod .viz-sec canvas.vz { height: 100%; display: block; }
   .mod.measuring .viz-sec canvas.vz { height: 54px !important; } /* deterministic sizeFor */
   /* item 4: miniViz cards (deck) keep a COMPACT track strip when collapsed
-     instead of hiding the viz — 3-class rule outranks the measuring pin */
-  .mod.miniviz .viz-sec canvas.vz { height: 20px !important; }
-  .mod.measuring.miniviz .viz-sec canvas.vz { height: 20px !important; }
+     instead of hiding the viz — 3-class rule outranks the measuring pin.
+     07-22: the strip FILLS the card's spare room up to 3 UNITS (48px;
+     Cole: "room for 3" — was pinned at 20px/~1 unit). The MEASURING pin
+     stays 20px so sizeFor keeps landing the same size class as before —
+     the strip stretches into slack, it never creates any. */
+  .mod.miniviz .viz-sec canvas.vz { height: 100% !important;
+    max-height: 48px; }
+  .mod.measuring.miniviz .viz-sec canvas.vz { height: 20px !important;
+    max-height: none; }
   /* drums: sequencer scales with card size — full @L, mini @M, hidden @S.
      lane label sits LEFT of its 16-step row (2-col grid over the flex markup) */
   .mod[data-gid="drums"] .viz-sec { display: grid !important; grid-template-columns: 27px 1fr;

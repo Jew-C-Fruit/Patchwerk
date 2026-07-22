@@ -1505,9 +1505,11 @@ def main():
                   shown: getComputedStyle(vs).display !== 'none',
                   h: cv.clientHeight, expanded: !!n.expanded};
         })()""")
+        # 07-22: the strip is 3 grid squares tall now (48px; Cole: "room
+        # for 3" — was 1 square / 20px)
         check("collapsed deck keeps its track view visible (mini strip)",
               not dk["expanded"] and dk["shown"] and dk["mini"]
-              and 0 < dk["h"] <= 24, str(dk))
+              and 40 <= dk["h"] <= 52, str(dk))
         page.evaluate(
             "nodes.get('deck').el.querySelector('.expander').click()")
         page.wait_for_timeout(250)
@@ -1518,7 +1520,7 @@ def main():
                   h: cv.clientHeight, expanded: !!n.expanded};
         })()""")
         check("expanding the deck grows the full track view",
-              dk2["expanded"] and not dk2["mini"] and dk2["h"] >= 40,
+              dk2["expanded"] and not dk2["mini"] and dk2["h"] > dk["h"],
               str(dk2))
         page.evaluate(
             "nodes.get('deck').el.querySelector('.expander').click()")
@@ -1530,7 +1532,7 @@ def main():
                   h: cv.clientHeight};
         })()""")
         check("collapsing returns to the mini strip (not hidden)",
-              dk3["mini"] and 0 < dk3["h"] <= 24, str(dk3))
+              dk3["mini"] and 40 <= dk3["h"] <= 52, str(dk3))
 
         # ================================================================
         # 15 — stepped integer sliders replace numeric cycle-chips (item 5)
