@@ -29,6 +29,15 @@ jobs:
       - name: Loop deck tests
         run: python tests/test_looper.py
 
+      - name: Ping trigger tests
+        run: python tests/test_ping.py
+
+      - name: Deriver split tests
+        run: python tests/test_deriver.py
+
+      - name: Routable LFO tests
+        run: python tests/test_lfo.py
+
   gui-checks:
     name: GUI checks (headless Playwright)
     runs-on: ubuntu-latest
@@ -61,3 +70,13 @@ jobs:
         env:
           PLAYWRIGHT_BROWSERS_PATH: /opt/pw-browsers
         run: python tests/gui_check8.py
+
+      - name: Blocks UI checks (mock ws)
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: /opt/pw-browsers
+        run: python tests/check_blocks.py
+
+      - name: Blocks UI real-state replay
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: /opt/pw-browsers
+        run: python tests/check_real.py
