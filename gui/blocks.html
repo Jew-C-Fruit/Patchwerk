@@ -186,6 +186,9 @@
   .pingpad:hover { filter: brightness(1.25); }
   .pingpad.pulse { animation: pingpulse .22s ease; }
   @keyframes pingpulse { 30% { text-shadow: 0 0 9px var(--ping); transform: scale(1.35); } }
+  /* pad-less trigger cards (threshold) pulse their whole card on fire */
+  .mod.pulse { animation: cardping .25s ease; }
+  @keyframes cardping { 30% { box-shadow: 0 0 12px var(--ping); } }
   #keypop { position: fixed; z-index: 80; background: var(--card);
     border: 1px solid var(--ink-2); border-radius: 9px; padding: 6px;
     display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px;
@@ -2322,9 +2325,13 @@ function droneIds() {
     if ((m.type || String(m.key).split(".")[0]) === "drone") s.add(m.key);
   return s;
 }
+function thresholdIds() {
+  return new Set(((state && state.thresholds) || []).map(t => t.id));
+}
 function pingSrcIds() {
   return new Set([...((state && state.buttons) || []).map(b => b.id),
-                  ...((state && state.clocks) || []).map(c => c.id)]);
+                  ...((state && state.clocks) || []).map(c => c.id),
+                  ...thresholdIds()]);   // item 8: CV edge → ping
 }
 // ctl endpoint grammar: "keyshift.2:3" = node "keyshift.2", lane 3. Nodes
 // without lanes are plain ids (unchanged).
@@ -2370,12 +2377,21 @@ function connectAction(out, inn) {
     return () => send({type: "graph_wire", action: "add", from, to});
   }
   if (sig === "mod") {
-    // LFO out → a param's quiet handle. Fan-out is free (one LFO, many
-    // params); the param side is single-input — the server STEALS an
-    // already-mapped param from its old LFO on add.
-    if (!pi.quiet || !inn.node.chainKey) return null;
+    // LFO out → a param's quiet handle OR a threshold's cv-in (item 8).
+    // Fan-out is free (one LFO, many params); the param side is
+    // single-input — the server STEALS an already-mapped param from its
+    // old LFO on add.
     const src = out.node;
     if (!src.gid.startsWith("lfo:")) return null;
+    if (thresholdIds().has(inn.node.gid)) {
+      // the threshold cv-in is single-input: add REPLACES the source.
+      // Legacy (pre-item-7) LFO entries can't feed one — no norm bus.
+      const tl = ((state && state.lfos) || []).find(x => x.id === src.gid.slice(4));
+      if (tl && lfoIsLegacy(tl)) return null;
+      return () => send({type: "threshold_wire", action: "add",
+                         id: inn.node.gid, lfo: src.gid.slice(4)});
+    }
+    if (!pi.quiet || !inn.node.chainKey) return null;
     const lid = src.gid.slice(4);
     const l = ((state && state.lfos) || []).find(x => x.id === lid);
     if (l && lfoIsLegacy(l))   // pre-item-7 server: re-target the assignment
@@ -3006,12 +3022,13 @@ function cancelPingArm(silent) {
   if (setter) setter(0, bindingLabel(b && b.binding));
 }
 function pingFlash(src) {
+  // pad-less trigger cards (threshold) pulse the whole card instead
   const n = nodes.get(src);
-  const pad = n && n.el.querySelector(".pingpad");
-  if (!pad) return;
-  pad.classList.remove("pulse");
-  void pad.offsetWidth;
-  pad.classList.add("pulse");
+  if (!n) return;
+  const el = n.el.querySelector(".pingpad") || n.el;
+  el.classList.remove("pulse");
+  void el.offsetWidth;
+  el.classList.add("pulse");
 }
 function buildButtonCard(b) {
   const gid = b.id;
@@ -3062,6 +3079,55 @@ function buildClockCard(c) {
     vizHTML: `<div class="pingpad">◔</div>`,
     kill: () => send({type: "remove_clock", id: gid}),
     ports: [["out", "ping", "ping"]]});
+}
+// item 8: threshold — a comparator watching a CV (its cv-in takes an LFO's
+// mod wire); the server fires ONE ping per crossing (edge-notify, /tr).
+// level/hysteresis are in the LFO's normalized bipolar terms (−1..1).
+function buildThresholdCard(t) {
+  const gid = t.id;
+  const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
+  const rows = [
+    rowSlider({gid}, "level", {
+      unit: (Math.max(-1, Math.min(1, t.level)) + 1) / 2,
+      text: t.level.toFixed(2),
+      valText: (u) => (u * 2 - 1).toFixed(2),
+      onUnit: (u) => {
+        t.level = u * 2 - 1;
+        throttled("thr" + gid + "l", () =>
+          send({type: "set_threshold", id: gid, level: t.level}));
+      },
+    }),
+    rowSlider({gid}, "hyst", {
+      unit: Math.max(0, Math.min(1, t.hysteresis / 0.5)),
+      text: t.hysteresis.toFixed(2),
+      valText: (u) => (u * 0.5).toFixed(2),
+      onUnit: (u) => {
+        t.hysteresis = u * 0.5;
+        throttled("thr" + gid + "h", () =>
+          send({type: "set_threshold", id: gid, hysteresis: t.hysteresis}));
+      },
+    }),
+    rowChip({gid}, "edge", {
+      text: t.mode,
+      onClick: (chip) => {
+        const ms = t.modes || ["rising", "falling", "both"];
+        const v = ms[(ms.indexOf(chip.textContent) + 1) % ms.length];
+        chip.textContent = v;
+        t.mode = v;
+        send({type: "set_threshold", id: gid, mode: v});
+      },
+    }),
+  ];
+  const n = addCard({gid, name: "Threshold" + suffix, short: "Thr" + suffix,
+    sub: t.source ? "◁ " + t.source : "cv edge → ping",
+    fam: "service", rows,
+    kill: () => send({type: "remove_threshold", id: gid}),
+    ports: [["in", "mod", "cv"], ["out", "ping", "ping"]]});
+  // the cv-in is a QUIET single-input handle riding the level row's line —
+  // the level is what the incoming CV is compared against
+  const cv = n.ports.find(p => p.sig === "mod" && p.dir === "in");
+  if (cv) { cv.quiet = true; cv.rowEl = rows[0]; }
+  return n;
 }
 
 // ---- key shifter: Grasshopper-ish key popover + progression step strip ----
@@ -3474,7 +3540,8 @@ function rebuildGraph() {
                       ...(state.literals || []).map(buildLiteralCard)];
   const ksNodes = (state.keyshifts || []).map(buildKeyshiftCard);
   const trigNodes = [...(state.buttons || []).map(buildButtonCard),
-                     ...(state.clocks || []).map(buildClockCard)];
+                     ...(state.clocks || []).map(buildClockCard),
+                     ...(state.thresholds || []).map(buildThresholdCard)];
   const services = [], chainNodes = [];
   for (const mod of state.chain) {
     const n = buildChainCard(mod);
@@ -3601,6 +3668,17 @@ function rebuildGraph() {
                     key: d.key, name: d.param})});
     }
   }
+  // threshold cv-ins (item 8): each wired source draws LFO → cv-in; cutting
+  // sends a targeted threshold_wire remove (the threshold card stays)
+  for (const t of (state.thresholds || [])) {
+    if (!t.source) continue;
+    const src = nodes.get("lfo:" + t.source), tgt = nodes.get(t.id);
+    if (!src || !tgt) continue;
+    addWire({node: src, port: port(src, "out", "mod")},
+            {node: tgt, port: tgt.ports.find(p => p.quiet && p.sig === "mod")},
+            {lfoId: t.source, cut: () => send({type: "threshold_wire",
+               action: "remove", id: t.id, lfo: t.source})});
+  }
 
   rerouteAll();
   requestAnimationFrame(() => refreshActivity());
@@ -3631,6 +3709,7 @@ function renderPalette() {
   h3("triggers");
   btn("Button ◉", "#f0b37e", () => send({type: "spawn_button"}));
   btn("Clock ◔", "#f0b37e", () => send({type: "spawn_clock"}));
+  btn("Threshold ⌁", "#f0b37e", () => send({type: "spawn_threshold"}));
   // the palette NEVER removes placed modules: any entry can be spawned
   // again — every click/drag makes a fresh instance ("lowpass.2", ...)
   const avail = (state && state.available) || [];

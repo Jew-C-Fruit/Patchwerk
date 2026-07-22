@@ -34,6 +34,11 @@ Current coverage:
      (presence/scores toggle, committed vs leading marking, confidence);
      the Literal card's chips cycle and send set_literal; both derivers
      take notes/emit notes/accept ping triggers in the grammar.
+  10. Threshold (item 8): the card renders from state.thresholds (small,
+     level/hyst/edge rows); its cv-in is a QUIET single-input mod handle
+     riding the level row; LFO-out → cv-in connects via threshold_wire
+     (targeted remove on cut); its ping-out draws/wires like button/clock
+     (trigger-ins only); ping events pulse the pad-less card.
   9. Routable LFO (item 7): the LFO is a standalone node (palette spawns
      via spawn_lfo, kill sends remove_lfo); the card has rate/depth/shape
      and NO center row; one card fans out to MANY destinations (a mod wire
@@ -796,6 +801,115 @@ def main():
         check("legacy wire cut falls back to lfo_unassign",
               {"type": "lfo_unassign", "id": "signal_gen.amp"} in sent,
               str(sent))
+
+        # ================================================================
+        # 10 — threshold (item 8): CV edge → ping
+        # ================================================================
+        st_thr = base_state(
+            [sg_m], [{"from": "signal_gen", "to": "master"}],
+            ctl_wires=[{"from": "keys", "to": "voice"},
+                       {"from": "threshold", "to": "tonic"}],
+            tonics=[{"id": "tonic", "every": "1 bar", "everies": ["1 bar"],
+                     "octave": 2, "root": None}],
+            lfos=[{"id": "lfo", "rate": 1.0, "shape": 0, "depth": 0.5,
+                   "shapes": ["sine", "tri", "ramp", "square", "s&h"],
+                   "dests": []}],
+            thresholds=[{"id": "threshold", "level": 0.0, "hysteresis": 0.02,
+                         "mode": "rising",
+                         "modes": ["rising", "falling", "both"],
+                         "source": "lfo"}])
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st_thr)
+        page.wait_for_timeout(500)
+
+        check("threshold card renders", page.evaluate("nodes.has('threshold')"))
+        check("threshold card sizes to S",
+              page.evaluate("nodes.get('threshold').size") == "S")
+        rows = page.evaluate(
+            "[...nodes.get('threshold').el.querySelectorAll('label')]"
+            ".map(l => l.title)")
+        check("threshold rows: level/hyst/edge",
+              all(r in rows for r in ("level", "hyst", "edge")), str(rows))
+
+        cv = page.evaluate("""(() => {
+          const n = nodes.get('threshold');
+          const p = n.ports.find(q => q.sig === 'mod' && q.dir === 'in');
+          const lay = computeLayout(n);
+          const row = [...n.el.querySelectorAll('.mini')].find(
+            r => (r.querySelector('label')||{}).title === 'level');
+          const rowY = n.y + row.offsetTop + row.offsetHeight / 2;
+          const h = lay.handles.find(H => H.sig === 'mod' && H.side === 'in');
+          return {quiet: !!p.quiet, plus: portAllowsPlus(p),
+                  aligned: h && Math.abs(h.y - rowY) < 1.0};
+        })()""")
+        check("cv-in is a quiet single-input handle on the level row",
+              cv == {"quiet": True, "plus": False, "aligned": True}, str(cv))
+
+        # the wired source draws LFO → cv-in in the mod family; a cut sends
+        # a targeted threshold_wire remove
+        check("LFO → threshold cv wire draws (mod family)", page.evaluate(
+            "wires.some(w => w.sig === 'mod'"
+            " && w.to.node.gid === 'threshold')"))
+        check("threshold → deriver wire draws in the ping family",
+              page.evaluate(
+                  "(wires.find(w => w.from.node.gid === 'threshold') || {})"
+                  ".sig") == "ping")
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate(
+            "wires.find(w => w.sig === 'mod'"
+            " && w.to.node.gid === 'threshold').cutAction()")
+        sent = page.evaluate("window.__sent")
+        check("cv wire cut sends threshold_wire remove",
+              {"type": "threshold_wire", "action": "remove",
+               "id": "threshold", "lfo": "lfo"} in sent, str(sent))
+
+        # grammar: LFO-out → cv-in connects via threshold_wire add;
+        # threshold ping-out lands ONLY on a trigger-in
+        acts = page.evaluate("""(() => {
+          const lfo = nodes.get('lfo:lfo'), thr = nodes.get('threshold');
+          const ton = nodes.get('tonic'), arp = nodes.get('arp');
+          const lout = {node: lfo, port: lfo.ports.find(p => p.sig === 'mod')};
+          const cvin = {node: thr,
+                        port: thr.ports.find(p => p.sig === 'mod' && p.dir === 'in')};
+          const pout = {node: thr,
+                        port: thr.ports.find(p => p.sig === 'ping' && p.dir === 'out')};
+          window.__sent.length = 0;
+          const add = connectAction(lout, cvin);
+          if (add) add();
+          const ping = connectAction(pout,
+            {node: ton, port: ton.ports.find(p => p.sig === 'ping')});
+          const bad = arp && connectAction(pout,
+            {node: arp, port: arp.ports.find(p => p.sig === 'ctl' && p.dir === 'in')});
+          return {addSent: window.__sent, ping: !!ping, bad: !!bad};
+        })()""")
+        check("LFO-out → cv-in connects (threshold_wire add)",
+              {"type": "threshold_wire", "action": "add", "id": "threshold",
+               "lfo": "lfo"} in acts["addSent"], str(acts))
+        check("threshold ping-out → deriver trigger-in connects",
+              acts["ping"], str(acts))
+        check("threshold ping-out → ctl-in refused", not acts["bad"],
+              str(acts))
+
+        # controls talk to the server; a ping event pulses the card
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("""() => {
+          const n = nodes.get('threshold');
+          [...n.el.querySelectorAll('.chip')].find(
+            c => c.textContent === 'rising').click();
+          __msg({type: 'midi', event: {kind: 'ping', src: 'threshold'}});
+        }""")
+        page.wait_for_timeout(80)
+        sent = page.evaluate("window.__sent")
+        check("edge chip cycles + sends set_threshold mode",
+              {"type": "set_threshold", "id": "threshold",
+               "mode": "falling"} in sent, str(sent))
+        check("a ping event pulses the pad-less card", page.evaluate(
+            "nodes.get('threshold').el.classList.contains('pulse')"))
+        check("palette Threshold button sends spawn_threshold", page.evaluate(
+            """(() => { window.__sent.length = 0;
+              [...document.querySelectorAll('#palette button')]
+                .find(b => b.textContent.includes('Threshold')).click();
+              return window.__sent.some(m => m.type === 'spawn_threshold');
+            })()"""))
 
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()
