@@ -64,6 +64,14 @@ LOCAL when wired/riding a wire (they show that path's traffic) and GLOBAL
 when unwired (master feed / all taps). Source-fires emit ONE tagged tap
 (`{"kind": "tap", "src": <node id>}`) per fire, not per edge.
 
+**Blocks-geometry nomenclature (Cole, 2026-07-22 — use these words in
+specs and asks).** A **unit** (= grid square) is the fine 16px grid cell
+(`U = 16` in blocks.html). A **block** is the 10u×10u snappable area
+(`BLK = 10`), separated by 2u gutters. Card sizes in those terms:
+S = 10×4.5u (half a block), M = 10×10u (one block), L = 22×10u (two
+blocks spanning their gutter). So "3 units high" means 3 grid squares
+(48px) — never 3 blocks.
+
 ## Writing a new module (the main vibecoding activity)
 
 Copy an existing file in `modules/` and change the body. The contract:
