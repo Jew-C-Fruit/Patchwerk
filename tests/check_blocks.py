@@ -39,6 +39,16 @@ Current coverage:
      riding the level row; LFO-out → cv-in connects via threshold_wire
      (targeted remove on cut); its ping-out draws/wires like button/clock
      (trigger-ins only); ping events pulse the pad-less card.
+  11. Flex mode + zoom + lasso (backlog item 1): the header mode toggle
+     swaps blocks ↔ flex; flex renders every card at fixed width with AUTO
+     height (data-size F, all rows visible), seeds positions from the
+     blocks layout, routes wires with the ported A* router by default and
+     cubic beziers behind the ⌇/∿ toggle; wheel/pinch free-zooms flex
+     always and blocks only while UNLOCKED (locking snaps to the closest
+     grid size); a drag from a dead zone draws a square lasso that
+     mass-selects, a selected card's head drags the WHOLE group, clicking
+     anything else deselects; blocks geometry and flex spots both survive
+     the mode round-trip.
   9. Routable LFO (item 7): the LFO is a standalone node (palette spawns
      via spawn_lfo, kill sends remove_lfo); the card has rate/depth/shape
      and NO center row; one card fans out to MANY destinations (a mod wire
@@ -916,6 +926,243 @@ def main():
                 .find(b => b.textContent.includes('Threshold')).click();
               return window.__sent.some(m => m.type === 'spawn_threshold');
             })()"""))
+
+        # ================================================================
+        # 11 — flex mode + zoom + lasso group move (item 1 of the backlog)
+        # ================================================================
+        st_flex = base_state(
+            [sg, echo],
+            [{"from": "signal_gen", "to": "echo"},
+             {"from": "echo", "to": "master"}])
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st_flex)
+        page.wait_for_timeout(500)
+        # mode toggle replaces the "blocks" title; default mode = blocks
+        check("mode toggle renders in the header", page.evaluate(
+            "!!document.getElementById('mode-blocks') && "
+            "!!document.getElementById('mode-flex')"))
+        check("default mode is blocks", page.evaluate(
+            "document.body.dataset.mode") == "blocks")
+
+        # remember blocks-mode geometry of two cards, then switch to flex
+        pre = page.evaluate("""(() => {
+          const g = (gid) => { const n = nodes.get(gid);
+            return {left: n.el.style.left, top: n.el.style.top,
+                    size: n.el.dataset.size, x: n.x, y: n.y}; };
+          return {sg: g('m:signal_gen'), echo: g('m:echo'),
+                  zoom: world.style.zoom};
+        })()""")
+        page.click("#mode-flex")
+        page.wait_for_timeout(400)
+        check("flex: body carries the mode", page.evaluate(
+            "document.body.dataset.mode") == "flex")
+        flex = page.evaluate("""(() => {
+          const g = (gid) => { const n = nodes.get(gid);
+            return {w: n.el.offsetWidth, h: n.el.offsetHeight,
+                    hs: n.el.style.height, ds: n.el.dataset.size,
+                    fx: n.fx, fy: n.fy, x: n.x}; };
+          return {sg: g('m:signal_gen'), echo: g('m:echo'),
+                  rows: nodes.get('m:signal_gen')
+                    .el.querySelectorAll('.mini').length};
+        })()""")
+        check("flex cards render at fixed width / AUTO height",
+              flex["sg"]["ds"] == "F" and flex["sg"]["w"] == 170
+              and flex["sg"]["hs"] == "auto" and flex["sg"]["h"] > 0,
+              str(flex["sg"]))
+        check("flex seeds x from the blocks layout (continuous switch)",
+              abs(flex["sg"]["fx"] - pre["sg"]["x"]) <= 8, str((pre, flex)))
+        check("flex: every param row stays visible (auto height)",
+              flex["rows"] >= 2, str(flex))
+
+        # wires: default flex style is the ROUTED (A*) orthogonal path;
+        # the ⌇/∿ toggle swaps to bezier curves
+        wire_d = page.evaluate(
+            "wires.length ? wires[0].topEl.getAttribute('d') : ''")
+        check("flex wires route by default (orthogonal, no cubic)",
+              wire_d and " C " not in wire_d, wire_d[:80])
+        page.click("#wirestyle")
+        page.wait_for_timeout(250)
+        bez_d = page.evaluate(
+            "wires.length ? wires[0].topEl.getAttribute('d') : ''")
+        check("wire-style toggle draws cubic beziers", " C " in bez_d,
+              bez_d[:80])
+        page.click("#wirestyle")   # back to routed
+        page.wait_for_timeout(250)
+
+        # zoom: wheel over the board free-zooms flex (pinch = ctrl+wheel)
+        z0 = page.evaluate("parseFloat(world.style.zoom) || 1")
+        page.evaluate("""() => {
+          document.getElementById('board').dispatchEvent(new WheelEvent(
+            'wheel', {deltaY: -240, ctrlKey: true, clientX: 700, clientY: 500,
+                      bubbles: true, cancelable: true}));
+        }""")
+        page.wait_for_timeout(100)
+        z1 = page.evaluate("parseFloat(world.style.zoom) || 1")
+        check("flex: pinch/wheel zooms IN (scale rises)", z1 > z0, f"{z0}->{z1}")
+
+        # lasso in flex: drag from empty space around both cards, then drag
+        # the group by one card's head — both cards move by the same delta
+        page.evaluate("""(() => {   // park the cards + pin the view (zoom 1)
+          const a = nodes.get('m:signal_gen'), b = nodes.get('m:echo');
+          a.fx = 200; a.fy = 120; b.fx = 200; b.fy = 416;
+          place(a); place(b); rerouteAll();
+          flexZoom = 1; applyView();
+          const brd = document.getElementById('board');
+          brd.scrollLeft = 0; brd.scrollTop = 0;
+        })()""")
+        page.wait_for_timeout(200)
+        lasso_sel = page.evaluate("""(() => {
+          const brd = document.getElementById('board');
+          const r = brd.getBoundingClientRect();
+          const zs = parseFloat(world.style.zoom) || 1;
+          // client coords of world points via OUR zoom (convention-neutral)
+          const cx = (wx) => r.left - brd.scrollLeft + wx * zs;
+          const cy = (wy) => r.top - brd.scrollTop + wy * zs;
+          const fire = (t, x, y) => brd.dispatchEvent(new PointerEvent(t,
+            {clientX: x, clientY: y, bubbles: true, pointerId: 7}));
+          fire('pointerdown', cx(120), cy(60));
+          fire('pointermove', cx(500), cy(660));
+          fire('pointerup', cx(500), cy(660));
+          return [...sel];
+        })()""")
+        check("lasso from a dead zone selects the enclosed cards",
+              "m:signal_gen" in lasso_sel and "m:echo" in lasso_sel,
+              str(lasso_sel))
+        before = page.evaluate(
+            "(() => { const a = nodes.get('m:signal_gen'),"
+            " b = nodes.get('m:echo'); return [a.fx, a.fy, b.fx, b.fy]; })()")
+        gh = page.evaluate("""(() => {
+          const r = nodes.get('m:signal_gen').el.querySelector('.head')
+            .getBoundingClientRect();
+          return {x: r.left + 6, y: r.top + 6,
+                  zs: parseFloat(world.style.zoom) || 1};
+        })()""")
+        page.mouse.move(gh["x"], gh["y"])
+        page.mouse.down()
+        page.mouse.move(gh["x"] + 96 * gh["zs"], gh["y"] + 64 * gh["zs"],
+                        steps=6)
+        page.mouse.up()
+        page.wait_for_timeout(150)
+        after = page.evaluate(
+            "(() => { const a = nodes.get('m:signal_gen'),"
+            " b = nodes.get('m:echo'); return [a.fx, a.fy, b.fx, b.fy]; })()")
+        deltas = [after[i] - before[i] for i in range(4)]
+        check("group drag moves BOTH selected cards by the same delta",
+              deltas == [96, 64, 96, 64], f"{before} -> {after}")
+
+        # clicking anything that isn't a selected card's head deselects
+        tr = page.evaluate("""(() => {
+          const r = nodes.get('m:signal_gen').el.querySelector('.track')
+            .getBoundingClientRect();
+          return {x: r.x + r.width / 2, y: r.y + r.height / 2};
+        })()""")
+        page.mouse.click(tr["x"], tr["y"])
+        page.wait_for_timeout(80)
+        check("clicking anything else deselects",
+              page.evaluate("sel.size") == 0)
+
+        # back to blocks: geometry restores exactly; flex spots persist
+        page.click("#mode-blocks")
+        page.wait_for_timeout(300)
+        post = page.evaluate("""(() => {
+          const g = (gid) => { const n = nodes.get(gid);
+            return {left: n.el.style.left, top: n.el.style.top,
+                    size: n.el.dataset.size}; };
+          return {mode: document.body.dataset.mode,
+                  sg: g('m:signal_gen'), echo: g('m:echo'),
+                  fx: nodes.get('m:signal_gen').fx};
+        })()""")
+        check("back to blocks: mode + card sizes restore",
+              post["mode"] == "blocks" and post["sg"]["size"] in "SML"
+              and post["sg"]["left"] == pre["sg"]["left"]
+              and post["sg"]["top"] == pre["sg"]["top"], str((pre, post)))
+        check("flex position survives the round-trip", page.evaluate(
+            "nodes.get('m:signal_gen').fx") == after[0], str(post))
+
+        # BLOCKS group move: lasso both cards, drag one head → the whole
+        # group moves by a WHOLE-BLOCK delta (no shove; must fit to land)
+        page.evaluate("""(() => {   // park in the empty bottom-right, full view
+          viewCols = BX; viewRows = BY; panLocked = true; blocksFree = null;
+          applyView();
+          const a = nodes.get('m:signal_gen'), b = nodes.get('m:echo');
+          a.bx = 9; a.by = 5; a.half = null;
+          b.bx = 9; b.by = 6; b.half = null;
+          place(a); place(b); rerouteAll();
+        })()""")
+        page.wait_for_timeout(200)
+        page.evaluate("""(() => {
+          const brd = document.getElementById('board');
+          const r = brd.getBoundingClientRect();
+          const zs = parseFloat(world.style.zoom) || 1;
+          const cx = (wx) => r.left - brd.scrollLeft + wx * zs;
+          const cy = (wy) => r.top - brd.scrollTop + wy * zs;
+          const A = nodeUnitRect(nodes.get('m:signal_gen'));
+          const B = nodeUnitRect(nodes.get('m:echo'));
+          const x0 = (A.x - 1) * U, y0 = (A.y - 1) * U;
+          const x1 = (B.x + B.w + 1) * U, y1 = (B.y + B.h + 1) * U;
+          const fire = (t, x, y) => brd.dispatchEvent(new PointerEvent(t,
+            {clientX: x, clientY: y, bubbles: true, pointerId: 11}));
+          fire('pointerdown', cx(x0), cy(y0));
+          fire('pointermove', cx(x1), cy(y1));
+          fire('pointerup', cx(x1), cy(y1));
+        })()""")
+        page.wait_for_timeout(100)
+        check("blocks lasso selects the group", page.evaluate(
+            "sel.has('m:signal_gen') && sel.has('m:echo')"))
+        bh = page.evaluate("""(() => {
+          const r = nodes.get('m:signal_gen').el.querySelector('.head')
+            .getBoundingClientRect();
+          return {x: r.left + 6, y: r.top + 6,
+                  step: (PITCH * U) * (parseFloat(world.style.zoom) || 1)};
+        })()""")
+        page.mouse.move(bh["x"], bh["y"])
+        page.mouse.down()
+        page.mouse.move(bh["x"] + bh["step"], bh["y"], steps=6)
+        page.mouse.up()
+        page.wait_for_timeout(150)
+        gpos = page.evaluate(
+            "(() => { const a = nodes.get('m:signal_gen'),"
+            " b = nodes.get('m:echo');"
+            " return [a.bx, a.by, b.bx, b.by]; })()")
+        check("blocks group drag moves BOTH cards one block right",
+              gpos == [10, 5, 10, 6], str(gpos))
+        page.mouse.click(60, 700)   # empty board space → deselect
+        page.wait_for_timeout(80)
+        check("blocks: clicking empty space deselects",
+              page.evaluate("sel.size") == 0)
+
+        # blocks zoom: LOCKED ignores the wheel; UNLOCKED free-zooms; locking
+        # again snaps to the closest grid size (a scaleFor(cols,rows) value)
+        page.evaluate("""() => {   // ensure locked state to start
+          if (!panLocked) { panLocked = true; lockSnap(); applyView(); }
+        }""")
+        zb0 = page.evaluate("parseFloat(world.style.zoom) || 1")
+        page.evaluate("""() => {
+          document.getElementById('board').dispatchEvent(new WheelEvent(
+            'wheel', {deltaY: -240, ctrlKey: true, clientX: 700, clientY: 500,
+                      bubbles: true, cancelable: true}));
+        }""")
+        page.wait_for_timeout(80)
+        zb1 = page.evaluate("parseFloat(world.style.zoom) || 1")
+        check("blocks LOCKED: wheel does not zoom", abs(zb1 - zb0) < 1e-9,
+              f"{zb0}->{zb1}")
+        page.click("#panlock")     # unlock
+        page.evaluate("""() => {
+          document.getElementById('board').dispatchEvent(new WheelEvent(
+            'wheel', {deltaY: -240, ctrlKey: true, clientX: 700, clientY: 500,
+                      bubbles: true, cancelable: true}));
+        }""")
+        page.wait_for_timeout(80)
+        zb2 = page.evaluate("parseFloat(world.style.zoom) || 1")
+        check("blocks UNLOCKED: wheel free-zooms", zb2 > zb1, f"{zb1}->{zb2}")
+        page.click("#panlock")     # lock again → snap to closest grid size
+        page.wait_for_timeout(80)
+        snap_ok = page.evaluate("""(() => {
+          const z = parseFloat(world.style.zoom) || 1;
+          for (let c = 3; c <= BX; c++) for (let r = 2; r <= BY; r++)
+            if (Math.abs(scaleFor(c, r) - z) < 1e-4) return true;
+          return false;
+        })()""")
+        check("locking snaps the zoom to the closest grid size", snap_ok)
 
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()

@@ -382,11 +382,34 @@
   #viewctl button:last-child { border-radius: 0 6px 6px 0; }
   #viewctl button:hover { z-index: 1; }
   #panlock.on { border-color: var(--ink-2); }
+
+  /* ================= FLEX MODE + LASSO (item 1) ================= */
+  #modetog { display: inline-flex; margin-left: 7px; vertical-align: 2px; }
+  #modetog button { background: var(--card); color: var(--ink-2); font-size: 11px;
+    border: 1px solid var(--border); padding: 2px 9px; cursor: pointer;
+    font-family: inherit; font-weight: 650; }
+  #modetog button + button { margin-left: -1px; }
+  #modetog button:first-child { border-radius: 7px 0 0 7px; }
+  #modetog button:last-child { border-radius: 0 7px 7px 0; }
+  #modetog button.on { color: var(--ink-1); border-color: var(--ink-2); z-index: 1; }
+  body[data-mode="flex"] .blockbg { display: none; }
+  /* flex hides blocks-only chrome: size chips, pan lock, tidy (blocks pour) */
+  body[data-mode="flex"] .szchips, body[data-mode="flex"] #panlock,
+  body[data-mode="flex"] #tidy { display: none; }
+  body:not([data-mode="flex"]) #wirestyle { display: none; }
+  /* flex cards: fixed width (inline), AUTO height — every row visible */
+  .mod[data-size="F"] { height: auto !important; }
+  .mod.sel { outline: 1.6px solid rgba(255,255,255,0.8); outline-offset: 1.5px; }
+  #lasso { position: absolute; display: none; z-index: 60; pointer-events: none;
+    border: 1px dashed rgba(255,255,255,0.7); background: rgba(255,255,255,0.06);
+    border-radius: 3px; }
 </style>
 </head>
 <body>
 <header id="hdr">
-  <h1><span id="status"></span>Patchwerk · blocks</h1>
+  <h1><span id="status"></span>Patchwerk ·
+    <span id="modetog"><button id="mode-blocks" class="on">blocks</button><button
+      id="mode-flex">flex</button></span></h1>
   <button id="reconnect-btn" title="restart backend (modules, wiring and settings are preserved)">⟳</button>
   <div class="grp"><span class="lb">patch</span><select id="patch-sel"></select></div>
   <div class="grp"><span class="lb">preset</span><select id="preset-sel"></select>
@@ -430,6 +453,7 @@
   <div id="handles"></div>
   <div id="wlabels"></div>
   <div id="fpghost"><div class="halfline"></div></div>
+  <div id="lasso"></div>
 </div></div>
 <div class="hint">keys <b>A–;</b> play · <b>Z/X</b> octave · <b>caps</b> sustain · <b>space</b> loop-rec
   · drag handles to wire · drag a wire's end to repatch (space = cut) · double-click a wire to cut
@@ -586,17 +610,20 @@ function throttled(key, fn, ms = 30) {
 // ---------- layout persistence ----------
 // positions per patch: {pos: {gid: [x,y]}, monitors: [[gid, type, x, y, expanded]], monN}
 let currentPatch = null, posMem = {}, monN = 1;
+let fposMem = {};   // flex free positions per patch: gid -> [px, py] (item 1)
 function storeKey(patch) { return "supersynth.flex." + patch; }
 function saveLayout() {
   if (!currentPatch) return;
   throttled("savelayout", () => {
-    for (const n of nodes.values())
+    for (const n of nodes.values()) {
       if (n.bx !== undefined && n.bx !== null) posMem[n.gid] = memOf(n);
+      if (n.fx !== undefined && n.fx !== null) fposMem[n.gid] = [n.fx, n.fy];
+    }
     const monitors = [...nodes.values()].filter(n => n.persistent && n.montype)
       .map(n => [n.gid, n.montype, ...memOf(n), !!n.expanded]);
     try {
       localStorage.setItem(storeKey(currentPatch),
-        JSON.stringify({pos: posMem, monitors, monN}));
+        JSON.stringify({pos: posMem, monitors, monN, fpos: fposMem}));
     } catch (_) {}
   }, 400);
 }
@@ -604,9 +631,10 @@ function loadLayout(patch) {
   try {
     const d = JSON.parse(localStorage.getItem(storeKey(patch)) || "{}");
     posMem = d.pos || {};
+    fposMem = d.fpos || {};
     monN = d.monN || 1;
     return d.monitors || [];
-  } catch (_) { posMem = {}; return []; }
+  } catch (_) { posMem = {}; fposMem = {}; return []; }
 }
 
 // ---------- generic card builder ----------
@@ -738,6 +766,7 @@ function addCard(cfg) {
       ex.textContent = node.expanded ? "▾" : "▸";
       if (vs) vs.style.display = node.expanded ? "" : "none";
       requestAnimationFrame(() => {
+        if (uiMode === "flex") { place(node); rerouteAll(); return; }  // auto height
         const want = (node.expanded && cfg.wide) ? "L" : sizeFor(node);
         if (want !== node.size) resizeNode(node, want); else place(node);
         rerouteAll();
@@ -797,7 +826,15 @@ function unitRect(pl) {
   if (pl.size === "M") return { x, y: yB, w: BLK, h: BLK };
   return { x, y: yB, w: BLK * 2 + GUT, h: BLK };
 }
-function nodeUnitRect(n) { return unitRect(placeOf(n)); }
+function nodeUnitRect(n) {
+  // flex mode (item 1): the card's FREE px rect, in units — the port-layout
+  // engine (computeLayout/mkHandle) runs unchanged on top of it
+  if (uiMode === "flex" && n.fx !== undefined && n.fx !== null) {
+    const r = flexRect(n);
+    return { x: r.x / U, y: r.y / U, w: r.w / U, h: r.h / U };
+  }
+  return unitRect(placeOf(n));
+}
 function currentPos(excludeGid) {
   const p = new Map();
   for (const n of nodes.values()) if (n.gid !== excludeGid) p.set(n.gid, placeOf(n));
@@ -1018,6 +1055,209 @@ function reducePoly(P) {
 }
 
 // ============================================================================
+// FLEX ROUTER (item 1) — ported from gui/legacy/flex.html: A* over a px cell
+// grid, obstacle map from card rects, turn-penalized, port-normal stubs.
+// Default flex wire style; "bezier" is the per-user alternative (⌇/∿ toggle).
+// ============================================================================
+const FCELL = 12;
+const FCOLS = Math.ceil(UW * U / FCELL) + 1, FROWS = Math.ceil(UH * U / FCELL) + 1;
+const fObst = new Uint8Array(FCOLS * FROWS);
+const fCore = new Uint8Array(FCOLS * FROWS);
+const F_NORMALS = { L: [-1, 0], R: [1, 0], T: [0, -1], B: [0, 1] };
+function rebuildFlexObstacles() {
+  fObst.fill(0); fCore.fill(0);
+  for (const n of nodes.values()) {
+    const r = flexRect(n);
+    const mark = (pad, g) => {
+      const x0 = Math.max(0, (r.x - pad) / FCELL | 0), y0 = Math.max(0, (r.y - pad) / FCELL | 0);
+      const x1 = Math.min(FCOLS - 1, Math.ceil((r.x + r.w + pad) / FCELL));
+      const y1 = Math.min(FROWS - 1, Math.ceil((r.y + r.h + pad) / FCELL));
+      for (let cy = y0; cy <= y1; cy++)
+        for (let cx = x0; cx <= x1; cx++) g[cy * FCOLS + cx] = 1;
+    };
+    mark(6, fObst); mark(-2, fCore);
+  }
+  // carve a channel out of each handle so routes can leave/enter its card
+  for (const n of nodes.values()) {
+    if (!n.lay) continue;
+    for (const H of n.lay.handles) {
+      const [nx, ny] = F_NORMALS[H.edge] || [0, 1];
+      for (let k = 0; k < 3; k++) {
+        const cx = Math.round((H.x + nx * (6 + k * FCELL)) / FCELL);
+        const cy = Math.round((H.y + ny * (6 + k * FCELL)) / FCELL);
+        if (cx < 0 || cy < 0 || cx >= FCOLS || cy >= FROWS) continue;
+        const i = cy * FCOLS + cx;
+        if (!fCore[i]) fObst[i] = 0;
+      }
+    }
+  }
+}
+function fFreeNear(cx, cy, g) {
+  if (!g[cy * FCOLS + cx]) return [cx, cy];
+  for (let r = 1; r < 8; r++)
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      const x = cx + dx, y = cy + dy;
+      if (x >= 0 && y >= 0 && x < FCOLS && y < FROWS && !g[y * FCOLS + x]) return [x, y];
+    }
+  return [cx, cy];
+}
+const F_DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+function fAstar(sx, sy, tx, ty, grid = fObst) {
+  [sx, sy] = fFreeNear(sx, sy, grid); [tx, ty] = fFreeNear(tx, ty, grid);
+  const N = FCOLS * FROWS;
+  const g = new Float32Array(N * 4).fill(Infinity);
+  const prev = new Int32Array(N * 4).fill(-1);
+  const heap = [];
+  const push = (f, s) => { heap.push([f, s]); let i = heap.length - 1;
+    while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break;
+      [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
+  const pop = () => { const top = heap[0], last = heap.pop();
+    if (heap.length) { heap[0] = last; let i = 0;
+      for (;;) { const l = 2 * i + 1, r = l + 1; let m = i;
+        if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+        if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+        if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } }
+    return top; };
+  const h = (x, y) => Math.abs(x - tx) + Math.abs(y - ty);
+  const TURN = 9;
+  for (let d = 0; d < 4; d++) { const s = (sy * FCOLS + sx) * 4 + d; g[s] = 0; push(h(sx, sy), s); }
+  let goal = -1;
+  while (heap.length) {
+    const [f, s] = pop();
+    const d = s & 3, cell = s >> 2, cx = cell % FCOLS, cy = (cell / FCOLS) | 0;
+    if (f - h(cx, cy) > g[s]) continue;
+    if (cx === tx && cy === ty) { goal = s; break; }
+    for (let nd = 0; nd < 4; nd++) {
+      const nx = cx + F_DIRS[nd][0], ny = cy + F_DIRS[nd][1];
+      if (nx < 0 || ny < 0 || nx >= FCOLS || ny >= FROWS) continue;
+      if (grid[ny * FCOLS + nx] && !(nx === tx && ny === ty)) continue;
+      const ns = (ny * FCOLS + nx) * 4 + nd;
+      const cost = g[s] + 1 + (nd !== d ? TURN : 0);
+      if (cost < g[ns]) { g[ns] = cost; prev[ns] = s; push(cost + h(nx, ny), ns); }
+    }
+  }
+  if (goal < 0) return null;
+  const pts = [];
+  for (let s = goal; s >= 0; s = prev[s]) {
+    const cell = s >> 2;
+    pts.push([(cell % FCOLS) * FCELL, ((cell / FCOLS) | 0) * FCELL]);
+  }
+  pts.reverse();
+  return fSimplify(pts);
+}
+function fSimplify(pts) {
+  const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [a, b, c] = [out[out.length - 1], pts[i], pts[i + 1]];
+    if ((a[0] === b[0] && b[0] === c[0]) || (a[1] === b[1] && b[1] === c[1])) continue;
+    out.push(b);
+  }
+  out.push(pts[pts.length - 1]);
+  return out;
+}
+function fDedupe(pts) {
+  const out = [pts[0]];
+  for (const p of pts.slice(1)) {
+    const q = out[out.length - 1];
+    if (p[0] !== q[0] || p[1] !== q[1]) out.push(p);
+  }
+  return fSimplify(out);
+}
+function fDejag(pts) {
+  for (let pass = 0; pass < 4; pass++) {
+    let changed = false;
+    for (let i = 2; i + 2 <= pts.length - 3; i++) {
+      const a = pts[i - 1], b = pts[i], c = pts[i + 1], d = pts[i + 2];
+      const midLen = Math.abs(c[0] - b[0]) + Math.abs(c[1] - b[1]);
+      if (midLen === 0 || midLen > FCELL + 0.5) continue;
+      const prevH = a[1] === b[1], nextH = c[1] === d[1];
+      if (prevH !== nextH) continue;
+      const lp = Math.abs(b[0] - a[0]) + Math.abs(b[1] - a[1]);
+      const ln = Math.abs(d[0] - c[0]) + Math.abs(d[1] - c[1]);
+      if (prevH) {
+        const y = lp >= ln ? a[1] : d[1];
+        if (y === a[1]) pts[i + 2] = [d[0], y]; else pts[i - 1] = [a[0], y];
+      } else {
+        const x = lp >= ln ? a[0] : d[0];
+        if (x === a[0]) pts[i + 2] = [x, d[1]]; else pts[i - 1] = [x, a[1]];
+      }
+      pts.splice(i, 2);
+      changed = true; i--;
+    }
+    if (!changed) break;
+  }
+  return fDedupe(pts);
+}
+// sealed-route fallback: never draw a blind L through cards — try both Ls,
+// then detour via the nearest clear column/row (checked against fCore)
+function fSegClearCore(x0, y0, x1, y1) {
+  if (x0 === x1) {
+    for (let y = Math.min(y0, y1); y <= Math.max(y0, y1); y++)
+      if (fCore[y * FCOLS + x0]) return false;
+  } else {
+    for (let x = Math.min(x0, x1); x <= Math.max(x0, x1); x++)
+      if (fCore[y0 * FCOLS + x]) return false;
+  }
+  return true;
+}
+function fFallbackRoute(sc, tc) {
+  const [sx, sy] = sc, [tx, ty] = tc;
+  const P = (cells) => cells.map(([x, y]) => [x * FCELL, y * FCELL]);
+  if (fSegClearCore(sx, sy, tx, sy) && fSegClearCore(tx, sy, tx, ty))
+    return P([[sx, sy], [tx, sy], [tx, ty]]);
+  if (fSegClearCore(sx, sy, sx, ty) && fSegClearCore(sx, ty, tx, ty))
+    return P([[sx, sy], [sx, ty], [tx, ty]]);
+  const midX = Math.round((sx + tx) / 2), midY = Math.round((sy + ty) / 2);
+  for (let r = 0; r < FCOLS; r++) for (const x of (r ? [midX - r, midX + r] : [midX])) {
+    if (x < 0 || x >= FCOLS) continue;
+    if (fSegClearCore(sx, sy, x, sy) && fSegClearCore(x, sy, x, ty) &&
+        fSegClearCore(x, ty, tx, ty))
+      return P([[sx, sy], [x, sy], [x, ty], [tx, ty]]);
+  }
+  for (let r = 0; r < FROWS; r++) for (const y of (r ? [midY - r, midY + r] : [midY])) {
+    if (y < 0 || y >= FROWS) continue;
+    if (fSegClearCore(sx, sy, sx, y) && fSegClearCore(sx, y, tx, y) &&
+        fSegClearCore(tx, y, tx, ty))
+      return P([[sx, sy], [sx, y], [tx, y], [tx, ty]]);
+  }
+  return P([[sx, sy], [tx, sy], [tx, ty]]);   // truly sealed: last-resort L
+}
+function flexRoute(sH, dH) {
+  const [nx1, ny1] = F_NORMALS[sH.edge], [nx2, ny2] = F_NORMALS[dH.edge];
+  const S = 16;
+  const x1 = sH.x, y1 = sH.y, x2 = dH.x, y2 = dH.y;
+  const s = [x1 + nx1 * S, y1 + ny1 * S], t = [x2 + nx2 * S, y2 + ny2 * S];
+  const sc = [Math.round(s[0] / FCELL), Math.round(s[1] / FCELL)];
+  const tc = [Math.round(t[0] / FCELL), Math.round(t[1] / FCELL)];
+  let pts = fAstar(sc[0], sc[1], tc[0], tc[1]);
+  if (!pts) pts = fFallbackRoute(sc, tc);
+  const j1 = ny1 !== 0 ? [pts[0][0], s[1]] : [s[0], pts[0][1]];
+  const j2 = ny2 !== 0 ? [pts[pts.length - 1][0], t[1]] : [t[0], pts[pts.length - 1][1]];
+  return fDejag(fDedupe([[x1, y1], s, j1, ...pts, j2, t, [x2, y2]]));
+}
+// bezier style: cubic port-normal curve; the sampled polyline feeds the
+// shared tag/hit machinery while the REAL cubic is what gets drawn
+function bezCtl(sH, dH) {
+  const [nx1, ny1] = F_NORMALS[sH.edge], [nx2, ny2] = F_NORMALS[dH.edge];
+  const d = Math.max(30, Math.min(140, Math.hypot(dH.x - sH.x, dH.y - sH.y) / 2));
+  return [[sH.x + nx1 * d, sH.y + ny1 * d], [dH.x + nx2 * d, dH.y + ny2 * d]];
+}
+function bezPathD(sH, dH) {
+  const [c1, c2] = bezCtl(sH, dH);
+  return `M ${sH.x} ${sH.y} C ${c1[0]} ${c1[1]} ${c2[0]} ${c2[1]} ${dH.x} ${dH.y}`;
+}
+function bezSample(sH, dH) {
+  const [c1, c2] = bezCtl(sH, dH);
+  const P = [];
+  for (let i = 0; i <= 16; i++) {
+    const t = i / 16, u = 1 - t;
+    P.push([u*u*u*sH.x + 3*u*u*t*c1[0] + 3*u*t*t*c2[0] + t*t*t*dH.x,
+            u*u*u*sH.y + 3*u*u*t*c1[1] + 3*u*t*t*c2[1] + t*t*t*dH.y]);
+  }
+  return P;
+}
+
+// ============================================================================
 // BLOCKS ENGINE part 2 — port layout, bundle lanes, crossing repair, tags, draw
 // ============================================================================
 const FAN_PITCH = 0.78, T_LEAD = 1.1, PORT_GAP = 0.8;
@@ -1165,7 +1405,7 @@ function assignLanes(routed) {
   const lines = new Map();
   for (const r of routed) {
     r.offs = new Array(Math.max(0, r.poly.length - 1)).fill(0);
-    if (r.noroute) continue;
+    if (r.noroute || r.bez) continue;      // beziers don't ride lanes
     const bkey = `${r.w.from.node.gid}|${r.sH ? r.sH.edge : "?"}`;
     for (let k = 1; k < r.poly.length - 2; k++) {
       const [a, b] = [r.poly[k], r.poly[k + 1]];
@@ -1213,7 +1453,7 @@ function assignLanes(routed) {
 }
 const _nrm = (x, y) => { const m = Math.hypot(x, y) || 1; return [x / m, y / m]; };
 function rebuildLaned(r) {
-  if (r.noroute || r.poly.length < 3) { r.laned = r.poly; r.rad = null; return; }
+  if (r.noroute || r.bez || r.poly.length < 3) { r.laned = r.poly; r.rad = null; return; }
   const Q = r.poly, offs = r.offs, out = [Q[0]];
   for (let n = 1; n < Q.length - 1; n++) {
     const prevVert = Q[n - 1][0] === Q[n][0];
@@ -1356,14 +1596,78 @@ function applySize(n) {
   }
 }
 function place(n) {
+  if (uiMode === "flex") { placeFlex(n); return; }
   if (n.bx === undefined || n.bx === null) return;        // not placed yet
   applySize(n);
-  const r = nodeUnitRect(n);
+  const r = unitRect(placeOf(n));
   n.x = r.x * U; n.y = r.y * U;
   n.el.style.left = n.x + "px";
   n.el.style.top = n.y + "px";
 }
 function snap(v) { return v; }                             // legacy shim
+
+// ---------- FLEX geometry (item 1): free px placement, auto-height cards ----
+// Cards are designed BLOCKS-FIRST (standing doctrine): flex just renders the
+// same card at fixed width with auto height — every row/viz always visible.
+const FLEX_SNAP = 8;
+const FLEX_W = 170;                        // legacy flex card width
+function flexSnap(v) { return Math.round(v / FLEX_SNAP) * FLEX_SNAP; }
+function clampFx(v) { return Math.max(0, Math.min(UW * U - FLEX_W, v)); }
+function clampFy(v) { return Math.max(0, Math.min(UH * U - 40, v)); }
+function flexRect(n) {   // px rect in WORLD coords
+  return { x: n.fx || 0, y: n.fy || 0,
+           w: n.el.offsetWidth || FLEX_W, h: n.el.offsetHeight || 64 };
+}
+function placeFlex(n) {
+  if (n.fx === undefined || n.fx === null) seedFlexPos(n);
+  n.el.style.width = FLEX_W + "px";
+  n.el.style.height = "auto";
+  n.el.dataset.size = "F";
+  n.w = FLEX_W;
+  n.x = n.fx; n.y = n.fy;
+  n.el.style.left = n.fx + "px";
+  n.el.style.top = n.fy + "px";
+}
+function seedFlexPos(n) {
+  const m = fposMem[n.gid];
+  if (Array.isArray(m) && isFinite(m[0]) && isFinite(m[1])) {
+    n.fx = clampFx(m[0]); n.fy = clampFy(m[1]);
+    return;
+  }
+  // no saved flex spot: seed from the blocks layout so the first switch
+  // feels continuous (Cole's pick, 07-22)
+  if (n.bx !== undefined && n.bx !== null) {
+    const r = unitRect(placeOf(n));
+    n.fx = clampFx(flexSnap(r.x * U)); n.fy = clampFy(flexSnap(r.y * U));
+  } else { n.fx = flexSnap(GUT * U); n.fy = flexSnap(GUT * U); }
+  n._flexSeeded = true;   // fresh seed → eligible for the de-overlap pass
+}
+// blocks-seeded cards grow TALLER in flex (auto height) — resolve overlaps by
+// nudging freshly-seeded cards DOWN; cards with a saved spot never move.
+function deoverlapFlex() {
+  const fresh = [...nodes.values()].filter(n => n._flexSeeded)
+    .sort((a, b) => a.fy - b.fy || a.fx - b.fx);
+  const fixed = [...nodes.values()].filter(n => !n._flexSeeded &&
+    n.fx !== undefined && n.fx !== null).map(flexRect);
+  const placed = [...fixed];
+  for (const n of fresh) {
+    const r = flexRect(n);
+    let moved = true, guard = 0;
+    while (moved && guard++ < 300) {
+      moved = false;
+      for (const p of placed)
+        if (r.x < p.x + p.w + 6 && p.x < r.x + r.w + 6 &&
+            r.y < p.y + p.h + 6 && p.y < r.y + r.h + 6) {
+          r.y = flexSnap(p.y + p.h + 10); moved = true;
+        }
+    }
+    n.fy = clampFy(r.y);
+    n.el.style.top = n.fy + "px";
+    n.y = n.fy;
+    delete n._flexSeeded;
+    placed.push(flexRect(n));
+  }
+}
 function validMem(m) {
   return Array.isArray(m) && m.length >= 3 && Number.isInteger(m[0]) &&
          m[0] >= 0 && m[0] < BX && Number.isInteger(m[1]) && m[1] >= 0 && m[1] < BY;
@@ -1445,6 +1749,7 @@ function pxToSlotMem(wx, wy, size = "S") {
   return [slot.bx, slot.by, slot.half, size];
 }
 function resizeNode(n, size) {
+  if (uiMode === "flex") return false;     // S/M/L is a blocks-mode idea
   if (size === n.size) return;
   let target;
   if (size === "S") target = { size: "S", bx: n.bx, by: n.by, half: "top" };
@@ -1491,6 +1796,7 @@ function addSizeChips(n) {
 // cascade (rank = distance from sources), each cascade packs left→right with
 // no gaps inside and exactly ONE empty column between separate cascades.
 function compactLayout() {
+  if (uiMode === "flex") return;   // tidy pours the BLOCK grid (button hidden in flex)
   const all = [...nodes.values()];
   if (!all.length) return;
   for (const n of all) applySize(n);
@@ -1629,27 +1935,53 @@ function rebuildObstacles() {}   // obstacle map is derived per relayout now
 function layoutPorts() {}        // port DOM replaced by the handles layer
 function relayoutNow() {
   buildLayouts();
-  const ctx = buildRouteCtx(currentPos(null));
   const routed = [];
-  for (const w of wires) {
-    const sH = w.from.node.lay && w.from.node.lay.byOut.get(w);
-    const dH = w.to.node.lay && w.to.node.lay.byIn.get(w);
-    if (!sH || !dH) { routed.push({ w, poly: [[0,0],[0,0]], noroute: true }); continue; }
-    const pts = routeGutter(ctx, sH.gnode, dH.gnode);
-    let poly;
-    if (pts) {
-      const lat = pts.map(p => [p.i * HU, p.j * HU]);
-      const L = lat.length - 1;
-      if (sH.edge === "L" || sH.edge === "R") lat[0][1] = sH.y; else lat[0][0] = sH.x;
-      if (dH.edge === "L" || dH.edge === "R") lat[L][1] = dH.y; else lat[L][0] = dH.x;
-      poly = reducePoly([[sH.x, sH.y], ...lat, [dH.x, dH.y]]);
-    } else poly = [[sH.x, sH.y], [dH.x, dH.y]];
-    routed.push({ w, poly, noroute: !pts, sH, dH });
+  if (uiMode === "flex") {
+    // FLEX: A* px router (legacy style, default) or bezier (⌇/∿ toggle)
+    rebuildFlexObstacles();
+    for (const w of wires) {
+      const sH = w.from.node.lay && w.from.node.lay.byOut.get(w);
+      const dH = w.to.node.lay && w.to.node.lay.byIn.get(w);
+      if (!sH || !dH) { routed.push({ w, poly: [[0,0],[0,0]], noroute: true }); continue; }
+      if (flexWireStyle === "bezier")
+        routed.push({ w, poly: bezSample(sH, dH), bez: true, sH, dH });
+      else
+        routed.push({ w, poly: flexRoute(sH, dH), sH, dH });
+    }
+  } else {
+    const ctx = buildRouteCtx(currentPos(null));
+    for (const w of wires) {
+      const sH = w.from.node.lay && w.from.node.lay.byOut.get(w);
+      const dH = w.to.node.lay && w.to.node.lay.byIn.get(w);
+      if (!sH || !dH) { routed.push({ w, poly: [[0,0],[0,0]], noroute: true }); continue; }
+      const pts = routeGutter(ctx, sH.gnode, dH.gnode);
+      let poly;
+      if (pts) {
+        const lat = pts.map(p => [p.i * HU, p.j * HU]);
+        const L = lat.length - 1;
+        if (sH.edge === "L" || sH.edge === "R") lat[0][1] = sH.y; else lat[0][0] = sH.x;
+        if (dH.edge === "L" || dH.edge === "R") lat[L][1] = dH.y; else lat[L][0] = dH.x;
+        poly = reducePoly([[sH.x, sH.y], ...lat, [dH.x, dH.y]]);
+      } else poly = [[sH.x, sH.y], [dH.x, dH.y]];
+      routed.push({ w, poly, noroute: !pts, sH, dH });
+    }
   }
   assignLanes(routed);
   placeTags(routed);
   for (const r of routed) {
     const w = r.w;
+    if (r.bez) {
+      const d = bezPathD(r.sH, r.dH);
+      w.el.setAttribute("d", "M 0 0");
+      w.topEl.setAttribute("d", d);
+      w.hitEl.setAttribute("d", d);
+      w.flow.setAttribute("d", d);
+      w.el.classList.remove("noroute");
+      w.topEl.classList.remove("noroute");
+      w.pathD = d;
+      w.dpts = r.poly.map(p => [p[0], p[1]]);   // sampled: hit/tags/tests
+      continue;
+    }
     const { bot, top, full } = layeredPath(r.laned || r.poly, r.rad);
     w.el.setAttribute("d", bot || "M 0 0");
     w.topEl.setAttribute("d", top || full || "M 0 0");
@@ -1842,13 +2174,33 @@ function worldXYev(e) {
   const s = parseFloat(world.style.zoom) || 1;
   return { x: (e.clientX - b.left) / s, y: (e.clientY - b.top) / s };
 }
+// group move (item 1): does the whole selection fit at a whole-block delta?
+// (no shove for groups — the drop is valid only where every member lands free)
+function groupFits(group, dbx, dby) {
+  if (!dbx && !dby) return true;
+  const ids = new Set(group.map(n => n.gid));
+  const pos = new Map();
+  for (const [gid, pl] of currentPos(null)) if (!ids.has(gid)) pos.set(gid, pl);
+  const occ = occOf(pos);
+  for (const n of group) {
+    const pl = { size: n.size, bx: n.bx + dbx, by: n.by + dby, half: n.half || null };
+    if (!inBoundsPl(pl)) return false;
+    if (halfCells(pl).some(c => occ.get(c) !== undefined)) return false;
+  }
+  return true;
+}
 function bindNode(node) {
   const head = node.el.querySelector(".head");
   head.addEventListener("pointerdown", (e) => {
     if (e.target.classList.contains("kill") || e.target.classList.contains("onoff") ||
         e.target.classList.contains("expander") || e.target.closest(".szchips")) return;
     const p = worldXYev(e);
-    drag = { node, offX: p.x - node.x, offY: p.y - node.y,
+    // grabbing a SELECTED card's head drags the whole group (item 1)
+    const group = (sel.has(node.gid) && sel.size > 1)
+      ? [...sel].map(g => nodes.get(g)).filter(Boolean) : [node];
+    drag = { node, group, offX: p.x - node.x, offY: p.y - node.y,
+             starts: new Map(group.map(g => [g.gid, [g.x, g.y]])),
+             gd: [0, 0], fdx: 0, fdy: 0,
              plan: null, target: null, valid: false, prevKey: "" };
     node.el.classList.add("dragging");
     $("wires").style.opacity = 0.35;
@@ -1859,8 +2211,30 @@ function bindNode(node) {
   head.addEventListener("pointermove", (e) => {
     if (!drag || drag.node !== node) return;
     const p = worldXYev(e);
-    node.el.style.left = (p.x - drag.offX) + "px";
-    node.el.style.top  = (p.y - drag.offY) + "px";
+    const [sx0, sy0] = drag.starts.get(node.gid);
+    const dx = (p.x - drag.offX) - sx0, dy = (p.y - drag.offY) - sy0;
+    // every card in the drag rides the pointer live
+    for (const g of drag.group) {
+      const [sx, sy] = drag.starts.get(g.gid);
+      g.el.style.left = (sx + dx) + "px";
+      g.el.style.top  = (sy + dy) + "px";
+    }
+    if (uiMode === "flex") {                 // FLEX: free move, snap on drop
+      drag.fdx = dx; drag.fdy = dy; drag.valid = true;
+      return;
+    }
+    if (drag.group.length > 1) {             // BLOCKS GROUP: whole-block delta
+      const dbx = Math.round(dx / (PITCH * U)), dby = Math.round(dy / (PITCH * U));
+      const key = `g${dbx},${dby}`;
+      if (key !== drag.prevKey) {
+        drag.prevKey = key;
+        drag.gd = [dbx, dby];
+        drag.valid = groupFits(drag.group, dbx, dby);
+        setGhost({ size: node.size, bx: node.bx + dbx, by: node.by + dby,
+                   half: node.half }, drag.valid, false);
+      }
+      return;
+    }
     const blk = blockAt(p.x, p.y);
     const dir = quadrantOf(blk.fx, blk.fy);
     let target, sEmpty = false;
@@ -1893,7 +2267,20 @@ function bindNode(node) {
     $("wires").style.opacity = 1;
     $("wlabels").style.opacity = 1;
     $("handles").style.opacity = 1;
-    if (drag.valid && drag.target) {
+    if (uiMode === "flex") {                 // FLEX drop: snap + clamp each
+      for (const g of drag.group) {
+        const [sx, sy] = drag.starts.get(g.gid);
+        g.fx = clampFx(flexSnap(sx + drag.fdx));
+        g.fy = clampFy(flexSnap(sy + drag.fdy));
+        place(g);
+      }
+    } else if (drag.group.length > 1) {      // BLOCKS GROUP drop
+      const [dbx, dby] = drag.valid ? drag.gd : [0, 0];
+      for (const g of drag.group) {
+        g.bx += dbx; g.by += dby;
+        place(g);
+      }
+    } else if (drag.valid && drag.target) {
       for (const [gid, pl] of drag.plan.moves) {
         const o = nodes.get(gid);
         if (!o) continue;
@@ -1914,6 +2301,76 @@ function bindNode(node) {
   });
 }
 
+// ---- lasso mass-select (item 1): drag from a DEAD ZONE draws a square
+// lasso; cards it touches select; grab any selected card's head to drag the
+// whole group; clicking anything else deselects (Cole, 07-22). -------------
+const sel = new Set();
+function clearSel() {
+  if (!sel.size) return;
+  sel.clear();
+  document.querySelectorAll(".mod.sel").forEach(el => el.classList.remove("sel"));
+}
+function syncSel() {
+  for (const n of nodes.values()) n.el.classList.toggle("sel", sel.has(n.gid));
+}
+function nodePxRect(n) {
+  if (uiMode === "flex") return (n.fx === undefined || n.fx === null) ? null : flexRect(n);
+  if (n.bx === undefined || n.bx === null) return null;
+  const q = unitRect(placeOf(n));
+  return { x: q.x * U, y: q.y * U, w: q.w * U, h: q.h * U };
+}
+let lasso = null;
+const lassoBoard = $("board");   // boardEl is declared further down (view section)
+lassoBoard.addEventListener("pointerdown", (e) => {
+  const t = e.target;
+  // dead zone = empty board only: not a card, handle, tag, wire, or ghost
+  const dead = !t.closest(".mod") && !t.closest(".bhandle") && !t.closest(".wtag") &&
+               !t.closest(".hit") && t.id !== "fpghost";
+  if (!dead || drag || hdrag || tagDrag || paletteDrag) return;
+  clearSel();
+  const p = worldXYev(e);
+  lasso = { x0: p.x, y0: p.y, rect: null };
+  try { lassoBoard.setPointerCapture(e.pointerId); } catch (_) {}
+});
+lassoBoard.addEventListener("pointermove", (e) => {
+  if (!lasso) return;
+  const p = worldXYev(e);
+  const x = Math.min(lasso.x0, p.x), y = Math.min(lasso.y0, p.y);
+  const w = Math.abs(p.x - lasso.x0), h = Math.abs(p.y - lasso.y0);
+  lasso.rect = { x, y, w, h };
+  const el = $("lasso");
+  el.style.display = "block";
+  el.style.left = x + "px"; el.style.top = y + "px";
+  el.style.width = w + "px"; el.style.height = h + "px";
+  sel.clear();                              // live highlight while dragging
+  for (const n of nodes.values()) {
+    const r = nodePxRect(n);
+    if (r && r.x < x + w && x < r.x + r.w && r.y < y + h && y < r.y + r.h)
+      sel.add(n.gid);
+  }
+  syncSel();
+});
+function lassoEnd() {
+  if (!lasso) return;
+  $("lasso").style.display = "none";
+  const r = lasso.rect;
+  lasso = null;
+  if (!r || (r.w < 6 && r.h < 6)) clearSel();   // a bare click, not a lasso
+}
+lassoBoard.addEventListener("pointerup", lassoEnd);
+lassoBoard.addEventListener("pointercancel", lassoEnd);
+// clicking anything that is NOT a selected card's head deselects (the head of
+// a selected card starts the group drag instead)
+document.addEventListener("pointerdown", (e) => {
+  if (!sel.size || lasso) return;
+  const m = e.target.closest(".mod");
+  if (m && e.target.closest(".head")) {
+    const n = [...nodes.values()].find(x => x.el === m);
+    if (n && sel.has(n.gid)) return;        // group grab — selection survives
+  }
+  clearSel();
+}, true);
+
 // ---- handle patch/repatch gesture ------------------------------------------
 function handleEnds(H) { return { node: H.node, port: H.port }; }
 function beginHandleDrag(e, H) {
@@ -1930,7 +2387,7 @@ function beginHandleDrag(e, H) {
     [...fixed.node.lay.handles].find(hh =>
       hh.port === fixed.port && (wire ? hh.wire === wire
         : (hh.role === "empty" || hh.role === "plus")));
-  const ctx = buildRouteCtx(currentPos(null));
+  const ctx = uiMode === "flex" ? null : buildRouteCtx(currentPos(null));
   // candidates: every handle whose (node, port) forms a REAL connection with
   // the fixed end (connectAction semantics), on empty/plus slots — or, for
   // single-source param inputs, the occupied slot itself (drop = REPLACE)
@@ -1964,7 +2421,8 @@ function hdragMove(e) {
     const top = $("wiretop");
     top.innerHTML = "";
     if (best && hdrag.fixedH) {
-      const pts = routeGutter(hdrag.ctx, hdrag.fixedH.gnode, best.gnode);
+      const pts = hdrag.ctx
+        ? routeGutter(hdrag.ctx, hdrag.fixedH.gnode, best.gnode) : null;
       const path = document.createElementNS(blkSvgNS, "path");
       path.setAttribute("class", "ghostw");
       path.setAttribute("stroke", SIG_CSS[hdrag.fixed.port.sig] || SIG_CSS.mod);
@@ -2138,16 +2596,28 @@ document.addEventListener("pointerup", () => {
 
 // ---- viewport: default 6x4 blocks (whole top gutter shown), +/- zoom,
 // pan lock (default LOCKED; zoom-in that hides modules auto-unlocks) --------
+// item 1: uiMode ("blocks"|"flex") + continuous wheel/pinch zoom — flex is
+// always free-zoom (flexZoom); blocks free-zooms only while UNLOCKED
+// (blocksFree); LOCKING snaps to the closest grid size (lockSnap).
 let viewCols = 6, viewRows = 4, panLocked = true;
+let uiMode = "blocks";           // "blocks" | "flex"
+let flexZoom = 1;                // flex wheel/pinch zoom factor
+let blocksFree = null;           // unlocked-blocks continuous zoom (null = grid fit)
+let flexWireStyle = "route";     // flex wires: "route" (A*, legacy style) | "bezier"
 const boardEl = $("board");
-function viewScale() {
+function scaleFor(cols, rows) {
   const bw = boardEl.clientWidth || 1, bh = boardEl.clientHeight || 1;
-  return Math.min(bw / ((viewCols * PITCH + GUT) * U),
-                  bh / ((viewRows * PITCH + GUT) * U));
+  return Math.min(bw / ((cols * PITCH + GUT) * U),
+                  bh / ((rows * PITCH + GUT) * U));
+}
+function viewScale() {
+  if (uiMode === "flex") return flexZoom;
+  return (!panLocked && blocksFree != null) ? blocksFree
+                                            : scaleFor(viewCols, viewRows);
 }
 function applyView() {
   world.style.zoom = viewScale();
-  boardEl.style.overflow = panLocked ? "hidden" : "auto";
+  boardEl.style.overflow = (uiMode === "blocks" && panLocked) ? "hidden" : "auto";
   const pl = $("panlock");
   if (pl) { pl.textContent = panLocked ? "🔒" : "🔓"; pl.classList.toggle("on", panLocked); }
 }
@@ -2157,6 +2627,7 @@ function visibleWorldRect() {
            w: boardEl.clientWidth / s / U, h: boardEl.clientHeight / s / U };
 }
 function visBlockBounds() {
+  if (uiMode === "flex") return null;      // block grid is a blocks-mode idea
   // block-grid range whose blocks are FULLY inside the current viewport
   const v = visibleWorldRect();
   const c0 = Math.max(0, Math.ceil((v.x - GUT) / PITCH));
@@ -2166,6 +2637,7 @@ function visBlockBounds() {
   return (c1 >= c0 && r1 >= r0) ? { c0, c1, r0, r1 } : null;
 }
 function modulesHidden() {
+  if (uiMode === "flex") return false;
   const v = visibleWorldRect();
   for (const n of nodes.values()) {
     if (n.bx === undefined || n.bx === null) continue;
@@ -2176,10 +2648,17 @@ function modulesHidden() {
   return false;
 }
 function saveView() {
-  try { localStorage.setItem("blocksView", JSON.stringify([viewCols, viewRows, panLocked ? 1 : 0])); }
+  try { localStorage.setItem("blocksView", JSON.stringify(
+    [viewCols, viewRows, panLocked ? 1 : 0, uiMode, flexZoom, flexWireStyle])); }
   catch (e) {}
 }
 function zoomStep(dir) {
+  if (uiMode === "flex") {                 // flex: the +/- buttons free-zoom
+    flexZoom = Math.max(0.25, Math.min(3, flexZoom * (dir > 0 ? 1 / 1.15 : 1.15)));
+    applyView(); saveView();
+    return;
+  }
+  blocksFree = null;                       // buttons return to grid-fit steps
   if (dir > 0) {   // zoom OUT: +1 row at the bottom, +1 column on the right
     viewCols = Math.min(BX, viewCols + 1); viewRows = Math.min(BY, viewRows + 1);
   } else {         // zoom IN
@@ -2188,6 +2667,36 @@ function zoomStep(dir) {
   applyView();
   if (dir < 0 && panLocked && modulesHidden()) { panLocked = false; applyView(); }
   saveView();
+}
+// continuous zoom, anchored at the cursor. scrollLeft/Top are the board's own
+// (visual) px and world.style.zoom is OUR scale — same convention-neutral
+// doctrine as worldXYev (never rect ratios; Chrome pre/post-128 safe).
+function zoomAt(cx, cy, f) {
+  const b = boardEl.getBoundingClientRect();
+  const z0 = viewScale();
+  let z1;
+  if (uiMode === "flex") {
+    flexZoom = z1 = Math.max(0.25, Math.min(3, flexZoom * f));
+  } else {
+    const lo = scaleFor(BX, BY), hi = scaleFor(3, 2);
+    blocksFree = z1 = Math.max(lo, Math.min(hi, (blocksFree ?? viewScale()) * f));
+  }
+  const wx = (boardEl.scrollLeft + (cx - b.left)) / z0;
+  const wy = (boardEl.scrollTop + (cy - b.top)) / z0;
+  applyView();
+  boardEl.scrollLeft = wx * z1 - (cx - b.left);
+  boardEl.scrollTop  = wy * z1 - (cy - b.top);
+  saveView();
+}
+// LOCKING blocks snaps the free zoom to the closest grid size (item 1 spec)
+function lockSnap() {
+  if (blocksFree == null) return;
+  let best = [viewCols, viewRows], bd = Infinity;
+  for (let c = 3; c <= BX; c++) for (let r = 2; r <= BY; r++) {
+    const d = Math.abs(scaleFor(c, r) - blocksFree);
+    if (d < bd) { bd = d; best = [c, r]; }
+  }
+  viewCols = best[0]; viewRows = best[1]; blocksFree = null;
 }
 let _viewChecked = false;
 function viewAutoUnlockOnce() {   // first state load: off-view modules → unlock
@@ -2207,25 +2716,77 @@ function viewAutoUnlockOnce() {   // first state load: off-view modules → unlo
   const zo = mk("zoomout", "−", "zoom out (+1 row, +1 column)");
   const zi = mk("zoomin", "+", "zoom in");
   const pl = mk("panlock", "🔒", "pan lock — click to toggle");
-  // one grouped cluster: [−][+][⇱ tidy][🔒] where tidy used to sit
+  const ws = mk("wirestyle", "⌇", "flex wires: routed ⌇ / curved ∿");
+  // one grouped cluster: [−][+][⌇][⇱ tidy][🔒] where tidy used to sit
   const box = document.createElement("div");
   box.id = "viewctl";
   tidy.parentNode.insertBefore(box, tidy);
-  box.append(zo, zi, tidy, pl);
+  box.append(zo, zi, ws, tidy, pl);
   zo.addEventListener("click", (e) => { zoomStep(1); e.target.blur(); });
   zi.addEventListener("click", (e) => { zoomStep(-1); e.target.blur(); });
-  pl.addEventListener("click", (e) => { panLocked = !panLocked; applyView(); saveView(); e.target.blur(); });
+  pl.addEventListener("click", (e) => {
+    panLocked = !panLocked;
+    if (panLocked) lockSnap();             // lock snaps to the closest grid size
+    applyView(); saveView(); e.target.blur();
+  });
+  ws.addEventListener("click", (e) => {
+    flexWireStyle = flexWireStyle === "route" ? "bezier" : "route";
+    ws.textContent = flexWireStyle === "route" ? "⌇" : "∿";
+    rerouteAll(); saveView(); e.target.blur();
+  });
   window.addEventListener("resize", applyView);
+  // wheel / trackpad-pinch zoom: flex always; blocks only when UNLOCKED
+  boardEl.addEventListener("wheel", (e) => {
+    if (uiMode === "blocks" && panLocked) return;
+    e.preventDefault();
+    zoomAt(e.clientX, e.clientY,
+           Math.exp(-e.deltaY * (e.ctrlKey ? 0.012 : 0.002)));
+  }, { passive: false });
   try {
     const v = JSON.parse(localStorage.getItem("blocksView") || "null");
-    if (Array.isArray(v) && v.length === 3) {
+    if (Array.isArray(v) && v.length >= 3) {
       viewCols = Math.min(BX, Math.max(3, v[0] | 0));
       viewRows = Math.min(BY, Math.max(2, v[1] | 0));
       panLocked = !!v[2];
+      if (v[3] === "flex" || v[3] === "blocks") uiMode = v[3];
+      if (isFinite(v[4]) && v[4] >= 0.25 && v[4] <= 3) flexZoom = v[4];
+      if (v[5] === "bezier" || v[5] === "route") flexWireStyle = v[5];
     }
   } catch (e) {}
+  ws.textContent = flexWireStyle === "route" ? "⌇" : "∿";
+  syncModeUI();
   applyView();
 })();
+
+// ---- mode toggle (item 1): one page, two geometries -------------------------
+function syncModeUI() {
+  document.body.dataset.mode = uiMode;
+  $("mode-blocks")?.classList.toggle("on", uiMode === "blocks");
+  $("mode-flex")?.classList.toggle("on", uiMode === "flex");
+}
+function setMode(m) {
+  if (m === uiMode) return;
+  uiMode = m;
+  clearSel();
+  syncModeUI();
+  if (m === "flex") {
+    for (const n of nodes.values()) placeFlex(n);   // seeds from blocks layout
+    deoverlapFlex();                                 // fresh seeds settle down
+  } else {
+    for (const n of nodes.values()) {
+      n.el.style.height = "";
+      delete n.el.dataset.size;
+      if (n.bx === undefined || n.bx === null) { applySize(n); enforceSeparation(n); }
+      else place(n);
+      if (n.onResize) n.onResize();
+    }
+  }
+  applyView();
+  rerouteAll();
+  saveView(); saveLayout();
+}
+$("mode-blocks").addEventListener("click", () => setMode("blocks"));
+$("mode-flex").addEventListener("click", () => setMode("flex"));
 
 
 // ---------- wires ----------
@@ -2467,6 +3028,8 @@ function spliceNewIntoWire(w, key, kind, wx, wy) {
   if (!toKey) return;
   const id = nextId(key);
   posMem["m:" + id] = pxToSlotMem(wx, wy, "S");
+  if (uiMode === "flex")
+    fposMem["m:" + id] = [clampFx(flexSnap(wx - FLEX_W / 2)), clampFy(flexSnap(wy - 12))];
   send({type: "spawn_module", key});
   if (kind === "effect" && fromKey) {
     if (fromKey === "drums") send({type: "set_drums", target: id});
@@ -3523,6 +4086,7 @@ function rebuildGraph() {
   // remember card positions + expansion, then drop all derived nodes & wires
   for (const n of nodes.values()) {
     if (n.bx !== undefined && n.bx !== null) posMem[n.gid] = memOf(n);
+    if (n.fx !== undefined && n.fx !== null) fposMem[n.gid] = [n.fx, n.fy];
     if (n.gid === "deck") expandMem.deck = n.expanded;
     if (n.gid === "drums") expandMem.drums = n.expanded;
   }
@@ -3683,6 +4247,11 @@ function rebuildGraph() {
                action: "remove", id: t.id, lfo: t.source})});
   }
 
+  // selection survives a rebuild by gid (cards are recreated elements)
+  for (const g of [...sel]) if (!nodes.has(g)) sel.delete(g);
+  syncSel();
+  if (uiMode === "flex") deoverlapFlex();   // fresh-seeded cards settle down
+
   rerouteAll();
   requestAnimationFrame(() => refreshActivity());
   // SETTLE PASS: L-card bodies shift a beat after first paint (2-col flow,
@@ -3795,7 +4364,10 @@ function startPaletteDrag(e, btn, a) {
     } else if (pd.hover) {
       spliceNewIntoWire(pd.hover, a.key, a.kind, wx, wy); // drop on wire → splice
     } else if (overBoard(ev)) {
-      posMem["m:" + nextId(a.key)] = pxToSlotMem(wx, wy, "S");
+      const id = "m:" + nextId(a.key);
+      posMem[id] = pxToSlotMem(wx, wy, "S");
+      if (uiMode === "flex")                              // flex: land AT the drop
+        fposMem[id] = [clampFx(flexSnap(wx - FLEX_W / 2)), clampFy(flexSnap(wy - 12))];
       send({type: "spawn_module", key: a.key});           // empty drop → unconnected here
     }
   };
