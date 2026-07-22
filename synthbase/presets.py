@@ -80,6 +80,8 @@ def snapshot(app) -> dict:
         data["drums"] = app.drums.snapshot()
     if getattr(app, "lfos", None):
         data["lfos"] = app.lfos.snapshot()
+    if getattr(app, "thresholds", None):
+        data["thresholds"] = app.thresholds.snapshot()
     return data
 
 
@@ -174,11 +176,14 @@ def _apply(app, data: dict) -> None:
         if app.master and "volume" in data:
             app.master.set_volume(data["volume"])
 
-        # 7. Drums / LFOs (present once those systems exist)
+        # 7. Drums / LFOs / thresholds (present once those systems exist).
+        #    Thresholds AFTER lfos: a restored CV-in needs its source LFO live.
         if getattr(app, "drums", None) and "drums" in data:
             app.drums.restore(data["drums"])
         if getattr(app, "lfos", None) and "lfos" in data:
             app.lfos.restore(data["lfos"])
+        if getattr(app, "thresholds", None) and "thresholds" in data:
+            app.thresholds.restore(data["thresholds"])
 
 
 # -- restart resume: snapshot + wiring, restored automatically on boot --------
