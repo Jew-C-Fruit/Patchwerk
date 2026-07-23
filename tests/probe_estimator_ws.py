@@ -134,15 +134,16 @@ async def main():
                   str(tonic_entry(st, tid)))
 
             # -- deck knob round-trips -------------------------------------
+            # NOTE set_tonic broadcasts exclude the SENDER — poke, don't drain
             await ws.send_json({"type": "set_tonic", "id": tid,
                                 "deck_feed": True})
-            st = await drain_state(ws)
+            st = await poke_state(ws, st)
             check("deck_feed toggles on",
                   (tonic_entry(st, tid) or {}).get("deck_feed") is True,
                   str(tonic_entry(st, tid)))
             await ws.send_json({"type": "set_tonic", "id": tid,
                                 "every": "deck"})
-            st = await drain_state(ws)
+            st = await poke_state(ws, st)
             check("every='deck' accepted (idles safely without a deck wire)",
                   (tonic_entry(st, tid) or {}).get("every") == "deck",
                   str(tonic_entry(st, tid)))
@@ -154,7 +155,7 @@ async def main():
             # -- cleanup ---------------------------------------------------
             await ws.send_json({"type": "all_notes_off"})
             await ws.send_json({"type": "remove_tonic", "id": tid})
-            st = await drain_state(ws)
+            st = await poke_state(ws, st)
             check("cleanup: deriver removed",
                   {x["id"] for x in st["tonics"]} == before,
                   str(st["tonics"]))
