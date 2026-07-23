@@ -82,6 +82,15 @@ Current coverage:
      wears the amplitude band; pre-item-7 per-assignment entries (the
      check_real fixture's shape) still render as one-dest legacy cards
      whose wires/kill fall back to lfo_unassign.
+  17. GATE suite (backlog item 8): LOGIC palette section (Switch/Logic
+     spawns); the Switch card's power-pad LED (click = set_switch, lit
+     follows state + live {"kind":"gate"} events); the Logic card's op
+     chip (set_logic) and op-shaped ports (SR latch: named set/reset ins
+     vs ONE bare fan-in); the gate wire kind (signal-red family, legend
+     swatch); head enable checkboxes converted to power-LED buttons with
+     QUIET ":pwr" gate toggle-ins (modules/arp/drums) and the deck's four
+     button-ins; the gate/ping toggle grammar (gate→pwr yes, gate→note/
+     trigger no; ping→pwr/switch yes).
 """
 
 import glob
@@ -1398,8 +1407,8 @@ def main():
           btns: [...document.querySelectorAll('#palette button')].map(b => b.textContent),
         }))()""")
         check("palette top-line sections in order",
-              pal["h3"] == ["allocation", "control", "triggers", "voices",
-                            "fx", "monitors"], str(pal["h3"]))
+              pal["h3"] == ["allocation", "control", "triggers", "logic",
+                            "voices", "fx", "monitors"], str(pal["h3"]))
         for sub in ("extractors", "psines", "drone", "filters",
                     "time & space"):
             check(f"palette subsection: {sub}", sub in pal["h4"],
@@ -1795,6 +1804,283 @@ def main():
                                         "division": "8/1"}, str(sent16))
         sz16 = page.evaluate("nodes.get('clock').size")
         check("clock card still measures into S", sz16 == "S", str(sz16))
+
+        # ================================================================
+        # 17 — gate suite (item 8): switch/logic, toggle-ins, grammar
+        # ================================================================
+        st17 = base_state(
+            [sg, echo],
+            [{"from": "signal_gen", "to": "echo"},
+             {"from": "echo", "to": "master"}],
+            ctl_wires=[{"from": "keys", "to": "voice"},
+                       {"from": "switch", "to": "echo:pwr"},
+                       {"from": "logic", "to": "deck:play"},
+                       {"from": "button", "to": "switch"}],
+            tonics=[{"id": "tonic", "every": "1 bar", "everies": ["1 bar"],
+                     "octave": 2, "root": None}],
+            buttons=[{"id": "button", "binding": None, "armed": False}],
+            switches=[{"id": "switch", "on": False}],
+            logics=[{"id": "logic", "op": "AND",
+                     "ops": ["AND", "OR", "NOT", "XOR", "SR latch"],
+                     "out": False}])
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st17)
+        page.wait_for_timeout(500)
+
+        # palette: a LOGIC top-line section right after TRIGGERS
+        pal17 = page.evaluate(
+            "[...document.querySelectorAll('#palette h3')]"
+            ".map(h => h.textContent)")
+        check("palette LOGIC section sits right after TRIGGERS",
+              "logic" in pal17 and
+              pal17.index("logic") == pal17.index("triggers") + 1, str(pal17))
+        for nm, msgt in (("Switch", "spawn_switch"), ("Logic", "spawn_logic")):
+            page.evaluate("window.__sent.length = 0")
+            page.evaluate("""(nm) => {
+              [...document.querySelectorAll('#palette button')]
+                .find(b => b.textContent === nm).click();
+            }""", nm)
+            sent = page.evaluate("window.__sent")
+            check(f"palette {nm} sends {msgt}", {"type": msgt} in sent,
+                  str(sent))
+
+        # the Switch card: power pad LED, S size, flip-in + gate-out
+        sw17 = page.evaluate("""(() => {
+          const n = nodes.get('switch');
+          if (!n) return null;
+          const pad = n.el.querySelector('.powpad');
+          return {size: n.size, pad: !!pad,
+                  on: pad && pad.classList.contains('on'),
+                  ports: n.ports.map(p => [p.dir, p.sig, p.label, !!p.quiet])};
+        })()""")
+        check("switch card renders with an (unlit) power pad LED",
+              bool(sw17) and sw17["pad"] and sw17["on"] is False, str(sw17))
+        check("switch card sizes to S", sw17 and sw17["size"] == "S",
+              str(sw17))
+        check("switch ports: quiet ping flip-in + gate level-out",
+              bool(sw17) and ["in", "ping", "flip", True] in sw17["ports"]
+              and ["out", "gate", "level", False] in sw17["ports"],
+              str(sw17))
+
+        # pad click flips locally + sends set_switch on:true
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("nodes.get('switch').el.querySelector('.powpad').click()")
+        sent = page.evaluate("window.__sent")
+        check("power pad click sends set_switch on:true",
+              {"type": "set_switch", "id": "switch", "on": True} in sent,
+              str(sent))
+        check("power pad lights locally on click", page.evaluate(
+            "nodes.get('switch').el.querySelector('.powpad')"
+            ".classList.contains('on')"))
+
+        # a live {"kind":"gate"} event drives the LED (off, then on)
+        page.evaluate("""() => __msg({type: 'midi',
+          event: {kind: 'gate', id: 'switch', on: false}})""")
+        check("gate event on:false unlights the switch LED", not page.evaluate(
+            "nodes.get('switch').el.querySelector('.powpad')"
+            ".classList.contains('on')"))
+        page.evaluate("""() => __msg({type: 'midi',
+          event: {kind: 'gate', id: 'switch', on: true}})""")
+        check("gate event on:true lights the switch LED", page.evaluate(
+            "nodes.get('switch').el.querySelector('.powpad')"
+            ".classList.contains('on')"))
+
+        # the Logic card @AND: op chip, ONE bare fan-in, out LED
+        lg17 = page.evaluate("""(() => {
+          const n = nodes.get('logic');
+          if (!n) return null;
+          return {size: n.size,
+                  sub: (n.el.querySelector('.sub')||{}).textContent,
+                  led: !!n.el.querySelector('.gled'),
+                  ledOn: n.el.querySelector('.gled')
+                    && n.el.querySelector('.gled').classList.contains('on'),
+                  ins: n.ports.filter(p => p.sig === 'gate' && p.dir === 'in')
+                    .map(p => p.gate),
+                  outs: n.ports.filter(p => p.sig === 'gate' && p.dir === 'out')
+                    .length,
+                  plus: portAllowsPlus(n.ports.find(p => p.gate === 'logic'))};
+        })()""")
+        check("logic card renders @AND with ONE bare gate fan-in",
+              bool(lg17) and lg17["ins"] == ["logic"] and lg17["outs"] == 1,
+              str(lg17))
+        check("logic sub shows the current op", lg17
+              and lg17["sub"] == "AND · gate logic", str(lg17))
+        check("logic fan-in allows multiple wires (+)",
+              lg17 and lg17["plus"] is True, str(lg17))
+        check("logic card has an (unlit) output LED",
+              lg17 and lg17["led"] and lg17["ledOn"] is False, str(lg17))
+        check("logic card sizes to S", lg17 and lg17["size"] == "S",
+              str(lg17))
+
+        # gate wires drew from state: switch→echo:pwr + logic→deck:play in
+        # the gate family; the ping wire button→switch stays ping-colored
+        gw17 = page.evaluate("""(() => {
+          const gw = wires.find(w => w.from.node.gid === 'switch');
+          const lw = wires.find(w => w.from.node.gid === 'logic');
+          const pw = wires.find(w => w.from.node.gid === 'button');
+          const d = (w) => w && {sig: w.sig, to: w.to.node.gid,
+            label: w.to.port.label, color: w.color,
+            stroke: w.topEl.getAttribute('stroke'),
+            fam: LINES.gate.includes(w.color)};
+          return {gw: d(gw), lw: d(lw), pw: d(pw)};
+        })()""")
+        check("switch→module pwr wire draws in the gate family",
+              bool(gw17["gw"]) and gw17["gw"]["sig"] == "gate"
+              and gw17["gw"]["to"] == "m:echo"
+              and gw17["gw"]["label"] == "pwr" and gw17["gw"]["fam"],
+              str(gw17))
+        check("gate wire stroke carries the gate color",
+              bool(gw17["gw"])
+              and gw17["gw"]["stroke"] == gw17["gw"]["color"], str(gw17))
+        check("logic→deck:play wire lands on the deck's play toggle-in",
+              bool(gw17["lw"]) and gw17["lw"]["sig"] == "gate"
+              and gw17["lw"]["to"] == "deck"
+              and gw17["lw"]["label"] == "play", str(gw17))
+        check("button→switch flip wire stays in the ping family",
+              bool(gw17["pw"]) and gw17["pw"]["sig"] == "ping"
+              and gw17["pw"]["to"] == "switch", str(gw17))
+        check("legend has a gate swatch", page.evaluate(
+            "!!document.querySelector('[data-legend=gate]')"))
+
+        # grammar: gate→pwr connects; gate→note-in / gate→trigger-in
+        # refused; ping→pwr and ping→switch-flip connect
+        acts17 = page.evaluate("""(() => {
+          const sw = nodes.get('switch'), lg = nodes.get('logic');
+          const echo = nodes.get('m:echo'), arp = nodes.get('arp');
+          const ton = nodes.get('tonic'), btn = nodes.get('button');
+          const gout = (n) => ({node: n,
+            port: n.ports.find(p => p.sig === 'gate' && p.dir === 'out')});
+          const pwr = (n) => ({node: n,
+            port: n.ports.find(p => p.label === 'pwr')});
+          const pout = {node: btn,
+            port: btn.ports.find(p => p.sig === 'ping' && p.dir === 'out')};
+          window.__sent.length = 0;
+          const gatePwr = connectAction(gout(sw), pwr(echo));
+          if (gatePwr) gatePwr();
+          const gateNote = connectAction(gout(sw), {node: arp,
+            port: arp.ports.find(p => p.sig === 'ctl' && p.dir === 'in')});
+          const gateTrig = connectAction(gout(sw), {node: ton,
+            port: ton.ports.find(p => p.sig === 'ping')});
+          const pingPwr = connectAction(pout, pwr(echo));
+          if (pingPwr) pingPwr();
+          const pingSwitch = connectAction(pout, {node: sw,
+            port: sw.ports.find(p => p.sig === 'ping' && p.dir === 'in')});
+          if (pingSwitch) pingSwitch();
+          const logicSelf = connectAction(gout(lg), {node: lg,
+            port: lg.ports.find(p => p.gate === 'logic')});
+          return {sent: window.__sent, gatePwr: !!gatePwr,
+                  gateNote: !!gateNote, gateTrig: !!gateTrig,
+                  pingPwr: !!pingPwr, pingSwitch: !!pingSwitch,
+                  logicSelf: !!logicSelf};
+        })()""")
+        check("gate-out → module pwr connects (ctl_wire add)",
+              acts17["gatePwr"] and
+              {"type": "ctl_wire", "action": "add", "from": "switch",
+               "to": "echo:pwr"} in acts17["sent"], str(acts17))
+        check("gate-out → note-in refused", not acts17["gateNote"],
+              str(acts17))
+        check("gate-out → deriver trigger-in refused", not acts17["gateTrig"],
+              str(acts17))
+        check("ping-out → module pwr connects (alternator)",
+              acts17["pingPwr"] and
+              {"type": "ctl_wire", "action": "add", "from": "button",
+               "to": "echo:pwr"} in acts17["sent"], str(acts17))
+        check("ping-out → switch flip-in connects",
+              acts17["pingSwitch"] and
+              {"type": "ctl_wire", "action": "add", "from": "button",
+               "to": "switch"} in acts17["sent"], str(acts17))
+        check("logic self-wire refused", not acts17["logicSelf"],
+              str(acts17))
+
+        # op chip cycles AND→OR and sends set_logic
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("""() => {
+          const n = nodes.get('logic');
+          [...n.el.querySelectorAll('label')].find(l => l.title === 'op')
+            .parentElement.querySelector('.chip').click();
+        }""")
+        page.wait_for_timeout(120)
+        sent = page.evaluate("window.__sent")
+        check("op chip cycles + sends set_logic AND→OR",
+              {"type": "set_logic", "id": "logic", "op": "OR"} in sent,
+              str(sent))
+
+        # SR latch payload: TWO named quiet ins (set/reset endpoints)
+        st17b = json.loads(json.dumps(st17))
+        st17b["logics"][0]["op"] = "SR latch"
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st17b)
+        page.wait_for_timeout(400)
+        sr17 = page.evaluate("""(() => {
+          const n = nodes.get('logic');
+          return {sub: (n.el.querySelector('.sub')||{}).textContent,
+                  ins: n.ports.filter(p => p.sig === 'gate' && p.dir === 'in')
+                    .map(p => p.gate)};
+        })()""")
+        check("SR latch renders TWO named gate-ins (set/reset)",
+              sr17["ins"] == ["logic:set", "logic:reset"], str(sr17))
+        # a gate event lights the logic card's output LED
+        page.evaluate("""() => __msg({type: 'midi',
+          event: {kind: 'gate', id: 'logic', on: true}})""")
+        check("gate event lights the logic output LED", page.evaluate(
+            "nodes.get('logic').el.querySelector('.gled')"
+            ".classList.contains('on')"))
+
+        # head power LEDs: module/arp/drums carry the LED button + a quiet
+        # ":pwr" gate toggle-in anchored to the head; deck carries FOUR
+        # button-ins with the deck:… endpoints
+        eps17 = page.evaluate("""(() => {
+          const g = (gid) => {
+            const n = nodes.get(gid);
+            return n && n.ports.filter(p => p.sig === 'gate' && p.dir === 'in')
+              .map(p => [p.gate, !!p.quiet, !!(p.rowEl && p.rowEl.isConnected)]);
+          };
+          return {echo: g('m:echo'), arp: g('arp'), drums: g('drums'),
+                  deck: g('deck')};
+        })()""")
+        check("module card carries a quiet head-anchored :pwr toggle-in",
+              eps17["echo"] == [["echo:pwr", True, True]], str(eps17))
+        check("arp carries arp:pwr", eps17["arp"] == [["arp:pwr", True, True]],
+              str(eps17))
+        check("drums carries drums:pwr",
+              eps17["drums"] == [["drums:pwr", True, True]], str(eps17))
+        check("deck carries the four button toggle-ins",
+              eps17["deck"] == [["deck:rec", True, True],
+                                ["deck:stop", True, True],
+                                ["deck:play", True, True],
+                                ["deck:clear", True, True]], str(eps17))
+
+        # the head LED is a real button: lit = enabled; click toggles the
+        # bypass class AND still sends exactly what the checkbox sent
+        led17 = page.evaluate("""(() => {
+          const n = nodes.get('m:echo');
+          const el = n.el.querySelector('.onoff');
+          return {tag: el.tagName, role: el.getAttribute('role'),
+                  on: el.classList.contains('on'),
+                  byp: n.el.classList.contains('bypassed')};
+        })()""")
+        check("module head LED is a lit switch button when enabled",
+              led17 == {"tag": "BUTTON", "role": "switch", "on": True,
+                        "byp": False}, str(led17))
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("nodes.get('m:echo').el.querySelector('.onoff').click()")
+        sent = page.evaluate("window.__sent")
+        check("head LED click sends set_enabled false",
+              {"type": "set_enabled", "key": "echo", "enabled": False}
+              in sent, str(sent))
+        led17b = page.evaluate("""(() => {
+          const n = nodes.get('m:echo');
+          return {on: n.el.querySelector('.onoff').classList.contains('on'),
+                  byp: n.el.classList.contains('bypassed')};
+        })()""")
+        check("head LED click unlights + toggles the bypassed class",
+              led17b == {"on": False, "byp": True}, str(led17b))
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("nodes.get('m:echo').el.querySelector('.onoff').click()")
+        sent = page.evaluate("window.__sent")
+        check("second click re-enables (set_enabled true, bypass off)",
+              {"type": "set_enabled", "key": "echo", "enabled": True}
+              in sent and page.evaluate(
+                  "!nodes.get('m:echo').el.classList.contains('bypassed')"),
+              str(sent))
 
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()

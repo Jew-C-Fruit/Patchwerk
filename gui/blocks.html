@@ -9,6 +9,8 @@
     --plane: #0d0d0d; --surface: #1a1a19; --card: #202020; --ink-1: #f2f1ea;
     --ink-2: #a9a89e; --hairline: #2c2c2a; --border: rgba(255,255,255,0.10);
     --audio: #3987e5; --ctl: #1baf7a; --mod: #9085e9; --ping: #f0b37e;
+    --gate: #e05c5c;   /* item 8: gate LEVELS — signal red (Cole), distinct
+                          from ping's peach and the violet mod */
     --danger: #e34948; --meter: #1baf7a; --grid: rgba(255,255,255,0.045);
   }
   * { box-sizing: border-box; }
@@ -105,8 +107,14 @@
   .mod .kill { margin-left: 2px; color: var(--ink-2); font-size: 11px; cursor: pointer;
     padding: 0 2px; border-radius: 4px; }
   .mod .kill:hover { color: var(--danger); }
-  .mod .onoff { margin-left: auto; width: 12px; height: 12px; accent-color: var(--ctl);
-    cursor: pointer; flex: none; }
+  /* item 8 (gate suite): the head enable checkbox is a POWER LED now — a
+     round indicator light that is still the click/keyboard toggle */
+  .mod .onoff { margin-left: auto; width: 12px; height: 12px; flex: none;
+    padding: 0; border-radius: 50%; border: 1.5px solid var(--ink-2);
+    background: var(--card); cursor: pointer; opacity: 0.75; }
+  .mod .onoff.on { background: var(--ctl); border-color: var(--ctl); opacity: 1;
+    box-shadow: 0 0 7px color-mix(in srgb, var(--ctl) 70%, transparent); }
+  .mod .onoff:hover { border-color: var(--ink-1); opacity: 1; }
   .mod .body { padding: 1px 10px 8px 14px; }
   .mini { display: flex; align-items: center; gap: 6px; margin: 2.5px 0; height: 11px; }
   .mini label { font-size: 9px; color: var(--ink-2); width: 48px; flex: none;
@@ -192,8 +200,25 @@
     cursor: pointer; user-select: none; -webkit-user-select: none; }
   /* trigger cards are SMALL by design: compact viz padding so sizeFor
      measures them into S (a fire dot needs no M-card real estate) */
-  .mod[data-gid^="button"] .viz-sec, .mod[data-gid^="clock"] .viz-sec {
+  .mod[data-gid^="button"] .viz-sec, .mod[data-gid^="clock"] .viz-sec,
+  .mod[data-gid^="switch"] .viz-sec {
     padding: 2px 10px 5px 14px; }
+  /* item 8 GATE suite: the Switch card's power pad — a big round LED that
+     IS the manual hi/lo toggle (lit = hi) */
+  .powpad { width: 26px; height: 26px; margin: 1px auto; border-radius: 50%;
+    border: 1.5px solid var(--ink-2); background: var(--card);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; line-height: 1; color: var(--ink-2); cursor: pointer;
+    padding: 0; user-select: none; -webkit-user-select: none; }
+  .powpad:hover { border-color: var(--ink-1); color: var(--ink-1); }
+  .powpad.on { background: var(--gate); border-color: var(--gate);
+    color: #0d0d0d;
+    box-shadow: 0 0 10px color-mix(in srgb, var(--gate) 65%, transparent); }
+  /* the Logic card's small output LED (head, next to kill) */
+  .gled { width: 9px; height: 9px; border-radius: 50%; flex: none;
+    border: 1.5px solid var(--ink-2); background: var(--card); opacity: 0.7; }
+  .gled.on { background: var(--gate); border-color: var(--gate); opacity: 1;
+    box-shadow: 0 0 7px color-mix(in srgb, var(--gate) 70%, transparent); }
   .pingpad:hover { filter: brightness(1.25); }
   .pingpad.pulse { animation: pingpulse .22s ease; }
   @keyframes pingpulse { 30% { text-shadow: 0 0 9px var(--ping); transform: scale(1.35); } }
@@ -254,11 +279,14 @@
   /* the two QUIET kinds stay visually distinct: mod violet, ping pastel
      peach — primaries (audio/ctl) keep the saturated colors */
   .port[data-sig=ping]  { background: var(--ping); }
+  .port[data-sig=gate]  { background: var(--gate); }
   .port.quiet { width: 7px; height: 7px; border-width: 1.5px;
     background: #6f6d64; opacity: 0.5; }
   .port.quiet:hover, .port.quiet.hot { opacity: 1; background: var(--mod); }
   .port.quiet[data-sig=ping]:hover, .port.quiet[data-sig=ping].hot {
     background: var(--ping); }
+  .port.quiet[data-sig=gate]:hover, .port.quiet[data-sig=gate].hot {
+    background: var(--gate); }
   .port.hot { box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 30%, transparent); }
   .legend { display: flex; gap: 12px; font-size: 10px; color: var(--ink-2); }
   .legend b { display: inline-block; width: 18px; height: 3px; border-radius: 2px;
@@ -489,6 +517,7 @@
     <span><b style="background:linear-gradient(90deg,#1baf7a,#e8c832)"></b>notes</span>
     <span><b style="background:linear-gradient(90deg,#e34948,#9085e9)"></b>mod</span>
     <span data-legend="ping"><b style="background:linear-gradient(90deg,#f0b37e,#f7d4ae)"></b>ping</span>
+    <span data-legend="gate"><b style="background:linear-gradient(90deg,#e05c5c,#f2a35e)"></b>gate</span>
   </div>
 
 </header>
@@ -537,16 +566,18 @@ const INSTRUMENT_DEFAULT = "fm_bell";
 // rebuild on every state broadcast; the choice must survive the rebuild
 const scopeLivePref = new Set();
 // subway line palettes — audio owns the cools, notes/control green→yellow,
-// mod the warm+violet half (the population that grows), ping pastel peach.
+// mod the warm+violet half (the population that grows), ping pastel peach,
+// gate signal red/amber (item 8: hi/lo LEVELS — Cole's pick, 07-23).
 const LINES = {
   audio: ["#3987e5", "#22b8d4", "#1f9e9e", "#6db1ff", "#4a5fd0", "#7fd4ef"],
   ctl:   ["#1baf7a", "#8cc63f", "#e8c832", "#4fd08c", "#c9d94d", "#0f8f66"],
   mod:   ["#e34948", "#f2842c", "#d446b8", "#9085e9", "#e87ba4", "#ff6b5e", "#7a5fd0"],
   ping:  ["#f0b37e", "#f7d4ae", "#e59a5c", "#f4c493"],
+  gate:  ["#e05c5c", "#ef8585", "#c94b4b", "#f2a35e"],
 };
-const lineCount = {audio: 0, ctl: 0, mod: 0, ping: 0};
+const lineCount = {audio: 0, ctl: 0, mod: 0, ping: 0, gate: 0};
 const SIG_CSS = {audio: "var(--audio)", ctl: "var(--ctl)", mod: "var(--mod)",
-                 ping: "var(--ping)"};
+                 ping: "var(--ping)", gate: "var(--gate)"};
 
 const world = document.getElementById("world");
 const wiresPerm = document.getElementById("wire-perm");
@@ -832,13 +863,24 @@ function addCard(cfg) {
     </div><div class="body"></div>`;
   const head = el.querySelector(".head");
   if (cfg.headCheck) {
-    const cb = document.createElement("input");
-    cb.type = "checkbox"; cb.className = "onoff"; cb.checked = !!cfg.headCheck.checked;
-    cb.title = "enabled";
+    // item 8 (gate suite): the enable checkbox became a POWER LED — a round
+    // indicator light (lit = enabled) that still toggles on click and stays
+    // keyboard-reachable (a real <button> with role=switch)
+    const cb = document.createElement("button");
+    cb.type = "button"; cb.className = "onoff"; cb.title = "enabled";
+    cb.setAttribute("role", "switch");
+    let on = !!cfg.headCheck.checked;
+    const sync = () => {
+      cb.classList.toggle("on", on);
+      cb.setAttribute("aria-checked", String(on));
+      el.classList.toggle("bypassed", !on);
+    };
+    sync();
     cb.addEventListener("pointerdown", (e) => e.stopPropagation());
-    cb.addEventListener("change", (e) => { cfg.headCheck.onChange(cb.checked); e.target.blur(); });
+    cb.addEventListener("click", (e) => {
+      on = !on; sync(); cfg.headCheck.onChange(on); e.target.blur();
+    });
     head.appendChild(cb);
-    if (!cfg.headCheck.checked) el.classList.add("bypassed");
   }
   if (cfg.expandable) {
     const ex = document.createElement("span");
@@ -1381,7 +1423,7 @@ function bezSample(sH, dH) {
 const FAN_PITCH = 0.78, T_LEAD = 1.1, PORT_GAP = 0.8;
 const PRIM_MOD_GAP = 1.2, END_MARGIN = 0.7;
 const LANE_W = 4, LANE_MAX = 3;
-const PRIMARY_SIGS = new Set(["audio", "ctl", "ping"]);
+const PRIMARY_SIGS = new Set(["audio", "ctl", "ping", "gate"]);
 // + handle rules: outputs branch; FAN-IN inputs combine (audio mix, ctl
 // merge into voice/deck/keyshift/deriver); SINGLE-INPUT ports never grow
 // a + — param (mod) ins and a source's "play" in (a drop RE-TARGETS the
@@ -1403,12 +1445,15 @@ function computeLayout(n) {
   const ports = [];
   for (const port of n.ports) {
     const ws = wiresAt(n, port);
-    // the QUIET band: mod (param-ins + lfo outs) and ping TRIGGER-INS —
-    // node-scoped, left edge. A trigger-in carries a rowEl pointing at its
-    // card's `every` (timing) row so it rides that row's line — the ping
-    // overrides that timer, so they share a row (Cole, 2026-07-22).
+    // the QUIET band: mod (param-ins + lfo outs), ping TRIGGER-INS and
+    // gate TOGGLE-INS (item 8) — node-scoped, left edge. A trigger-in
+    // carries a rowEl pointing at its card's `every` (timing) row so it
+    // rides that row's line — the ping overrides that timer, so they share
+    // a row (Cole, 2026-07-22); a toggle-in rides the row it toggles
+    // (head power light / deck button row / logic in row).
     const isMod = port.sig === "mod" ||
-                  (port.sig === "ping" && port.dir === "in");
+                  (port.sig === "ping" && port.dir === "in") ||
+                  (port.sig === "gate" && port.dir === "in");
     ports.push({ port, ws, isMod, side: port.dir });
   }
   // primary edge auto-pick: face the average direction of wired neighbours
@@ -2581,8 +2626,10 @@ function hdragUp() {
   $("wiretop").innerHTML = "";
   hdrag = null;
   if (active) {
-    // single-source param input: replace whatever occupies it first
-    if (active.quiet) {
+    // single-source param input: replace whatever occupies it first —
+    // FAN-IN quiet ports (ping trigger-ins, gate toggle/logic ins: they
+    // grow a +) take additional wires instead of replacing (item 8)
+    if (active.quiet && !portAllowsPlus(active.port)) {
       for (const w2 of wires)
         if (w2 !== wire && w2.to.node === active.node && w2.to.port === active.port &&
             w2.cutAction) w2.cutAction(w2);
@@ -3115,6 +3162,18 @@ function pingSrcIds() {
                   ...((state && state.clocks) || []).map(c => c.id),
                   ...thresholdIds()]);   // item 8: CV edge → ping
 }
+// item 8 GATE suite: switch/logic nodes are the gate LEVEL sources; their
+// outgoing ctl_wires ARE gate wires (kind inferred from the source id).
+// Old servers have no switches/logics keys — both default empty.
+function switchIds() {
+  return new Set(((state && state.switches) || []).map(s => s.id));
+}
+function logicIds() {
+  return new Set(((state && state.logics) || []).map(l => l.id));
+}
+function gateSrcIds() {
+  return new Set([...switchIds(), ...logicIds()]);
+}
 // ctl endpoint grammar: "keyshift.2:3" = node "keyshift.2", lane 3. Nodes
 // without lanes are plain ids (unchanged).
 function splitEp(s) {
@@ -3146,7 +3205,11 @@ function ctlEp(n, p) {
 }
 function connectAction(out, inn) {
   const po = out.port, pi = inn.port;
-  if (!po || !pi || po.sig !== pi.sig || out.node === inn.node) return null;
+  if (!po || !pi || out.node === inn.node) return null;
+  // sigs must match, with ONE legal crossing (item 8): a ping-out may land
+  // on a gate toggle-in (server-side alternator adapter; deck = press)
+  if (po.sig !== pi.sig && !(po.sig === "ping" && pi.sig === "gate"))
+    return null;
   const sig = po.sig;
   if (sig === "audio") {
     const from = audioKeyOut(out.node);
@@ -3185,12 +3248,30 @@ function connectAction(out, inn) {
                        key: inn.node.chainKey, name: pi.param});
   }
   if (sig === "ping") {
-    // ping-out (button/clock) lands ONLY on a trigger-in — strict grammar:
+    // ping-out (button/clock/threshold) lands on a trigger-in, a switch's
+    // flip-in, or any gate TOGGLE-IN (item 8: alternator semantics — ping
+    // 1 → hi, ping 2 → lo; deck buttons: press). Strict otherwise:
     // mod↛ping and ping↛mod are refused by the sig gate above even though
     // both render as quiet handles
     const from = ctlId(out.node), to = ctlId(inn.node);
     if (!pingSrcIds().has(from)) return null;
-    if (!deriverIds().has(to)) return null;  // trigger-ins: derivers (for now)
+    if (pi.gate)   // toggle-ins carry their full endpoint (":pwr", "deck:…")
+      return () => send({type: "ctl_wire", action: "add", from, to: pi.gate});
+    if (pi.dir === "in" && switchIds().has(to))   // a wired ping FLIPS it
+      return () => send({type: "ctl_wire", action: "add", from, to});
+    if (!deriverIds().has(to)) return null;       // trigger-ins: derivers
+    return () => send({type: "ctl_wire", action: "add", from, to});
+  }
+  if (sig === "gate") {
+    // gate-out (switch/logic) carries a hi/lo LEVEL: it lands ONLY on a
+    // toggle-in (module/arp/drums :pwr, deck buttons, logic gate-ins) —
+    // never on note/param/trigger sinks (item 8 grammar). Cross-node
+    // feedback loops are legal server-side; direct self-wires are not.
+    const from = ctlId(out.node);
+    if (!gateSrcIds().has(from)) return null;
+    const to = pi.gate;
+    if (!to) return null;
+    if (String(to).split(":")[0] === from) return null;   // self-wire
     return () => send({type: "ctl_wire", action: "add", from, to});
   }
   // ---- ctl ----
@@ -3490,7 +3571,10 @@ function buildChainCard(mod) {
       : isGen ? `<canvas class="vz" data-viz="gen" height="44"></canvas>` : null,
     headCheck: {
       checked: mod.enabled,
-      onChange: (on) => send({type: "set_enabled", key: mod.key, enabled: on}),
+      onChange: (on) => {
+        mod.enabled = on;   // keep local truth (broadcast excludes sender)
+        send({type: "set_enabled", key: mod.key, enabled: on});
+      },
     },
     kill: (nd) => (mod.service && isDrone)
       ? send({type: "set_drone", enabled: false})   // legacy compat pair
@@ -3529,6 +3613,10 @@ function buildChainCard(mod) {
   }
   n.chainKey = mod.key;
   if (!mod.enabled) n.el.classList.add("bypassed");
+  // item 8: a QUIET gate toggle-in on the enable ("<key>:pwr") — its handle
+  // rides the HEAD row, right at the power light
+  n.ports.push({dir: "in", sig: "gate", label: "pwr", quiet: true,
+                rowEl: n.el.querySelector(".head"), gate: mod.key + ":pwr"});
   return n;
 }
 
@@ -3582,9 +3670,13 @@ function buildArpCard() {
       onUnit: (u) => { a.octaves = 1 + Math.round(u * 2); throttled("arp", () => cfgArp({})); },
     }),
   ];
-  return addCard({gid, name: "Arp", sub: "quantized", fam: "ctl", rows,
+  const n = addCard({gid, name: "Arp", sub: "quantized", fam: "ctl", rows,
     headCheck: {checked: a.enabled, onChange: (on) => { a.enabled = on; cfgArp({}); }},
     ports: [["in", "ctl", "notes"], ["out", "ctl", "notes"]]});
+  // item 8: quiet gate toggle-in on the enable, anchored to the head light
+  n.ports.push({dir: "in", sig: "gate", label: "pwr", quiet: true,
+                rowEl: n.el.querySelector(".head"), gate: "arp:pwr"});
+  return n;
 }
 
 // one card per mono voice (state.voices). The target chip cycles through
@@ -3996,6 +4088,93 @@ function buildThresholdCard(t) {
   return n;
 }
 
+// ---- GATE suite (item 8): Switch (manual hi/lo) + Logic (op node) ----------
+// Both are Python-side LEVEL nodes (see synthbase/gate.py): their outgoing
+// ctl_wires are GATE wires; {"kind":"gate","id","on"} events light the LEDs.
+function buildSwitchCard(s) {
+  const gid = s.id;
+  const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
+  const n = addCard({gid, name: "Switch" + suffix, short: "Sw" + suffix,
+    sub: "gate source · hi/lo", fam: "service", rows: [],
+    vizHTML: `<button type="button" class="powpad" role="switch"
+      title="toggle hi/lo">⏻</button>`,
+    kill: () => send({type: "remove_switch", id: gid}),
+    ports: [["in", "ping", "flip"], ["out", "gate", "level"]]});
+  const pad = n.el.querySelector(".powpad");
+  const sync = (on) => {
+    pad.classList.toggle("on", !!on);
+    pad.setAttribute("aria-checked", String(!!on));
+  };
+  sync(s.on);
+  // live follow: state broadcasts rebuild; gate events land here (onMidi)
+  uiParam[gid + ".led"] = (u, on) => sync(on);
+  pad.addEventListener("pointerdown", (e) => e.stopPropagation());
+  pad.addEventListener("click", (e) => {
+    e.stopPropagation();
+    s.on = !s.on;          // local flip (set_switch broadcast excludes us)
+    sync(s.on);
+    send({type: "set_switch", id: gid, on: s.on});
+    e.target.blur();
+  });
+  // the flip-in is a QUIET ping trigger-in anchored to the pad row —
+  // a wired ping toggles the switch exactly like a click
+  const flip = n.ports.find(p => p.sig === "ping");
+  if (flip) { flip.quiet = true; flip.rowEl = n.el.querySelector(".viz-sec"); }
+  return n;
+}
+function buildLogicCard(t) {
+  const gid = t.id;
+  const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
+  const ops = t.ops || ["AND", "OR", "NOT", "XOR", "SR latch"];
+  const isSR = t.op === "SR latch";
+  const rows = [
+    rowChip({gid}, "op", {
+      text: t.op,
+      onClick: (chip) => {
+        const v = ops[(ops.indexOf(chip.textContent) + 1) % ops.length];
+        chip.textContent = v;
+        t.op = v;
+        send({type: "set_logic", id: gid, op: v});
+        // the port SHAPE follows the op (SR latch: named set/reset ins vs
+        // the bare fan-in) — rebuild locally (state-driven, like the
+        // Instant's value row); other clients follow the broadcast
+        rebuildGraph();
+      },
+    }),
+  ];
+  const mkIn = (label) => {   // bare label rows the quiet gate-ins ride
+    const row = document.createElement("div");
+    row.className = "mini";
+    row.innerHTML = `<label title="${esc(label)}">${esc(label)}</label>`;
+    rows.push(row);
+    return row;
+  };
+  const inRows = isSR ? [mkIn("set"), mkIn("reset")] : [mkIn("in")];
+  const n = addCard({gid, name: "Logic" + suffix, short: "Log" + suffix,
+    sub: `${t.op} · gate logic`, fam: "service", rows,
+    kill: () => send({type: "remove_logic", id: gid}),
+    ports: isSR
+      ? [["in", "gate", "set"], ["in", "gate", "reset"],
+         ["out", "gate", "out"]]
+      : [["in", "gate", "in"], ["out", "gate", "out"]]});
+  // gate-ins: quiet, row-anchored, carrying their wire ENDPOINT — SR latch
+  // uses named "<id>:set"/"<id>:reset"; every other op fans in on the bare id
+  const eps = isSR ? {set: `${gid}:set`, reset: `${gid}:reset`} : {in: gid};
+  n.ports.filter(p => p.dir === "in").forEach((p, i) => {
+    p.quiet = true; p.gate = eps[p.label]; p.rowEl = inRows[i];
+  });
+  // small output LED in the head (lit = out hi; follows gate events live)
+  const led = document.createElement("span");
+  led.className = "gled" + (t.out ? " on" : "");
+  led.title = "out level";
+  led.style.marginLeft = "auto";
+  const kill = n.el.querySelector(".kill");
+  if (kill) kill.style.marginLeft = "2px";
+  n.el.querySelector(".head").insertBefore(led, kill);
+  uiParam[gid + ".led"] = (u, on) => led.classList.toggle("on", !!on);
+  return n;
+}
+
 // ---- key shifter: Grasshopper-ish key popover + progression step strip ----
 // 12 pitch classes labeled from A (values = semitone distance from C, the
 // home key — the backend maps that distance to the NEAREST shift, ±6 st).
@@ -4171,6 +4350,12 @@ function buildDeckCard() {
     miniViz: true,   // item 4: collapsed deck shows a mini track strip
     vizHTML: `<canvas class="vz" data-viz="deck" height="54"></canvas>`,
     ports: [["in", "ctl", "notes"], ["out", "ctl", "replay"]]});
+  // item 8: four QUIET gate toggle-ins, one per control button (rising edge
+  // = press; a ping just presses) — all anchored to the button row, spaced
+  // by the standard quiet-handle separation
+  for (const a of ["rec", "stop", "play", "clear"])
+    n.ports.push({dir: "in", sig: "gate", label: a, quiet: true,
+                  rowEl: btns, gate: "deck:" + a});
   n.subEl = n.el.querySelector(".sub");
   updateDeckCard(n);
   return n;
@@ -4207,8 +4392,12 @@ function buildDrumsCard() {
   }
   const n = addCard({gid, name: "Drums", sub: "16-step · 1/16 grid", fam: "time",
     rows, expandable: true, expanded: expandMem.drums, wide: true, vizHTML: viz,
-    headCheck: {checked: d.enabled, onChange: (on) => send({type: "set_drums", enabled: on})},
+    headCheck: {checked: d.enabled, onChange: (on) => {
+      d.enabled = on; send({type: "set_drums", enabled: on}); }},
     ports: [["out", "audio", "hits"]]});
+  // item 8: quiet gate toggle-in on the enable, anchored to the head light
+  n.ports.push({dir: "in", sig: "gate", label: "pwr", quiet: true,
+                rowEl: n.el.querySelector(".head"), gate: "drums:pwr"});
   for (const btn of n.el.querySelectorAll(".dstep")) {
     btn.addEventListener("pointerdown", (e) => e.stopPropagation());
     btn.addEventListener("click", () => {
@@ -4389,7 +4578,8 @@ function rebuildGraph() {
     if (n.gid === "drums") expandMem.drums = n.expanded;
   }
   for (const w of [...wires]) removeWire(w);
-  lineCount.audio = 0; lineCount.ctl = 0; lineCount.mod = 0; lineCount.ping = 0;
+  lineCount.audio = 0; lineCount.ctl = 0; lineCount.mod = 0;
+  lineCount.ping = 0; lineCount.gate = 0;
   for (const n of [...nodes.values()]) if (!n.persistent) removeNode(n);
   for (const k of Object.keys(uiParam))
     if (!k.startsWith("mon:")) delete uiParam[k];
@@ -4407,6 +4597,9 @@ function rebuildGraph() {
   const trigNodes = [...(state.buttons || []).map(buildButtonCard),
                      ...(state.clocks || []).map(buildClockCard),
                      ...(state.thresholds || []).map(buildThresholdCard)];
+  // item 8: gate nodes — old servers have no switches/logics keys
+  const gateNodes = [...(state.switches || []).map(buildSwitchCard),
+                     ...(state.logics || []).map(buildLogicCard)];
   const services = [], chainNodes = [];
   for (const mod of state.chain) {
     const n = buildChainCard(mod);
@@ -4426,7 +4619,8 @@ function rebuildGraph() {
   };
   placeGroup([keys, arp, deck, ...voiceNodes], 0);
   placeGroup([...chainNodes, master], 2);
-  placeGroup([...tonicNodes, ...ksNodes, ...trigNodes, ...services], 1);
+  placeGroup([...tonicNodes, ...ksNodes, ...trigNodes, ...gateNodes,
+              ...services], 1);
   placeGroup([drums], 5);
   for (let i = 0; i < lfoNodes.length; i++) {
     const n = lfoNodes[i], l = state.lfos[i];
@@ -4462,10 +4656,23 @@ function rebuildGraph() {
     if (!a || !b) continue;   // e.g. a wired node whose card isn't spawned
     const cut = () => send({type: "ctl_wire", action: "remove",
                             from: cw.from, to: cw.to});
+    // a wire FROM a switch/logic node is a GATE wire (item 8, kind inferred
+    // from the source endpoint) — it lands on the toggle-in whose port
+    // carries the wire's full endpoint (":pwr" / "deck:…" / logic ins)
+    if (gateSrcIds().has(fromBase)) {
+      const gp = b.ports.find(p => p.gate === cw.to);
+      if (gp) addWire({node: a, port: port(a, "out", "gate")},
+                      {node: b, port: gp}, {cut});
+      continue;
+    }
     // a wire FROM a button/clock is a PING wire (kind inferred from the
-    // source endpoint) — it lands on the target's quiet trigger-in
+    // source endpoint) — it lands on the target's quiet trigger-in, or
+    // (item 8) on a gate toggle-in (alternator; deck buttons = press)
     if (pingSrcIds().has(fromBase)) {
-      W(a, "ping", b, "ping", {cut});
+      const gp = b.ports.find(p => p.gate === cw.to);
+      if (gp) addWire({node: a, port: port(a, "out", "ping")},
+                      {node: b, port: gp}, {cut});
+      else W(a, "ping", b, "ping", {cut});
       continue;
     }
     // a Note Monitor may RIDE this wire (visual splice): draw A→mon→B but
@@ -4599,6 +4806,9 @@ function renderPalette() {
   btn("Button ◉", "#f0b37e", () => send({type: "spawn_button"}));
   btn("Clock ◔", "#f0b37e", () => send({type: "spawn_clock"}));
   btn("Threshold ⌁", "#f0b37e", () => send({type: "spawn_threshold"}));
+  h3("logic");   // item 8 GATE suite: hi/lo level nodes
+  btn("Switch", "#e05c5c", () => send({type: "spawn_switch"}));
+  btn("Logic", "#e05c5c", () => send({type: "spawn_logic"}));
   // the palette NEVER removes placed modules: any entry can be spawned
   // again — every click/drag makes a fresh instance ("lowpass.2", ...)
   const avail = (state && state.available) || [];
@@ -4835,6 +5045,15 @@ function onMidi(e) {
     if (t) t.root = e.root;
   } else if (e.kind === "ping") {
     pingFlash(e.src);   // a trigger fired (clock tick / MIDI / another client)
+  } else if (e.kind === "gate") {
+    // item 8: a switch/logic node's OUTPUT level changed — light its LED
+    // in place and keep the local state model in step (rebuild-safe)
+    const sw = (state && state.switches || []).find(x => x.id === e.id);
+    if (sw) sw.on = !!e.on;
+    const lg = (state && state.logics || []).find(x => x.id === e.id);
+    if (lg) lg.out = !!e.on;
+    const setter = uiParam[`${e.id}.led`];
+    if (setter) setter(0, !!e.on);
   } else if (e.kind === "ping_bound") {
     // server-side MIDI capture landed: update the card's chip in place
     const b = (state && state.buttons || []).find(x => x.id === e.id);
@@ -5391,6 +5610,8 @@ function tapColor(src, style) {
   if (TAP_COLORS[src]) return TAP_COLORS[src];
   if (String(src).startsWith("tonic")) return "#d9a521";    // deriver root fires
   if (String(src).startsWith("keyshift")) return "#4fd08c"; // shifter out fires
+  if (String(src).startsWith("switch") ||
+      String(src).startsWith("logic")) return "#e05c5c";    // gate node fires
   return style.getPropertyValue("--ctl");
 }
 function drawNotesViz(n, ctx, W, H, now, style) {

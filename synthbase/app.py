@@ -20,6 +20,7 @@ from .drone import EVERY as TONIC_EVERY
 from .drone import LiteralDeriver, NOTE_NAMES, TonicDeriver, midi_to_freq
 from .drums import DrumMachine
 from .keyshift import KeyShifter
+from .gate import GateManager
 from .lfo import LFOManager
 from .ping import ButtonTrigger, ClockTrigger
 from .threshold import ThresholdManager
@@ -295,6 +296,7 @@ class SynthApp:
         self._legacy_drone_id: str | None = None
         self.drums = DrumMachine(self)
         self.lfos = LFOManager(self)
+        self.gates = GateManager(self)   # item 8: hi/lo LEVEL kind (switch/logic)
         self.looper = Looper(self)
         self.scope = Scope(self)
         # control plane: wires among {keys, arp, deck, voice ids, tonic ids,
@@ -506,6 +508,11 @@ class SynthApp:
             d = self._deriver(t)
             if d is not None:
                 sinks.append(d)   # deriver: trigger() = commit
+            elif t in self.gates.switches:
+                sinks.append(self.gates.switches[t])   # ping flips the switch
+            elif self.gates.is_toggle_dst(t):
+                # toggle target: alternator adapter (deck buttons: press)
+                sinks.append(self.gates.ping_sink(src, t))
         return sinks
 
     def _deriver(self, nid):
@@ -570,18 +577,49 @@ class SynthApp:
                     not self._is_drone_id("drone"):
                 src = "tonic"
             # PING wires (kind inferred from the source endpoint): ping-out
-            # lands ONLY on trigger-ins; never on note sinks
+            # lands on trigger-ins OR toggle targets (item 8: alternator
+            # semantics — ping 1 → hi, ping 2 → lo; deck buttons: press);
+            # never on note sinks
             if self._is_ping_src(src):
                 if action == "add":
-                    if self._deriver(dst) is None:
+                    ok = (self._deriver(dst) is not None
+                          or dst in self.gates.switches
+                          or self.gates.is_toggle_dst(dst))
+                    if not ok:
                         raise ValueError(
-                            f"{src!r} emits pings — {dst!r} has no trigger input")
+                            f"{src!r} emits pings — {dst!r} has no trigger"
+                            " or toggle input")
                     w = {"from": src, "to": dst}
                     if w not in self.ctl_wires:
                         self.ctl_wires.append(w)
                 elif action == "remove":
                     self.ctl_wires = [w for w in self.ctl_wires
                                       if not (w["from"] == src and w["to"] == dst)]
+                    self.gates.on_wire_change(src, dst, removed=True)
+                else:
+                    raise ValueError(f"unknown ctl_wire action {action!r}")
+                return
+            # GATE wires (item 8, kind inferred from the source endpoint):
+            # a hi/lo LEVEL — lands ONLY on toggle targets (module :pwr,
+            # arp/drums :pwr, deck buttons, logic gate-ins). Cross-node
+            # feedback loops are legal (the settle pass freezes them);
+            # direct self-wires are not.
+            if self.gates.is_gate_src(src):
+                if action == "add":
+                    if not self.gates.is_toggle_dst(dst):
+                        raise ValueError(
+                            f"{src!r} emits a gate level — {dst!r} has no"
+                            " toggle input")
+                    if self.gates._base(src) == self.gates._base(dst):
+                        raise ValueError(f"{src} → {dst} would loop on itself")
+                    w = {"from": src, "to": dst}
+                    if w not in self.ctl_wires:
+                        self.ctl_wires.append(w)
+                    self.gates.on_wire_change(src, dst)
+                elif action == "remove":
+                    self.ctl_wires = [w for w in self.ctl_wires
+                                      if not (w["from"] == src and w["to"] == dst)]
+                    self.gates.on_wire_change(src, dst, removed=True)
                 else:
                     raise ValueError(f"unknown ctl_wire action {action!r}")
                 return
@@ -767,8 +805,10 @@ class SynthApp:
                 if self.drums.target == key:
                     self.drums.target = dst
                 # the removed instance's control-plane presence goes with it
+                # (incl. gate wires into its "<key>:pwr" toggle-in)
                 self.ctl_wires = [w for w in self.ctl_wires
-                                  if key not in (w.get("from"), w.get("to"))]
+                                  if key not in (w.get("from"), w.get("to"))
+                                  and w.get("to") != f"{key}:pwr"]
                 self._drone_sinks.pop(key, None)
                 if self._legacy_drone_id == key:
                     self._legacy_drone_id = None
@@ -950,6 +990,32 @@ class SynthApp:
                 pass
             self.ctl_wires = [w for w in self.ctl_wires
                               if vid not in (w.get("from"), w.get("to"))]
+
+    # -- gate suite (item 8: switch + logic, hi/lo levels) -------------------------
+
+    def spawn_switch(self, want_id: str | None = None) -> str:
+        with self._lock:
+            return self.gates.spawn_switch(want_id)
+
+    def remove_switch(self, sid: str) -> None:
+        with self._lock:
+            self.gates.remove_switch(sid)
+
+    def set_switch(self, sid: str, on=None) -> None:
+        with self._lock:
+            self.gates.set_switch(sid, on=on)
+
+    def spawn_logic(self, want_id: str | None = None) -> str:
+        with self._lock:
+            return self.gates.spawn_logic(want_id)
+
+    def remove_logic(self, lid: str) -> None:
+        with self._lock:
+            self.gates.remove_logic(lid)
+
+    def set_logic(self, lid: str, op=None) -> None:
+        with self._lock:
+            self.gates.set_logic(lid, op=op)
 
     # -- tonic derivers ------------------------------------------------------------
 
@@ -1514,6 +1580,7 @@ class SynthApp:
                 "looper": self.looper.settings(),
                 "lfos": self.lfos.state(),
                 "thresholds": self.thresholds.state(),
+                **self.gates.state(),   # "switches" + "logics" (item 8)
                 "presets": presets_mod.list_presets(),
                 "available": sorted(
                     ({"key": m.key, "name": m.name, "kind": m.kind,

@@ -41,6 +41,9 @@ jobs:
       - name: Threshold tests
         run: python tests/test_threshold.py
 
+      - name: Gate suite tests
+        run: python tests/test_gate.py
+
   gui-checks:
     name: GUI checks (headless Playwright)
     runs-on: ubuntu-latest
