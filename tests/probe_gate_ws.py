@@ -172,10 +172,16 @@ async def main():
             # -- cleanup ---------------------------------------------------
             await ws.send_json({"type": "remove_logic", "id": lid})
             await ws.send_json({"type": "remove_switch", "id": sid})
-            st = await poke_state(ws, st)
-            check("cleanup: nodes removed",
-                  {x["id"] for x in st["switches"]} == sw_before and
-                  {x["id"] for x in st["logics"]} == lg_before,
+            # broadcasts from earlier messages may still be queued — poll
+            # past stale states (bounded), don't trust the first one
+            ok = False
+            for _ in range(8):
+                st = await poke_state(ws, st)
+                ok = ({x["id"] for x in st["switches"]} == sw_before and
+                      {x["id"] for x in st["logics"]} == lg_before)
+                if ok:
+                    break
+            check("cleanup: nodes removed", ok,
                   str((st["switches"], st["logics"])))
 
     print(f"\n{'PASS' if not FAILURES else 'FAIL'} — {len(FAILURES)} failures")
