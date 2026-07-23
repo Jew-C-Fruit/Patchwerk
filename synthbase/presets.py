@@ -82,6 +82,8 @@ def snapshot(app) -> dict:
         data["lfos"] = app.lfos.snapshot()
     if getattr(app, "thresholds", None):
         data["thresholds"] = app.thresholds.snapshot()
+    if getattr(app, "gates", None):
+        data["gates"] = app.gates.snapshot()
     return data
 
 
@@ -196,6 +198,8 @@ def _apply(app, data: dict) -> None:
             app.lfos.restore(data["lfos"])
         if getattr(app, "thresholds", None) and "thresholds" in data:
             app.thresholds.restore(data["thresholds"])
+        if getattr(app, "gates", None) and "gates" in data:
+            app.gates.restore(data["gates"])
 
 
 # -- restart resume: snapshot + wiring, restored automatically on boot --------

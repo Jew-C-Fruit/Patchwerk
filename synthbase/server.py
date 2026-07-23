@@ -37,6 +37,17 @@ Protocol (JSON messages):
          weights/scores/leading/confidence/scale — broadcasts ~5 Hz as
          {"type": "deriver", "id", ...} for the card histogram + scale
          readout)
+    {"type": "spawn_switch"} / {"type": "remove_switch", "id": "switch.2"}
+    {"type": "set_switch", "id": "switch", "on": true}
+    {"type": "spawn_logic"} / {"type": "remove_logic", "id": "logic.2"}
+    {"type": "set_logic", "id": "logic", "op": "AND"|"OR"|"NOT"|"XOR"|"SR latch"}
+        (item 8 GATE suite: hi/lo LEVELS, Python-side. Gate wires ride
+         ctl_wires, kind inferred from the switch/logic source; dsts are
+         toggle targets — "<key>:pwr", "arp:pwr", "drums:pwr",
+         "deck:rec|play|stop|clear" (rising edge = press), logic ins
+         (SR latch: "<id>:set"/"<id>:reset"). Pings may land on the same
+         targets: alternator semantics; deck buttons just press. Node
+         output changes emit {"kind": "gate", "id", "on"} taps.)
     {"type": "spawn_literal"} / {"type": "remove_literal", "id": "literal.2"}
     {"type": "set_literal", "id": "literal", "every": "immediate",
      "extract": "lowest-held", "place": "absolute", "fold_octave": 3,
@@ -249,6 +260,24 @@ class GuiServer:
                 m["id"], every=m.get("every"), octave=m.get("octave"),
                 memory=m.get("memory"), bass=m.get("bass"),
                 listening=m.get("listening"), deck_feed=m.get("deck_feed"))
+            await self._broadcast_state(exclude=sender)
+        elif t == "spawn_switch":
+            self.synth.spawn_switch()
+            await self._broadcast_state()
+        elif t == "remove_switch":
+            self.synth.remove_switch(m["id"])
+            await self._broadcast_state()
+        elif t == "set_switch":
+            self.synth.set_switch(m["id"], on=m.get("on"))
+            await self._broadcast_state(exclude=sender)
+        elif t == "spawn_logic":
+            self.synth.spawn_logic()
+            await self._broadcast_state()
+        elif t == "remove_logic":
+            self.synth.remove_logic(m["id"])
+            await self._broadcast_state()
+        elif t == "set_logic":
+            self.synth.set_logic(m["id"], op=m.get("op"))
             await self._broadcast_state(exclude=sender)
         elif t == "spawn_keyshift":
             self.synth.spawn_keyshift()
