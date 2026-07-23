@@ -59,8 +59,8 @@ def snapshot(app) -> dict:
         "drone": {k: v for k, v in app._legacy_drone_settings().items()
                   if k not in ("everies", "root")},
         "tonics": [{k: v for k, v in d.settings().items()
-                    if k in ("id", "every", "octave", "memory", "stickiness",
-                             "bass", "listening")}
+                    if k in ("id", "every", "octave", "memory",
+                             "bass", "listening", "deck_feed")}
                    for d in app.tonics.values()],
         "literals": [{k: v for k, v in d.settings().items()
                       if k in ("id", "every", "extract", "place",
@@ -123,10 +123,11 @@ def _apply(app, data: dict) -> None:
         for t in data.get("tonics", []):
             tid = t.get("id") or "tonic"
             app.spawn_tonic(want_id=tid)
+            # old presets may still carry "stickiness" — silently ignored
             app.set_tonic(tid, every=t.get("every"), octave=t.get("octave"),
-                          memory=t.get("memory"),
-                          stickiness=t.get("stickiness"), bass=t.get("bass"),
-                          listening=t.get("listening"))
+                          memory=t.get("memory"), bass=t.get("bass"),
+                          listening=t.get("listening"),
+                          deck_feed=t.get("deck_feed"))
         for t in data.get("literals", []):
             lid = t.get("id") or "literal"
             app.spawn_literal(want_id=lid)
