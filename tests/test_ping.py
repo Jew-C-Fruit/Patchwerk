@@ -154,6 +154,39 @@ def test_midi_pairing_and_edge():
         dd.shutdown()
 
 
+def test_button_levels():
+    """Binary rework: the button is a LEVEL source with two modes."""
+    app = SynthApp(use_midi=False, use_reload=False)
+    bid = app.spawn_button()
+
+    # momentary: the level is hi WHILE HELD, visible in settings()["on"]
+    check("fresh button reads lo", app.buttons[bid].settings()["on"] is False)
+    app.button_down(bid)
+    check("press drives the momentary level hi",
+          app.buttons[bid].settings()["on"] is True)
+    app.button_up(bid)
+    check("release drops the momentary level lo",
+          app.buttons[bid].settings()["on"] is False)
+
+    # set_button latch round-trip
+    app.set_button(bid, latch=True)
+    check("latch setting round-trips",
+          app.buttons[bid].settings()["latch"] is True)
+
+    # fire_button on a latch button TOGGLES (no auto-release)
+    app.fire_button(bid)
+    check("fire on a latch button toggles hi (and stays)",
+          app.buttons[bid].settings()["on"] is True)
+    app.fire_button(bid)
+    check("second fire toggles back lo",
+          app.buttons[bid].settings()["on"] is False)
+
+    app.set_button(bid, latch=False)
+    check("leaving latch mode drops the level",
+          app.buttons[bid].settings()["latch"] is False
+          and app.buttons[bid].settings()["on"] is False)
+
+
 def test_clock_ticks():
     app = SynthApp(use_midi=False, use_reload=False)
     cid = app.spawn_clock()
@@ -211,8 +244,9 @@ def test_preset_roundtrip():
     cid = app.spawn_clock()
     app.set_clock(cid, division="4/1")   # a multi-bar period must round-trip
     data = presets.snapshot(app)
-    check("snapshot carries buttons",
-          data["buttons"] == [{"id": bid, "binding": {"kind": "cc", "cc": 30}}])
+    check("snapshot carries buttons (incl. the latch mode)",
+          data["buttons"] == [{"id": bid, "binding": {"kind": "cc", "cc": 30},
+                               "latch": False}])
     check("snapshot carries clocks",
           data["clocks"] == [{"id": cid, "division": "4/1"}])
 
@@ -233,6 +267,7 @@ def main():
     test_spawn_and_grammar()
     test_fire_fanout_and_override()
     test_midi_pairing_and_edge()
+    test_button_levels()
     test_clock_ticks()
     test_preset_roundtrip()
     print(f"\n{'PASS' if not FAILURES else 'FAIL'} — {len(FAILURES)} failures")

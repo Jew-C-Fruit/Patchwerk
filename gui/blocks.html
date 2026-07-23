@@ -8,9 +8,10 @@
   :root {
     --plane: #0d0d0d; --surface: #1a1a19; --card: #202020; --ink-1: #f2f1ea;
     --ink-2: #a9a89e; --hairline: #2c2c2a; --border: rgba(255,255,255,0.10);
-    --audio: #3987e5; --ctl: #1baf7a; --mod: #9085e9; --ping: #f0b37e;
-    --gate: #e05c5c;   /* item 8: gate LEVELS — signal red (Cole), distinct
-                          from ping's peach and the violet mod */
+    --audio: #3987e5; --ctl: #1baf7a; --mod: #9085e9;
+    --bin: #e6c34a;    /* the ONE binary signal kind (binary rework, 07-23):
+                          yellow base of the yellow→pink wire family — the
+                          old ping (peach) and gate (red) kinds merged */
     --danger: #e34948; --meter: #1baf7a; --grid: rgba(255,255,255,0.045);
   }
   * { box-sizing: border-box; }
@@ -189,39 +190,63 @@
     position: relative; overflow: hidden; }
   .tonic div span { position: absolute; bottom: 0; left: 0; right: 0;
     background: var(--ctl); transition: height 120ms linear; height: 0%; }
-  .tonic div.root span { background: var(--ping); }
+  .tonic div.root span { background: var(--bin); }
   .tonic div.lead { box-shadow: inset 0 0 0 1px rgba(255,255,255,0.55); }
   .tonic div i { position: absolute; top: 1px; left: 0; right: 0;
     text-align: center; font-style: normal; font-size: 7.5px;
     color: var(--ink-2); z-index: 2; }
   /* trigger cards (button/clock): the pad IS the manual fire surface */
   .pingpad { display: flex; align-items: center; justify-content: center;
-    height: 100%; font-size: 15px; line-height: 1; color: var(--ping);
+    height: 100%; font-size: 15px; line-height: 1; color: var(--bin);
     cursor: pointer; user-select: none; -webkit-user-select: none; }
   /* trigger cards are SMALL by design: compact viz padding so sizeFor
      measures them into S (a fire dot needs no M-card real estate) */
-  .mod[data-gid^="button"] .viz-sec, .mod[data-gid^="clock"] .viz-sec,
-  .mod[data-gid^="switch"] .viz-sec {
+  .mod[data-gid^="button"] .viz-sec, .mod[data-gid^="clock"] .viz-sec {
     padding: 2px 10px 5px 14px; }
-  /* item 8 GATE suite: the Switch card's power pad — a big round LED that
-     IS the manual hi/lo toggle (lit = hi) */
-  .powpad { width: 26px; height: 26px; margin: 1px auto; border-radius: 50%;
-    border: 1.5px solid var(--ink-2); background: var(--card);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 13px; line-height: 1; color: var(--ink-2); cursor: pointer;
-    padding: 0; user-select: none; -webkit-user-select: none; }
-  .powpad:hover { border-color: var(--ink-1); color: var(--ink-1); }
-  .powpad.on { background: var(--gate); border-color: var(--gate);
-    color: #0d0d0d;
-    box-shadow: 0 0 10px color-mix(in srgb, var(--gate) 65%, transparent); }
-  /* the Logic card's small output LED (head, next to kill) */
+  /* button: the mode row + keycap + bindline must fit S (until the XS card
+     size lands in GUI pass B) — tighter metrics than the generic rows */
+  .mod[data-gid^="button"] .body { padding: 0 8px 1px 12px; }
+  .mod[data-gid^="button"] .mini { margin: 1px 0; }
+  .mod[data-gid^="button"] .keycap { height: 18px; font-size: 11.5px; }
+  .mod[data-gid^="button"] .bindline { margin-top: 1px; font-size: 8px; }
+  .mod[data-gid^="button"] .viz-sec { padding: 1px 10px 2px 14px; }
+  /* binary LEVEL LEDs (head, next to kill): logic out / button level —
+     lit = hi, following live {"kind":"gate"} events */
   .gled { width: 9px; height: 9px; border-radius: 50%; flex: none;
     border: 1.5px solid var(--ink-2); background: var(--card); opacity: 0.7; }
-  .gled.on { background: var(--gate); border-color: var(--gate); opacity: 1;
-    box-shadow: 0 0 7px color-mix(in srgb, var(--gate) 70%, transparent); }
+  .gled.on { background: var(--bin); border-color: var(--bin); opacity: 1;
+    box-shadow: 0 0 7px color-mix(in srgb, var(--bin) 70%, transparent); }
+  /* relay (GUI pass B): the center power button IS the manual switch —
+     lit while closed, following {"kind":"gate"} events */
+  .relaybtn { width: 24px; height: 24px; margin: auto; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center; flex: none;
+    border: 1.5px solid var(--ink-2); color: var(--ink-2);
+    background: var(--card); font-size: 12px; line-height: 1; cursor: pointer;
+    user-select: none; -webkit-user-select: none; }
+  .relaybtn:hover { filter: brightness(1.35); }
+  .relaybtn.on { color: #111; background: var(--bin); border-color: var(--bin);
+    box-shadow: 0 0 9px color-mix(in srgb, var(--bin) 70%, transparent); }
+  .mod[data-gid^="relay"] .viz-sec { display: flex; align-items: center;
+    padding: 2px 10px 4px 14px; }
+  .mod[data-gid^="relay"][data-size="XS"] .viz-sec { padding: 1px 6px 3px 10px; }
+  .mod[data-gid^="relay"][data-size="XS"] .relaybtn { width: 20px; height: 20px;
+    font-size: 10.5px; }
   .pingpad:hover { filter: brightness(1.25); }
   .pingpad.pulse { animation: pingpulse .22s ease; }
-  @keyframes pingpulse { 30% { text-shadow: 0 0 9px var(--ping); transform: scale(1.35); } }
+  @keyframes pingpulse { 30% { text-shadow: 0 0 9px var(--bin); transform: scale(1.35); } }
+  /* logic circuit viz: event-drawn canvas (redraw on gate events/relayout,
+     NEVER in the rAF viz loop — hence its own class, not .vz) + absolutely
+     positioned pin labels the quiet in-handles ride (offsetWithin resolves
+     their nesting). Measuring pins the canvas tiny so the card stays S. */
+  canvas.lvz { width: 100%; height: 100%; display: block;
+    background: var(--plane); border: 1px solid var(--hairline);
+    border-radius: 6px; }
+  .mod[data-gid^="logic"] .viz-sec { padding: 1px 8px 4px 10px; }
+  .mod.measuring[data-gid^="logic"] .viz-sec canvas.lvz {
+    height: 12px !important; }
+  .lpin { position: absolute; left: 11px; width: 18px; height: 10px;
+    font-size: 6.5px; font-weight: 700; line-height: 10px;
+    color: var(--ink-2); pointer-events: none; z-index: 2; }
   /* item 6: Button binding shown LARGE as a computer-key KEYCAP; clicking
      it FIRES. The binding label underneath is the rebind affordance. */
   .keycap { width: 32px; height: 22px; margin: 0 auto; border-radius: 5px;
@@ -235,23 +260,23 @@
   .keycap small { font-size: 6.5px; font-weight: 700; color: var(--ink-2);
     align-self: flex-start; margin-top: 3px; letter-spacing: 0.3px; }
   .keycap.pulse { animation: keycappulse .22s ease; }
-  @keyframes keycappulse { 30% { box-shadow: 0 0 10px var(--ping),
-    inset 0 -2px 0 rgba(0,0,0,0.45); border-color: var(--ping);
+  @keyframes keycappulse { 30% { box-shadow: 0 0 10px var(--bin),
+    inset 0 -2px 0 rgba(0,0,0,0.45); border-color: var(--bin);
     transform: scale(1.12); } }
   .bindline { text-align: center; font-size: 8.5px; line-height: 1.15;
     color: var(--ink-2); cursor: pointer; margin-top: 2px;
     user-select: none; -webkit-user-select: none; }
   .bindline:hover { color: var(--ink-1); }
   /* item 6: the heartbeat/fire icon rides next to the OUT handle — placed
-     by renderHandles against the rendered ping-out handle each relayout */
+     by renderHandles against the rendered bin-out handle each relayout */
   .fireicon { position: absolute; width: 12px; height: 12px; display: flex;
     align-items: center; justify-content: center; font-size: 10px;
-    line-height: 1; color: var(--ping); opacity: 0.85; pointer-events: none;
+    line-height: 1; color: var(--bin); opacity: 0.85; pointer-events: none;
     z-index: 6; }
   .fireicon.pulse { animation: pingpulse .22s ease; }
   /* pad-less trigger cards (threshold) pulse their whole card on fire */
   .mod.pulse { animation: cardping .25s ease; }
-  @keyframes cardping { 30% { box-shadow: 0 0 12px var(--ping); } }
+  @keyframes cardping { 30% { box-shadow: 0 0 12px var(--bin); } }
   #keypop { position: fixed; z-index: 80; background: var(--card);
     border: 1px solid var(--ink-2); border-radius: 9px; padding: 6px;
     display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px;
@@ -276,17 +301,14 @@
   .port[data-sig=audio] { background: var(--audio); }
   .port[data-sig=ctl]   { background: var(--ctl); }
   .port[data-sig=mod]   { background: var(--mod); }
-  /* the two QUIET kinds stay visually distinct: mod violet, ping pastel
-     peach — primaries (audio/ctl) keep the saturated colors */
-  .port[data-sig=ping]  { background: var(--ping); }
-  .port[data-sig=gate]  { background: var(--gate); }
+  /* the two QUIET kinds stay visually distinct: mod violet, binary yellow
+     — primaries (audio/ctl) keep the saturated colors */
+  .port[data-sig=bin]   { background: var(--bin); }
   .port.quiet { width: 7px; height: 7px; border-width: 1.5px;
     background: #6f6d64; opacity: 0.5; }
   .port.quiet:hover, .port.quiet.hot { opacity: 1; background: var(--mod); }
-  .port.quiet[data-sig=ping]:hover, .port.quiet[data-sig=ping].hot {
-    background: var(--ping); }
-  .port.quiet[data-sig=gate]:hover, .port.quiet[data-sig=gate].hot {
-    background: var(--gate); }
+  .port.quiet[data-sig=bin]:hover, .port.quiet[data-sig=bin].hot {
+    background: var(--bin); }
   .port.hot { box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 30%, transparent); }
   .legend { display: flex; gap: 12px; font-size: 10px; color: var(--ink-2); }
   .legend b { display: inline-block; width: 18px; height: 3px; border-radius: 2px;
@@ -333,6 +355,17 @@
   .mod[data-size="S"] .head { padding: 3px 7px 1px; gap: 5px; }
   .mod[data-size="S"] .title { font-size: 11px; }
   .mod[data-size="S"] .sub { display: none; }
+  /* XS (4.5x4.5, GUI pass B): the S slim-head treatment squeezed once more —
+     opt-in cards only (Button/Clock/Logic/Relay), title falls back to the
+     card's SHORT name (applySize swaps it) */
+  .mod[data-size="XS"] .head { padding: 2px 5px 1px; gap: 4px; }
+  .mod[data-size="XS"] .stripe { width: 3px; }
+  .mod[data-size="XS"] .title { font-size: 10px; }
+  .mod[data-size="XS"] .sub { display: none; }
+  .mod[data-size="XS"] .body { padding: 0 6px 2px 8px; }
+  .mod[data-size="XS"] .mini { margin: 1px 0; gap: 4px; }
+  .mod[data-size="XS"] .mini label { width: 26px; font-size: 8px; }
+  .mod[data-size="XS"] .mini .chip { font-size: 8px; padding: 1px 3px; }
   /* L cards flow their param rows into two columns (tall modules size UP
      into width instead of scrolling) */
   .mod[data-size="L"] .body { column-count: 2; column-gap: 18px; }
@@ -516,8 +549,7 @@
     <span><b style="background:linear-gradient(90deg,#3987e5,#22b8d4)"></b>audio</span>
     <span><b style="background:linear-gradient(90deg,#1baf7a,#e8c832)"></b>notes</span>
     <span><b style="background:linear-gradient(90deg,#e34948,#9085e9)"></b>mod</span>
-    <span data-legend="ping"><b style="background:linear-gradient(90deg,#f0b37e,#f7d4ae)"></b>ping</span>
-    <span data-legend="gate"><b style="background:linear-gradient(90deg,#e05c5c,#f2a35e)"></b>gate</span>
+    <span data-legend="binary"><b style="background:linear-gradient(90deg,#e6c34a,#ee5da0)"></b>binary</span>
   </div>
 
 </header>
@@ -566,18 +598,18 @@ const INSTRUMENT_DEFAULT = "fm_bell";
 // rebuild on every state broadcast; the choice must survive the rebuild
 const scopeLivePref = new Set();
 // subway line palettes — audio owns the cools, notes/control green→yellow,
-// mod the warm+violet half (the population that grows), ping pastel peach,
-// gate signal red/amber (item 8: hi/lo LEVELS — Cole's pick, 07-23).
+// mod the warm+violet half (the population that grows), bin the ONE binary
+// kind: yellow → orange → coral → pink (binary rework, 07-23 — pings and
+// gates are one hi/lo signal now, so their families merged too).
 const LINES = {
   audio: ["#3987e5", "#22b8d4", "#1f9e9e", "#6db1ff", "#4a5fd0", "#7fd4ef"],
   ctl:   ["#1baf7a", "#8cc63f", "#e8c832", "#4fd08c", "#c9d94d", "#0f8f66"],
   mod:   ["#e34948", "#f2842c", "#d446b8", "#9085e9", "#e87ba4", "#ff6b5e", "#7a5fd0"],
-  ping:  ["#f0b37e", "#f7d4ae", "#e59a5c", "#f4c493"],
-  gate:  ["#e05c5c", "#ef8585", "#c94b4b", "#f2a35e"],
+  bin:   ["#e6c34a", "#eda45c", "#ef7d78", "#ee5da0"],
 };
-const lineCount = {audio: 0, ctl: 0, mod: 0, ping: 0, gate: 0};
+const lineCount = {audio: 0, ctl: 0, mod: 0, bin: 0};
 const SIG_CSS = {audio: "var(--audio)", ctl: "var(--ctl)", mod: "var(--mod)",
-                 ping: "var(--ping)", gate: "var(--gate)"};
+                 bin: "var(--bin)", any: "#8d8b80"};  // any = unclaimed relay circuit
 
 const world = document.getElementById("world");
 const wiresPerm = document.getElementById("wire-perm");
@@ -714,7 +746,8 @@ function saveLayout() {
       .map(n => [n.gid, n.montype, ...memOf(n), !!n.expanded]);
     try {
       localStorage.setItem(storeKey(currentPatch),
-        JSON.stringify({pos: posMem, monitors, monN, fpos: fposMem}));
+        JSON.stringify({pos: posMem, monitors, monN, fpos: fposMem,
+                        raw: (typeof relayAW !== "undefined" ? relayAW : [])}));
     } catch (_) {}
   }, 400);
 }
@@ -724,6 +757,7 @@ function loadLayout(patch) {
     posMem = d.pos || {};
     fposMem = d.fpos || {};
     monN = d.monN || 1;
+    if (typeof relayAW !== "undefined") relayAW = d.raw || [];
     return d.monitors || [];
   } catch (_) { posMem = {}; fposMem = {}; return []; }
 }
@@ -936,6 +970,7 @@ function addCard(cfg) {
   }
   // ports are SEMANTIC entries now — the blocks engine draws the handles
   node.wideCfg = !!cfg.wide;
+  node.allowXS = !!cfg.allowXS;   // XS (4.5x4.5) is opt-in: simple cards only
   for (const [dir, sig, label] of (cfg.ports || []))
     node.ports.push({dir, sig, label});
   for (const q of (cfg.quietRows || []))
@@ -963,16 +998,24 @@ const SH = 4.5, MIDG = BLK - 2 * SH;      // S = 10x4.5; mid-block gutter = 1u
 const BX = 12, BY = 8;                    // board, in blocks
 const UW = BX * PITCH + GUT, UH = BY * PITCH + GUT;
 const SIZE_PX = {                          // module footprints in px
+  XS: [SH * U, SH * U],                    // 4.5x4.5 — really simple modules
   S: [BLK * U, SH * U], M: [BLK * U, BLK * U], L: [(BLK * 2 + GUT) * U, BLK * U],
 };
 
-function placeOf(n) { return { size: n.size || "S", bx: n.bx | 0, by: n.by | 0, half: n.half || null }; }
+function placeOf(n) { return { size: n.size || "S", bx: n.bx | 0, by: n.by | 0, half: n.half || null, hh: n.hh || null }; }
+// occupancy is QUADRANT-resolution since XS (Cole, 07-23): each block holds
+// four 4.5u slots — "x,y,top|bottom,left|right". An XS takes one quadrant,
+// an S its half's two, M a block's four, L both its blocks'. (The function
+// name predates XS; every no-overlap rule reads through it unchanged.)
 function halfCells(pl) {
   const out = [];
   const blocks = pl.size === "L" ? [[pl.bx, pl.by], [pl.bx + 1, pl.by]] : [[pl.bx, pl.by]];
   for (const [x, y] of blocks) {
-    if (pl.size === "S") out.push(`${x},${y},${pl.half || "top"}`);
-    else { out.push(`${x},${y},top`); out.push(`${x},${y},bottom`); }
+    if (pl.size === "XS") out.push(`${x},${y},${pl.half || "top"},${pl.hh || "left"}`);
+    else if (pl.size === "S") { const v = pl.half || "top";
+      out.push(`${x},${y},${v},left`); out.push(`${x},${y},${v},right`); }
+    else for (const v of ["top", "bottom"])
+      for (const h of ["left", "right"]) out.push(`${x},${y},${v},${h}`);
   }
   return out;
 }
@@ -982,7 +1025,11 @@ function inBoundsPl(pl) {
 }
 function unitRect(pl) {
   const x = pl.bx * PITCH + GUT, yB = pl.by * PITCH + GUT;
-  if (pl.size === "S") return { x, y: (pl.half || "top") === "top" ? yB : yB + SH + MIDG, w: BLK, h: SH };
+  const yHalf = (pl.half || "top") === "top" ? yB : yB + SH + MIDG;
+  if (pl.size === "XS")   // XS = 4.5x4.5: S's half-block logic, halved again
+    return { x: x + ((pl.hh || "left") === "left" ? 0 : SH + MIDG),
+             y: yHalf, w: SH, h: SH };
+  if (pl.size === "S") return { x, y: yHalf, w: BLK, h: SH };
   if (pl.size === "M") return { x, y: yB, w: BLK, h: BLK };
   return { x, y: yB, w: BLK * 2 + GUT, h: BLK };
 }
@@ -1007,9 +1054,10 @@ function occOf(posMap) {
 }
 
 // ---------- shove planner (quadrant displacement, chained, half-step S-vs-S) --
+const halfHeight = (s) => s === "S" || s === "XS";   // the 4.5u-tall sizes
 function shiftPlace(pl, dir, gran) {
   const p = { ...pl };
-  if (pl.size === "S" && (dir === "up" || dir === "down")) {
+  if (halfHeight(pl.size) && (dir === "up" || dir === "down")) {
     if (gran === "half") {
       if (dir === "down") { if (p.half === "top") p.half = "bottom"; else { p.half = "top"; p.by++; } }
       else                { if (p.half === "bottom") p.half = "top"; else { p.half = "bottom"; p.by--; } }
@@ -1017,9 +1065,24 @@ function shiftPlace(pl, dir, gran) {
     }
     p.by += dir === "down" ? 1 : -1; return p;
   }
+  if (pl.size === "XS" && (dir === "left" || dir === "right") && gran === "quarter") {
+    // the horizontal mirror of the S half-step: quadrant hops, crossing the
+    // block edge into the neighbour's facing quadrant
+    if (dir === "right") { if ((p.hh || "left") === "left") p.hh = "right"; else { p.hh = "left"; p.bx++; } }
+    else                 { if ((p.hh || "left") === "right") p.hh = "left"; else { p.hh = "right"; p.bx--; } }
+    return p;
+  }
   if (dir === "down") p.by++; else if (dir === "up") p.by--;
   else if (dir === "right") p.bx++; else p.bx--;
   return p;
+}
+// displacement granularity: half-height cards shoved vertically by another
+// half-height card step by halves; XS shoved horizontally by a half-height
+// card steps by quadrants; everything else moves whole blocks.
+function shoveGran(opSize, bySize, dir) {
+  const vert = dir === "up" || dir === "down";
+  if (vert) return halfHeight(opSize) && halfHeight(bySize) ? "half" : "block";
+  return opSize === "XS" && halfHeight(bySize) ? "quarter" : "block";
 }
 function planShove(dragGid, target, dir) {
   const pos = currentPos(dragGid);
@@ -1027,13 +1090,17 @@ function planShove(dragGid, target, dir) {
   const eff = (gid) => moves.get(gid) || pos.get(gid);
   const targetCells = new Set(halfCells(target));
   if (!inBoundsPl(target)) return { ok: false, moves };
-  const pairPartner = (gid) => {
+  // a half-height card shoved a WHOLE BLOCK (by M/L) carries its block-
+  // mates along — the block's residents stay a block (pairPartner, since
+  // XS generalized to every co-resident S/XS)
+  const blockMates = (gid) => {
     const pl = eff(gid);
-    if (pl.size !== "S") return null;
-    const want = `${pl.bx},${pl.by},${(pl.half || "top") === "top" ? "bottom" : "top"}`;
+    if (!halfHeight(pl.size)) return [];
+    const out = [];
     for (const [ogid] of pos) { if (ogid === gid) continue;
-      const op = eff(ogid); if (op.size === "S" && halfCells(op)[0] === want) return ogid; }
-    return null;
+      const op = eff(ogid);
+      if (halfHeight(op.size) && op.bx === pl.bx && op.by === pl.by) out.push(ogid); }
+    return out;
   };
   const queue = [{ gid: null, cells: targetCells, size: target.size }];
   let guard = 0;
@@ -1046,11 +1113,8 @@ function planShove(dragGid, target, dir) {
       const oCells = halfCells(op);
       if (!oCells.some(c => cur.cells.has(c))) continue;
       const movers = [ogid];
-      let gran = "block";
-      if (op.size === "S") {
-        if (cur.size === "S") gran = "half";
-        else { const pp = pairPartner(ogid); if (pp !== null) movers.push(pp); }
-      }
+      const gran = shoveGran(op.size, cur.size, dir);
+      if (halfHeight(op.size) && gran === "block") movers.push(...blockMates(ogid));
       for (const mid of movers) {
         const np = shiftPlace(eff(mid), dir, gran);
         if (!inBoundsPl(np)) return { ok: false, moves };
@@ -1062,7 +1126,7 @@ function planShove(dragGid, target, dir) {
     if (cur.gid !== null) {
       const op = eff(cur.gid);
       if (halfCells(op).some(c => targetCells.has(c))) {
-        const np = shiftPlace(op, dir, op.size === "S" && target.size === "S" ? "half" : "block");
+        const np = shiftPlace(op, dir, shoveGran(op.size, target.size, dir));
         if (!inBoundsPl(np)) return { ok: false, moves };
         moves.set(cur.gid, np);
         queue.push({ gid: cur.gid, cells: new Set(halfCells(np)), size: np.size });
@@ -1094,6 +1158,26 @@ function blockAt(x, y) {
   return { bx, by, fx: Math.max(0, Math.min(1, fx)), fy: Math.max(0, Math.min(1, fy)) };
 }
 // first free slot that fits `size`, scanning column-major from a preferred col
+function slotAt(size, bx, by, fits) {
+  // sub-block slot scan at one block: XS tries the four quadrants, S the two
+  // halves, M/L the block itself — first fit wins (reading order)
+  if (size === "XS") {
+    for (const half of ["top", "bottom"]) for (const hh of ["left", "right"]) {
+      const pl = { size, bx, by, half, hh };
+      if (fits(pl)) return pl;
+    }
+    return null;
+  }
+  if (size === "S") {
+    for (const half of ["top", "bottom"]) {
+      const pl = { size, bx, by, half, hh: null };
+      if (fits(pl)) return pl;
+    }
+    return null;
+  }
+  const pl = { size, bx, by, half: null, hh: null };
+  return fits(pl) ? pl : null;
+}
 function findFreeSlot(size, prefCol = 0, prefRow = 0) {
   const occ = occOf(currentPos(null));
   const fits = (pl) => inBoundsPl(pl) && !halfCells(pl).some(c => occ.get(c) !== undefined);
@@ -1101,19 +1185,16 @@ function findFreeSlot(size, prefCol = 0, prefRow = 0) {
     const bx = prefCol + dx * sgn;
     if (bx < 0 || bx >= BX) continue;
     for (let by = prefRow; by < BY; by++) {
-      if (size === "S") {
-        for (const half of ["top", "bottom"])
-          if (fits({ size, bx, by, half })) return { size, bx, by, half };
-      } else if (fits({ size, bx, by, half: null })) return { size, bx, by, half: null };
+      const pl = slotAt(size, bx, by, fits);
+      if (pl) return pl;
     }
     for (let by = 0; by < prefRow; by++) {
-      if (size === "S") {
-        for (const half of ["top", "bottom"])
-          if (fits({ size, bx, by, half })) return { size, bx, by, half };
-      } else if (fits({ size, bx, by, half: null })) return { size, bx, by, half: null };
+      const pl = slotAt(size, bx, by, fits);
+      if (pl) return pl;
     }
   }
-  return { size, bx: 0, by: 0, half: size === "S" ? "top" : null };  // saturated board
+  return { size, bx: 0, by: 0, half: halfHeight(size) ? "top" : null,
+           hh: size === "XS" ? "left" : null };  // saturated board
 }
 
 // ---------- gutter-lattice router (half-unit resolution, Dijkstra + turn) ----
@@ -1121,15 +1202,18 @@ const VSTEP = 2 * PITCH, CL0 = GUT;
 function buildRouteCtx(posMap) {
   const split = new Set();
   const rects = [];
+  const splitV = new Set();   // blocks with XS residents: vertical 1u mid gutter
   for (const [, pl] of posMap) {
-    if (pl.size === "S") split.add(`${pl.bx},${pl.by}`);
+    if (halfHeight(pl.size)) split.add(`${pl.bx},${pl.by}`);
+    if (pl.size === "XS") splitV.add(`${pl.bx},${pl.by}`);
     rects.push(unitRect(pl));
   }
   const MID0 = 2 * (GUT + SH + MIDG / 2);
   // mid-block gutters are NARROW (1u) — wires are biased away from them
   // unless a route genuinely needs one (port stubs, no alternative)
-  const isMid = (i, j) => (j - MID0) % VSTEP === 0 && (i - CL0) % VSTEP !== 0
-    && (j - CL0) % VSTEP !== 0;
+  const isMid = (i, j) =>
+    ((j - MID0) % VSTEP === 0 || (i - MID0) % VSTEP === 0)
+    && (i - CL0) % VSTEP !== 0 && (j - CL0) % VSTEP !== 0;
   const open = (i, j) => {
     if (i < 0 || j < 0 || i > UW * 2 || j > UH * 2) return false;
     let g = (i - CL0) % VSTEP === 0 || (j - CL0) % VSTEP === 0;
@@ -1139,6 +1223,14 @@ function buildRouteCtx(posMap) {
       if (by >= 0 && by < BY && bx >= 0 && bx < BX &&
           i >= CL0 + bx * VSTEP && i <= CL0 + (bx + 1) * VSTEP &&
           split.has(`${bx},${by}`)) g = true;
+    }
+    if (!g && (i - MID0) % VSTEP === 0) {
+      // vertical mid gutter (between an XS pair) — the horizontal one's mirror
+      const bx = Math.round((i - MID0) / VSTEP);
+      const by = Math.round((j - (CL0 + PITCH)) / VSTEP);
+      if (bx >= 0 && bx < BX && by >= 0 && by < BY &&
+          j >= CL0 + by * VSTEP && j <= CL0 + (by + 1) * VSTEP &&
+          splitV.has(`${bx},${by}`)) g = true;
     }
     if (!g) return false;
     const cx = i / 2, cy = j / 2;
@@ -1423,16 +1515,26 @@ function bezSample(sH, dH) {
 const FAN_PITCH = 0.78, T_LEAD = 1.1, PORT_GAP = 0.8;
 const PRIM_MOD_GAP = 1.2, END_MARGIN = 0.7;
 const LANE_W = 4, LANE_MAX = 3;
-const PRIMARY_SIGS = new Set(["audio", "ctl", "ping", "gate"]);
+const PRIMARY_SIGS = new Set(["audio", "ctl", "bin"]);
 // + handle rules: outputs branch; FAN-IN inputs combine (audio mix, ctl
 // merge into voice/deck/keyshift/deriver); SINGLE-INPUT ports never grow
-// a + — param (mod) ins and a source's "play" in (a drop RE-TARGETS the
-// voice, it doesn't add; a drone's play-in takes one root source).
+// a + — param (mod) ins, a source's "play" in (a drop RE-TARGETS the
+// voice, it doesn't add; a drone's play-in takes one root source), and
+// single-input binary ins (logic named ins — the server steals on add).
 function portAllowsPlus(port) {
   if (port.dir === "out") return true;
   if (port.sig === "mod") return false;                     // param ins
+  if (port.single) return false;                            // logic named ins
   if (port.label === "play") return false;
   return true;
+}
+// an element's top offset RELATIVE TO A CARD, walking nested offsetParents
+// (rowEls inside the position:relative .viz-sec — logic pin labels — would
+// otherwise measure against the viz-sec instead of the card)
+function offsetWithin(el, root) {
+  let y = 0, e = el;
+  while (e && e !== root) { y += e.offsetTop; e = e.offsetParent; }
+  return y;
 }
 function wiresAt(node, port) {
   const end = port.dir === "out" ? "from" : "to";
@@ -1445,19 +1547,19 @@ function computeLayout(n) {
   const ports = [];
   for (const port of n.ports) {
     const ws = wiresAt(n, port);
-    // the QUIET band: mod (param-ins + lfo outs), ping TRIGGER-INS and
-    // gate TOGGLE-INS (item 8) — node-scoped, left edge. A trigger-in
-    // carries a rowEl pointing at its card's `every` (timing) row so it
-    // rides that row's line — the ping overrides that timer, so they share
-    // a row (Cole, 2026-07-22); a toggle-in rides the row it toggles
-    // (head power light / deck button row / logic in row).
-    const isMod = port.sig === "mod" ||
-                  (port.sig === "ping" && port.dir === "in") ||
-                  (port.sig === "gate" && port.dir === "in");
+    // the QUIET band: mod (param-ins + lfo outs) and binary INS — node-
+    // scoped, left edge. A deriver trigger-in carries a rowEl pointing at
+    // its card's `every` (timing) row so it rides that row's line — the
+    // wired binary source overrides that timer, so they share a row (Cole,
+    // 2026-07-22); a level-in rides the row it drives (head power light /
+    // deck button row / a logic card's pin label).
+    const isMod = !port.fixEdge && (port.sig === "mod" ||
+                  (port.sig === "bin" && port.dir === "in"));
     ports.push({ port, ws, isMod, side: port.dir });
   }
   // primary edge auto-pick: face the average direction of wired neighbours
   for (const p of ports) {
+    if (p.port.fixEdge) { p.edge = p.port.fixEdge; continue; }  // relay circuits
     if (p.isMod) { p.edge = p.side === "in" ? "L" : "R"; continue; }
     let dx = 0, dy = 0, k = 0;
     for (const w of p.ws) {
@@ -1489,7 +1591,7 @@ function computeLayout(n) {
     for (const p of mod)
       if (p.port.rowEl && p.port.rowEl.isConnected)
         topRow = Math.min(topRow,
-          (p.port.rowEl.offsetTop + p.port.rowEl.offsetHeight / 2) / U);
+          (offsetWithin(p.port.rowEl, n.el) + p.port.rowEl.offsetHeight / 2) / U);
     const primEnd = T_LEAD + groupExtent(prim);
     const need = primEnd + PRIM_MOD_GAP + groupExtent(mod) + END_MARGIN;
     if (need > r.h || (topRow !== Infinity && primEnd + 0.4 > topRow))
@@ -1507,6 +1609,15 @@ function computeLayout(n) {
     const mod  = byEdge[edge].filter(p => p.isMod);
     let t = T_LEAD;
     for (const p of prim) {
+      if (p.port.fixFrac != null) {
+        // FIXED-position ports (relay circuits): t is a fraction of the
+        // edge, so in k rides directly above out k; fanned wires step by a
+        // tighter pitch so neighbours stay distinguishable
+        const edgeLen = (edge === "L" || edge === "R") ? r.h : r.w;
+        let ft = p.port.fixFrac * edgeLen;
+        for (const s of slotsOf(p)) { handles.push(mkHandle(n, r, p, s, edge, ft)); ft += FAN_PITCH * 0.55; }
+        continue;
+      }
       for (const s of slotsOf(p)) { handles.push(mkHandle(n, r, p, s, edge, t)); t += FAN_PITCH; }
       t += PORT_GAP - FAN_PITCH;
     }
@@ -1519,7 +1630,8 @@ function computeLayout(n) {
       // minimum separation so quiet handles never pile on each other.
       const QUIET_SEP = 0.72;                       // units between quiet handles
       const rowPos = (p) => (p.port.rowEl && p.port.rowEl.isConnected)
-        ? [p.port.rowEl.offsetLeft, p.port.rowEl.offsetTop] : [1e9, 1e9];
+        ? [p.port.rowEl.offsetLeft, offsetWithin(p.port.rowEl, n.el)]
+        : [1e9, 1e9];
       const ordered = mod.slice().sort((a, b) => {
         const A = rowPos(a), B = rowPos(b);
         return A[0] - B[0] || A[1] - B[1];
@@ -1529,7 +1641,8 @@ function computeLayout(n) {
       for (const p of ordered) {
         let tt = null;
         if (p.port.rowEl && p.port.rowEl.isConnected) {
-          const py = (p.port.rowEl.offsetTop + p.port.rowEl.offsetHeight / 2) / U;
+          const py = (offsetWithin(p.port.rowEl, n.el)
+                      + p.port.rowEl.offsetHeight / 2) / U;
           tt = Math.max(T_LEAD, py);            // EXACTLY in line with the row
           if (tt < lastT + QUIET_SEP) tt = lastT + QUIET_SEP;   // 2-col collision only
           tt = Math.min(edgeLen - END_MARGIN, tt);
@@ -1551,11 +1664,13 @@ function mkHandle(n, r, p, s, edge, t) {
   // half-unit distance from a module edge OUT to its gutter's centerline:
   // standard gutters = GUT; the narrow 1u MID-BLOCK gutter (an S edge facing
   // its block-mate) = 1 — using GUT there overshoots into the neighbour
-  const midT = n.size === "S" && (n.half || "top") === "bottom";  // top edge on mid
-  const midB = n.size === "S" && (n.half || "top") === "top";    // bottom edge on mid
+  const midT = halfHeight(n.size) && (n.half || "top") === "bottom";  // top edge on mid
+  const midB = halfHeight(n.size) && (n.half || "top") === "top";    // bottom edge on mid
+  const midL = n.size === "XS" && (n.hh || "left") === "right";  // left edge on the
+  const midR = n.size === "XS" && (n.hh || "left") === "left";   // vertical 1u mid
   let x, y, ni, nj;
-  if (edge === "L")      { x = r.x;       y = r.y + t;   ni = 2*r.x - GUT;       nj = Math.round(2*(r.y + t)); }
-  else if (edge === "R") { x = r.x + r.w; y = r.y + t;   ni = 2*(r.x+r.w) + GUT; nj = Math.round(2*(r.y + t)); }
+  if (edge === "L")      { x = r.x;       y = r.y + t;   ni = 2*r.x - (midL ? 1 : GUT);       nj = Math.round(2*(r.y + t)); }
+  else if (edge === "R") { x = r.x + r.w; y = r.y + t;   ni = 2*(r.x+r.w) + (midR ? 1 : GUT); nj = Math.round(2*(r.y + t)); }
   else if (edge === "T") { x = r.x + t;   y = r.y;       nj = Math.round(2*r.y) - (midT ? 1 : GUT);       ni = Math.round(2*(r.x + t)); }
   else                   { x = r.x + t;   y = r.y + r.h; nj = Math.round(2*(r.y+r.h)) + (midB ? 1 : GUT); ni = Math.round(2*(r.x + t)); }
   return { node: n, port: p.port, side: p.side, sig: p.port.sig, quiet: !!p.port.quiet,
@@ -1728,6 +1843,12 @@ function sizeFor(n) {
   const el = n.el;
   const pw = el.style.width, ph = el.style.height, ds = el.dataset.size;
   el.classList.add("measuring");                           // pins canvas viz height
+  let hXS = Infinity;
+  if (n.allowXS) {   // XS is OPT-IN (really simple modules); the floor
+    el.style.width = SIZE_PX.XS[0] + "px"; el.style.height = "auto";
+    el.dataset.size = "XS";                                // stays S elsewhere
+    hXS = el.offsetHeight || 64;
+  }
   el.style.width = SIZE_PX.S[0] + "px"; el.style.height = "auto";
   el.dataset.size = "S";                                   // slim-head styling
   const hS = el.offsetHeight || 64;
@@ -1738,6 +1859,7 @@ function sizeFor(n) {
   el.style.width = pw; el.style.height = ph;
   // comfort fit: content must clear the bottom edge with real slack — the
   // 4.5u S (72px) takes up to 3 param rows comfortably, more sizes up
+  if (hXS <= SIZE_PX.XS[1] - 6) return "XS";  // an over-tall opt-in falls to S
   if (hS <= SIZE_PX.S[1] - 6) return "S";
   if (hM <= SIZE_PX.M[1] - 6) return "M";
   return "L";                                              // 2-column body
@@ -1749,8 +1871,13 @@ function applySize(n) {
   n.el.style.width = w + "px";
   n.el.style.height = h + "px";
   n.el.dataset.size = n.size;
-  // titles occupy ONE line and show WHOLE: shrink the font until it fits
+  // titles occupy ONE line and show WHOLE: XS swaps in the card's SHORT
+  // name (a 4.5u head can't carry "Threshold 2"), then shrink-to-fit
   const ttl = n.el.querySelector(".title");
+  if (ttl) {
+    const want = n.size === "XS" ? (n.short || n.name) : n.name;
+    if (ttl.textContent !== want) { ttl.textContent = want; n._ttlSized = null; }
+  }
   if (ttl && n._ttlSized !== n.size && ttl.clientWidth > 0) {
     n._ttlSized = n.size;
     ttl.style.fontSize = "";
@@ -1844,11 +1971,13 @@ function applyMem(n) {
   if ((n.montype || n.sizeChips) &&
       (m[3] === "S" || m[3] === "M" || m[3] === "L")) { n.size = m[3]; n.sizeLocked = true; }
   applySize(n);
-  const pl = { size: n.size, bx: m[0], by: m[1], half: n.size === "S" ? (m[2] || "top") : null };
+  const pl = { size: n.size, bx: m[0], by: m[1],
+               half: halfHeight(n.size) ? (m[2] || "top") : null,
+               hh: n.size === "XS" ? (m[4] || "left") : null };
   // occupied or out of bounds → fall through to auto-placement
   const occ = occOf(currentPos(n.gid));
   if (!inBoundsPl(pl) || halfCells(pl).some(c => occ.get(c) !== undefined)) return false;
-  n.bx = pl.bx; n.by = pl.by; n.half = pl.half;
+  n.bx = pl.bx; n.by = pl.by; n.half = pl.half; n.hh = pl.hh;
   place(n);
   return true;
 }
@@ -1868,12 +1997,8 @@ function autoPlace(n, prefCol, prefRow = 0) {
     cols.sort((a, b) => Math.abs(a - start) - Math.abs(b - start));
     outer: for (const bx of cols)
       for (let by = vb.r0; by <= vb.r1; by++) {
-        if (n.size === "S") {
-          for (const half of ["top", "bottom"])
-            if (fits({ size: "S", bx, by, half })) { slot = { size: "S", bx, by, half }; break outer; }
-        } else if (fits({ size: n.size, bx, by, half: null })) {
-          slot = { size: n.size, bx, by, half: null }; break outer;
-        }
+        const pl = slotAt(n.size, bx, by, fits);
+        if (pl) { slot = pl; break outer; }
       }
   }
   if (!slot) {
@@ -1885,10 +2010,16 @@ function autoPlace(n, prefCol, prefRow = 0) {
       panLocked = false; applyView(); saveView();
     }
   }
-  n.bx = slot.bx; n.by = slot.by; n.half = slot.half;
+  n.bx = slot.bx; n.by = slot.by; n.half = slot.half; n.hh = slot.hh || null;
   place(n);
 }
-function memOf(n) { return [n.bx | 0, n.by | 0, n.half || null, n.size || "S"]; }
+// layout memory: [bx, by, half, size] (+ hh for XS — appended so monitor
+// tuples and every pre-XS stored layout keep their shape)
+function memOf(n) {
+  const m = [n.bx | 0, n.by | 0, n.half || null, n.size || "S"];
+  if (n.size === "XS") m.push(n.hh || "left");
+  return m;
+}
 function enforceSeparation(n) {
   // valid, non-overlapping placement or find one
   const occ = occOf(currentPos(n.gid));
@@ -1900,22 +2031,31 @@ function enforceSeparation(n) {
 function pxToSlotMem(wx, wy, size = "S") {
   const blk = blockAt(wx, wy);
   const occ = occOf(currentPos(null));
-  let half = null;
-  if (size === "S") {
+  let half = null, hh = null;
+  if (halfHeight(size)) {
     half = blk.fy < 0.5 ? "top" : "bottom";
-    if (occ.get(`${blk.bx},${blk.by},${half}`) !== undefined)
-      half = half === "top" ? "bottom" : "top";
+    if (size === "XS") hh = blk.fx < 0.5 ? "left" : "right";
+    const taken = (v, h) => (size === "XS"
+      ? [`${blk.bx},${blk.by},${v},${h}`]
+      : [`${blk.bx},${blk.by},${v},left`, `${blk.bx},${blk.by},${v},right`])
+      .some(c => occ.get(c) !== undefined);
+    if (taken(half, hh)) half = half === "top" ? "bottom" : "top";
   }
-  const pl = { size, bx: blk.bx, by: blk.by, half };
-  if (!halfCells(pl).some(c => occ.get(c) !== undefined)) return [pl.bx, pl.by, pl.half, size];
+  const pl = { size, bx: blk.bx, by: blk.by, half, hh };
+  if (!halfCells(pl).some(c => occ.get(c) !== undefined))
+    return size === "XS" ? [pl.bx, pl.by, pl.half, size, pl.hh]
+                         : [pl.bx, pl.by, pl.half, size];
   const slot = findFreeSlot(size, blk.bx, blk.by);
-  return [slot.bx, slot.by, slot.half, size];
+  return size === "XS" ? [slot.bx, slot.by, slot.half, size, slot.hh]
+                       : [slot.bx, slot.by, slot.half, size];
 }
 function resizeNode(n, size) {
-  if (uiMode === "flex") return false;     // S/M/L is a blocks-mode idea
+  if (uiMode === "flex") return false;     // XS/S/M/L is a blocks-mode idea
   if (size === n.size) return;
   let target;
-  if (size === "S") target = { size: "S", bx: n.bx, by: n.by, half: "top" };
+  if (size === "XS") target = { size: "XS", bx: n.bx, by: n.by,
+                                half: n.half || "top", hh: n.hh || "left" };
+  else if (size === "S") target = { size: "S", bx: n.bx, by: n.by, half: n.half || "top" };
   else if (size === "M") target = { size: "M", bx: n.bx, by: n.by, half: null };
   else { let bx = n.bx; if (bx + 2 > BX) bx = BX - 2; target = { size: "L", bx, by: n.by, half: null }; }
   const plan = planShove(n.gid, target, size === "L" ? "right" : "down");
@@ -1927,9 +2067,11 @@ function resizeNode(n, size) {
     const o = nodes.get(gid);
     if (!o) continue;
     o.size = pl.size; o.bx = pl.bx; o.by = pl.by; o.half = pl.half || null;
+    o.hh = pl.hh || null;
     place(o);
   }
   n.size = target.size; n.bx = target.bx; n.by = target.by; n.half = target.half || null;
+  n.hh = target.hh || null;
   if (n.montype || n.sizeChips) n.sizeLocked = true;
   place(n);
   if (n.onResize) n.onResize();          // size-dependent viz (keyshift grid) repaints
@@ -2026,6 +2168,7 @@ function compactLayout() {
   for (const n of all) n.bx = null;
   const rows = new Array(BX).fill(0);      // next free block row per column
   const halfAt = new Array(BX).fill(-1);   // block row with an open bottom half
+  const xsAt = new Array(BX).fill(null);   // {by, free:[quadrants]} open XS block
   let cur = 0, maxUsed = -1;
   const put = (n) => {
     const wide = n.size === "L" ? 2 : 1;
@@ -2033,20 +2176,31 @@ function compactLayout() {
     while (c < BX) {
       const room = n.size === "L" ? (c + 1 < BX && Math.max(rows[c], rows[c + 1]) < H)
         : n.size === "S" ? (halfAt[c] >= 0 || rows[c] < H)
+        : n.size === "XS" ? ((xsAt[c] && xsAt[c].free.length > 0) || rows[c] < H)
         : rows[c] < H;
       if (room) break;
       c++;
     }
     if (c >= BX) { autoPlace(n, BX - 1); return; }   // board genuinely full
     cur = c;
-    if (n.size === "S") {
+    if (n.size === "XS") {
+      // XS packs 4-up into its own block, quadrant by quadrant (reading order)
+      if (!xsAt[c] || !xsAt[c].free.length) {
+        xsAt[c] = { by: rows[c], free: [["top", "left"], ["top", "right"],
+                                        ["bottom", "left"], ["bottom", "right"]] };
+        rows[c]++;
+      }
+      const [half, hh] = xsAt[c].free.shift();
+      n.bx = c; n.by = xsAt[c].by; n.half = half; n.hh = hh;
+    } else if (n.size === "S") {
       if (halfAt[c] >= 0) { n.bx = c; n.by = halfAt[c]; n.half = "bottom"; halfAt[c] = -1; }
       else { n.bx = c; n.by = rows[c]; n.half = "top"; halfAt[c] = rows[c]; rows[c]++; }
+      n.hh = null;
     } else if (n.size === "M") {
-      n.bx = c; n.by = rows[c]; n.half = null; rows[c]++;
+      n.bx = c; n.by = rows[c]; n.half = null; n.hh = null; rows[c]++;
     } else {
       const r = Math.max(rows[c], rows[c + 1]);
-      n.bx = c; n.by = r; n.half = null; rows[c] = rows[c + 1] = r + 1;
+      n.bx = c; n.by = r; n.half = null; n.hh = null; rows[c] = rows[c + 1] = r + 1;
     }
     maxUsed = Math.max(maxUsed, c + wide - 1);
     place(n);
@@ -2157,6 +2311,7 @@ function relayoutNow() {
   }
   renderHandles();
   renderTags(routed);
+  redrawLogicViz();   // circuit diagrams: canvas sizes track the layout
   window._routedDebug = routed;
 }
 // ---- tag placement: clear of corners, crossings, other tags -----------------
@@ -2289,9 +2444,9 @@ function renderHandles() {
       layer.appendChild(el);
     }
     // item 6: the button's ◉ heartbeat icon rides just INSIDE the card,
-    // next to the rendered ping-out handle (whichever edge it picked)
+    // next to the rendered bin-out handle (whichever edge it picked)
     if (n.fireIcon) {
-      const H = n.lay.handles.find(h => h.sig === "ping" && h.side === "out");
+      const H = n.lay.handles.find(h => h.sig === "bin" && h.side === "out");
       if (H) {
         const cx = n.el.offsetLeft, cy = n.el.offsetTop;
         if (H.edge === "B") {
@@ -2364,7 +2519,8 @@ function groupFits(group, dbx, dby) {
   for (const [gid, pl] of currentPos(null)) if (!ids.has(gid)) pos.set(gid, pl);
   const occ = occOf(pos);
   for (const n of group) {
-    const pl = { size: n.size, bx: n.bx + dbx, by: n.by + dby, half: n.half || null };
+    const pl = { size: n.size, bx: n.bx + dbx, by: n.by + dby,
+                 half: n.half || null, hh: n.hh || null };
     if (!inBoundsPl(pl)) return false;
     if (halfCells(pl).some(c => occ.get(c) !== undefined)) return false;
   }
@@ -2419,10 +2575,15 @@ function bindNode(node) {
     const blk = blockAt(p.x, p.y);
     const dir = quadrantOf(blk.fx, blk.fy);
     let target, sEmpty = false;
-    if (node.size === "S") {
+    if (node.size === "XS") {
+      // quadrant-resolution drop: the pointer's quadrant IS the target
+      target = { size: "XS", bx: blk.bx, by: blk.by,
+                 half: blk.fy < 0.5 ? "top" : "bottom",
+                 hh: blk.fx < 0.5 ? "left" : "right" };
+    } else if (node.size === "S") {
       const occ = occOf(currentPos(node.gid));
-      sEmpty = occ.get(`${blk.bx},${blk.by},top`) === undefined &&
-               occ.get(`${blk.bx},${blk.by},bottom`) === undefined;
+      sEmpty = !["top,left", "top,right", "bottom,left", "bottom,right"]
+        .some(q => occ.get(`${blk.bx},${blk.by},${q}`) !== undefined);
       const half = sEmpty ? "top" : (blk.fy < 0.5 ? "top" : "bottom");
       target = { size: "S", bx: blk.bx, by: blk.by, half };
     } else if (node.size === "M") {
@@ -2432,7 +2593,7 @@ function bindNode(node) {
       bx = Math.max(0, Math.min(BX - 2, bx));
       target = { size: "L", bx, by: blk.by, half: null };
     }
-    const key = `${target.size},${target.bx},${target.by},${target.half},${dir}`;
+    const key = `${target.size},${target.bx},${target.by},${target.half},${target.hh || ""},${dir}`;
     if (key !== drag.prevKey) {
       drag.prevKey = key;
       const plan = planShove(node.gid, target, dir);
@@ -2466,10 +2627,12 @@ function bindNode(node) {
         const o = nodes.get(gid);
         if (!o) continue;
         o.size = pl.size; o.bx = pl.bx; o.by = pl.by; o.half = pl.half || null;
+        o.hh = pl.hh || null;
         place(o);
       }
       const t = drag.target;
       node.bx = t.bx; node.by = t.by; node.half = t.half || null;
+      node.hh = t.hh || null;
       place(node);
     } else {
       previewMoves(new Map());
@@ -2626,9 +2789,10 @@ function hdragUp() {
   $("wiretop").innerHTML = "";
   hdrag = null;
   if (active) {
-    // single-source param input: replace whatever occupies it first —
-    // FAN-IN quiet ports (ping trigger-ins, gate toggle/logic ins: they
-    // grow a +) take additional wires instead of replacing (item 8)
+    // single-source inputs (param ins, logic named ins): replace whatever
+    // occupies them first — the visual steal-on-drop the server mirrors.
+    // FAN-IN quiet ports (deriver trigger-ins, :pwr/deck level-ins: they
+    // grow a +) take additional wires instead of replacing
     if (active.quiet && !portAllowsPlus(active.port)) {
       for (const w2 of wires)
         if (w2 !== wire && w2.to.node === active.node && w2.to.port === active.port &&
@@ -3121,6 +3285,7 @@ function wouldCycle(from, to) {
   // audio graph is one-out-per-source, so following the single outgoing
   // wire from `to` either reaches master or reveals a loop through `from`
   const adj = new Map(((state && state.wires) || []).map(v => [v.from, v.to]));
+  for (const w of relayAW) adj.set(w.from, w.to);  // relay hops walk like nodes
   let cur = to, hops = 0;
   while (cur && cur !== "master" && hops++ < 128) {
     if (cur === from) return true;
@@ -3157,22 +3322,78 @@ function droneIds() {
 function thresholdIds() {
   return new Set(((state && state.thresholds) || []).map(t => t.id));
 }
-function pingSrcIds() {
-  return new Set([...((state && state.buttons) || []).map(b => b.id),
-                  ...((state && state.clocks) || []).map(c => c.id),
-                  ...thresholdIds()]);   // item 8: CV edge → ping
-}
-// item 8 GATE suite: switch/logic nodes are the gate LEVEL sources; their
-// outgoing ctl_wires ARE gate wires (kind inferred from the source id).
-// Old servers have no switches/logics keys — both default empty.
-function switchIds() {
-  return new Set(((state && state.switches) || []).map(s => s.id));
-}
 function logicIds() {
   return new Set(((state && state.logics) || []).map(l => l.id));
 }
-function gateSrcIds() {
-  return new Set([...switchIds(), ...logicIds()]);
+// BINARY sources (binary rework): button/clock/threshold/logic ids — their
+// outgoing ctl_wires ARE binary wires (kind inferred from the source id).
+// Old servers have no logics key — defaults empty. Binary-claimed relay
+// circuit ENDPOINTS join through binSrcEp (below).
+function binSrcIds() {
+  return new Set([...((state && state.buttons) || []).map(b => b.id),
+                  ...((state && state.clocks) || []).map(c => c.id),
+                  ...thresholdIds(), ...logicIds()]);
+}
+// ---- relays (GUI pass B): type-agnostic switched junctions ------------------
+// A circuit "relay:k" carries ONE kind, inferred server-side from its FIRST
+// wire (state.relays[].circuits holds the claims). Unclaimed circuits are
+// sig "any": their IN accepts any of audio/notes/bin drags; their OUT has
+// no kind yet and refuses (the kind comes from the first wire INTO it).
+const RELAY_MAX = 9;
+const RELAY_SIG = {audio: "audio", notes: "ctl", binary: "bin"};
+function relayIds() {
+  return new Set(((state && state.relays) || []).map(r => r.id));
+}
+function relayCircKind(base, k) {   // claimed kind of circuit k, else null
+  const r = ((state && state.relays) || []).find(x => x.id === base);
+  const c = r && r.circuits && r.circuits[String(k)];
+  return (c && c.kind) || null;
+}
+function relayLaneOk(l) { return Number.isInteger(l) && l >= 1 && l <= RELAY_MAX; }
+// binary source ENDPOINT: a bare bin id or a binary-claimed relay circuit
+function binSrcEp(ep) {
+  const [b, l] = splitEp(ep);
+  if (relayIds().has(b)) return relayLaneOk(l) && relayCircKind(b, l) === "binary";
+  return l === undefined && binSrcIds().has(b);
+}
+// stored AUDIO wires touching relay circuits — the server broadcasts only
+// the RESOLVED bus routing (state.wires never carries virtual endpoints),
+// so the GUI keeps the stored relay hops itself: recorded on connect,
+// dropped on cut, persisted with the layout, pruned against server truth
+// (a relay circuit only stays claimed audio while a wire touches it).
+let relayAW = [];
+function relayAWAdd(from, to) {
+  relayAW = relayAW.filter(w => w.from !== from);   // one audio out per source
+  relayAW.push({from, to});
+  // local claim echo: the broadcast will confirm, but the local rebuild
+  // must not prune the wire (or grey its handles) before it lands
+  for (const ep of [from, to]) {
+    const [b, l] = splitEp(ep);
+    const r = ((state && state.relays) || []).find(x => x.id === b);
+    if (r && relayLaneOk(l)) {
+      r.circuits = r.circuits || {};
+      r.circuits[String(l)] = r.circuits[String(l)] || {kind: "audio"};
+    }
+  }
+  saveLayout();
+  rebuildGraph();
+}
+function relayAWRemove(from) {
+  relayAW = relayAW.filter(w => w.from !== from);
+  saveLayout();
+  rebuildGraph();
+}
+function relayAWPrune() {
+  const have = new Set(((state && state.chain) || []).map(m => m.key));
+  const okEnd = (ep, isSrc) => {
+    const [b, l] = splitEp(ep || "");
+    if (relayIds().has(b)) return relayLaneOk(l) && relayCircKind(b, l) === "audio";
+    if (ep === "master") return !isSrc;
+    return l === undefined && have.has(ep);
+  };
+  relayAW = relayAW.filter(w =>
+    w.to != null && okEnd(w.from, true) && okEnd(w.to, false) &&
+    (relayIds().has(splitEp(w.from)[0]) || relayIds().has(splitEp(w.to)[0])));
 }
 // ctl endpoint grammar: "keyshift.2:3" = node "keyshift.2", lane 3. Nodes
 // without lanes are plain ids (unchanged).
@@ -3185,12 +3406,18 @@ function laneOk(l) { return Number.isInteger(l) && l >= 1 && l <= 4; }
 function ctlSrcOk(s) {
   const [b, l] = splitEp(s);
   if (keyshiftIds().has(b)) return laneOk(l);
+  if (relayIds().has(b))    // a circuit OUT sources notes once claimed notes
+    return relayLaneOk(l) && relayCircKind(b, l) === "notes";
   return l === undefined &&
     (b === "keys" || b === "arp" || b === "deck" || deriverIds().has(b));
 }
 function ctlDstOk(d) {
   const [b, l] = splitEp(d);
   if (keyshiftIds().has(b)) return laneOk(l);
+  if (relayIds().has(b)) {  // a circuit IN sinks notes: unclaimed or notes
+    const k = relayCircKind(b, l);
+    return relayLaneOk(l) && (k === null || k === "notes");
+  }
   return l === undefined &&
     (b === "arp" || b === "deck" || voiceIds().has(b) ||
      deriverIds().has(b) ||
@@ -3206,19 +3433,31 @@ function ctlEp(n, p) {
 function connectAction(out, inn) {
   const po = out.port, pi = inn.port;
   if (!po || !pi || out.node === inn.node) return null;
-  // sigs must match, with ONE legal crossing (item 8): a ping-out may land
-  // on a gate toggle-in (server-side alternator adapter; deck = press)
-  if (po.sig !== pi.sig && !(po.sig === "ping" && pi.sig === "gate"))
-    return null;
-  const sig = po.sig;
+  // sigs must match — the binary rework removed the last legal crossing
+  // (ping→gate was two kinds; bin is ONE kind now). ONE exception (relay,
+  // pass B): an UNCLAIMED circuit IN is type-agnostic and adopts the
+  // dragged kind; an unclaimed circuit OUT has no kind yet and refuses.
+  let sig = po.sig;
+  if (po.sig !== pi.sig) {
+    if (pi.sig === "any" && pi.relayCirc) sig = po.sig;
+    else return null;
+  }
+  if (sig === "any") return null;   // unclaimed relay OUT: kind unknown
   if (sig === "audio") {
-    const from = audioKeyOut(out.node);
-    const to = inn.node.gid === "master" ? "master" : inn.node.chainKey;
+    const from = po.relayCirc ? po.ep : audioKeyOut(out.node);
+    let to;
+    if (pi.relayCirc) to = pi.ep;   // circuit IN: stored verbatim server-side
+    else {
+      to = inn.node.gid === "master" ? "master" : inn.node.chainKey;
+      if (inn.node.mod && inn.node.mod.kind !== "effect") return null; // sources take no audio in
+    }
     if (!from || !to || to === "drums") return null;
-    if (inn.node.mod && inn.node.mod.kind !== "effect") return null; // sources take no audio in
-    if (from === "drums")
-      return () => send({type: "set_drums", target: to});
+    if (from === "drums")   // drums route via set_drums (keys only, no relays)
+      return pi.relayCirc ? null : () => send({type: "set_drums", target: to});
     if (to !== "master" && wouldCycle(from, to)) return null;
+    if (po.relayCirc || pi.relayCirc)
+      return () => { send({type: "graph_wire", action: "add", from, to});
+                     relayAWAdd(from, to); };
     return () => send({type: "graph_wire", action: "add", from, to});
   }
   if (sig === "mod") {
@@ -3247,31 +3486,23 @@ function connectAction(out, inn) {
     return () => send({type: "lfo_wire", action: "add", id: lid,
                        key: inn.node.chainKey, name: pi.param});
   }
-  if (sig === "ping") {
-    // ping-out (button/clock/threshold) lands on a trigger-in, a switch's
-    // flip-in, or any gate TOGGLE-IN (item 8: alternator semantics — ping
-    // 1 → hi, ping 2 → lo; deck buttons: press). Strict otherwise:
-    // mod↛ping and ping↛mod are refused by the sig gate above even though
-    // both render as quiet handles
-    const from = ctlId(out.node), to = ctlId(inn.node);
-    if (!pingSrcIds().has(from)) return null;
-    if (pi.gate)   // toggle-ins carry their full endpoint (":pwr", "deck:…")
-      return () => send({type: "ctl_wire", action: "add", from, to: pi.gate});
-    if (pi.dir === "in" && switchIds().has(to))   // a wired ping FLIPS it
-      return () => send({type: "ctl_wire", action: "add", from, to});
-    if (!deriverIds().has(to)) return null;       // trigger-ins: derivers
-    return () => send({type: "ctl_wire", action: "add", from, to});
-  }
-  if (sig === "gate") {
-    // gate-out (switch/logic) carries a hi/lo LEVEL: it lands ONLY on a
-    // toggle-in (module/arp/drums :pwr, deck buttons, logic gate-ins) —
-    // never on note/param/trigger sinks (item 8 grammar). Cross-node
-    // feedback loops are legal server-side; direct self-wires are not.
-    const from = ctlId(out.node);
-    if (!gateSrcIds().has(from)) return null;
-    const to = pi.gate;
-    if (!to) return null;
-    if (String(to).split(":")[0] === from) return null;   // self-wire
+  if (sig === "bin") {
+    // bin-out (button/clock/threshold/logic — ONE hi/lo kind since the
+    // binary rework) lands on: deriver trigger-ins (rising edge fires),
+    // deck button-ins, :pwr level-ins, and logic NAMED ins ("<id>:a" etc,
+    // single-input — the server steals on add; portAllowsPlus already
+    // refuses a + so the GUI mirrors the mod-param steal-on-drop). Bare
+    // logic ids are NOT valid dsts any more. Never note/param/audio sinks;
+    // cross-node feedback loops are legal server-side, self-wires are not.
+    const from = po.relayCirc ? po.ep : ctlId(out.node);
+    if (!binSrcEp(from)) return null;
+    if (pi.ep) {   // endpoint-ins carry their full wire dst (":pwr", "deck:…",
+                   // ":a", relay circuit ins, "relay:ctl")
+      if (String(pi.ep).split(":")[0] === splitEp(from)[0]) return null;   // self-wire
+      return () => send({type: "ctl_wire", action: "add", from, to: pi.ep});
+    }
+    const to = ctlId(inn.node);
+    if (pi.dir !== "in" || !deriverIds().has(to)) return null;
     return () => send({type: "ctl_wire", action: "add", from, to});
   }
   // ---- ctl ----
@@ -3613,10 +3844,10 @@ function buildChainCard(mod) {
   }
   n.chainKey = mod.key;
   if (!mod.enabled) n.el.classList.add("bypassed");
-  // item 8: a QUIET gate toggle-in on the enable ("<key>:pwr") — its handle
+  // a QUIET binary level-in on the enable ("<key>:pwr") — its handle
   // rides the HEAD row, right at the power light
-  n.ports.push({dir: "in", sig: "gate", label: "pwr", quiet: true,
-                rowEl: n.el.querySelector(".head"), gate: mod.key + ":pwr"});
+  n.ports.push({dir: "in", sig: "bin", label: "pwr", quiet: true,
+                rowEl: n.el.querySelector(".head"), ep: mod.key + ":pwr"});
   return n;
 }
 
@@ -3673,9 +3904,9 @@ function buildArpCard() {
   const n = addCard({gid, name: "Arp", sub: "quantized", fam: "ctl", rows,
     headCheck: {checked: a.enabled, onChange: (on) => { a.enabled = on; cfgArp({}); }},
     ports: [["in", "ctl", "notes"], ["out", "ctl", "notes"]]});
-  // item 8: quiet gate toggle-in on the enable, anchored to the head light
-  n.ports.push({dir: "in", sig: "gate", label: "pwr", quiet: true,
-                rowEl: n.el.querySelector(".head"), gate: "arp:pwr"});
+  // quiet binary level-in on the enable, anchored to the head light
+  n.ports.push({dir: "in", sig: "bin", label: "pwr", quiet: true,
+                rowEl: n.el.querySelector(".head"), ep: "arp:pwr"});
   return n;
 }
 
@@ -3783,7 +4014,7 @@ function buildTonicCard(t) {
                     + `</div>`,
                   kill: () => send({type: "remove_tonic", id: gid}),
                   ports: [["in", "ctl", "notes"], ["out", "ctl", "root"],
-                          ["in", "ping", "trigger"]]});
+                          ["in", "bin", "trigger"]]});
   n.tonicMode = "presence";
   const tm = n.el.querySelector(".tmode");
   tm.addEventListener("pointerdown", (e) => e.stopPropagation());
@@ -3794,8 +4025,8 @@ function buildTonicCard(t) {
   });
   // the trigger-in is NODE-SCOPED (commits the whole deriver): a quiet
   // handle on the left edge, IN LINE with the `every` (timing) row — a
-  // wired ping overrides that internal timer, so they share a row.
-  const trig = n.ports.find(p => p.sig === "ping");
+  // wired binary source overrides that internal timer, so they share a row.
+  const trig = n.ports.find(p => p.sig === "bin");
   if (trig) { trig.quiet = true; trig.rowEl = rows[0]; }
   return n;
 }
@@ -3908,14 +4139,14 @@ function buildLiteralCard(t) {
                   sub: "note extractor · zero-lag", fam: "service", rows,
                   kill: () => send({type: "remove_literal", id: gid}),
                   ports: [["in", "ctl", "notes"], ["out", "ctl", "note"],
-                          ["in", "ping", "trigger"]]});
+                          ["in", "bin", "trigger"]]});
   // trigger-in rides the `every` row line, same as the Estimator's
-  const trig = n.ports.find(p => p.sig === "ping");
+  const trig = n.ports.find(p => p.sig === "bin");
   if (trig) { trig.quiet = true; trig.rowEl = rows[0]; }
   return n;
 }
 
-// ---- ping trigger sources: Button (bindable) + Clock -------------------------
+// ---- binary sources: Button (bindable level source) + Clock (pulse) --------
 function bindingLabel(b) {
   if (!b) return "pair…";
   if (b.kind === "cc") return "CC " + b.cc;
@@ -3971,17 +4202,30 @@ function keycapGlyph(b) {
   return {big: "?", cc: false};
 }
 function buildButtonCard(b) {
-  // item 6: the binding IS the card face — a big KEYCAP (click = FIRE)
-  // over a small binding label (click = re-pair). The ◉ heartbeat icon
-  // moved out next to the OUT handle (renderHandles places it).
+  // item 6: the binding IS the card face — a big KEYCAP over a small
+  // binding label (click = re-pair). Binary rework: the button is a
+  // momentary switch — the keycap sends button_down while pressed and
+  // button_up on release; in latch (persistent) mode a click sends
+  // fire_button and the server toggles. The head LED shows the level.
   const gid = b.id;
   const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
+  const modeText = () => b.latch ? "persistent" : "momentary";
+  const rows = [
+    rowChip({gid}, "mode", {
+      text: modeText(),
+      onClick: (chip) => {
+        b.latch = !b.latch;   // local truth (broadcast excludes the sender)
+        chip.textContent = modeText();
+        send({type: "set_button", id: gid, latch: !!b.latch});
+      },
+    }),
+  ];
   const n = addCard({gid, name: "Button" + suffix, short: "Btn" + suffix,
-    sub: "trigger · bindable", fam: "service", rows: [],
-    vizHTML: `<div class="keycap" title="fire"></div>
+    sub: "binary · bindable", fam: "service", rows, allowXS: true,
+    vizHTML: `<div class="keycap" title="press"></div>
       <div class="bindline" title="click to rebind"></div>`,
     kill: () => send({type: "remove_button", id: gid}),
-    ports: [["out", "ping", "ping"]]});
+    ports: [["out", "bin", "out"]]});
   const cap = n.el.querySelector(".keycap"),
         line = n.el.querySelector(".bindline");
   const syncCap = () => {
@@ -3996,10 +4240,39 @@ function buildButtonCard(b) {
   // pairing flows (startPingArm/cancelPingArm/handlePingKey) talk through
   // this setter; the text is re-derived, so the args are ignored
   uiParam[gid + ".bind"] = () => syncCap();
-  cap.addEventListener("pointerdown", (e) => e.stopPropagation());
+  // level LED in the head (lit = hi): settings.on seeds it, live
+  // {"kind":"gate"} events keep it honest; presses echo locally
+  const led = document.createElement("span");
+  led.className = "gled" + (b.on ? " on" : "");
+  led.title = "level";
+  led.style.marginLeft = "auto";
+  const kill = n.el.querySelector(".kill");
+  if (kill) kill.style.marginLeft = "2px";
+  n.el.querySelector(".head").insertBefore(led, kill);
+  uiParam[gid + ".led"] = (u, on) => led.classList.toggle("on", !!on);
+  const setLocal = (on) => { b.on = on; led.classList.toggle("on", on); };
+  let held = false;
+  const releaseCap = () => {
+    if (!held) return;
+    held = false;
+    setLocal(false);
+    send({type: "button_up", id: gid});
+  };
+  cap.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+    if (b.latch) return;              // persistent: the CLICK toggles
+    held = true;
+    setLocal(true);
+    send({type: "button_down", id: gid});
+    pingFlash(gid);
+  });
+  for (const ev of ["pointerup", "pointercancel", "pointerleave"])
+    cap.addEventListener(ev, releaseCap);
   cap.addEventListener("click", (e) => {
     e.stopPropagation();
-    send({type: "fire_button", id: gid});
+    if (!b.latch) return;             // momentary: down/up already sent
+    setLocal(!b.on);
+    send({type: "fire_button", id: gid});   // latch: server toggles
     pingFlash(gid);
   });
   line.addEventListener("pointerdown", (e) => e.stopPropagation());
@@ -4033,14 +4306,15 @@ function buildClockCard(c) {
     }),
   ];
   return addCard({gid, name: "Clock" + suffix, short: "Clk" + suffix,
-    sub: "transport trigger", fam: "service", rows,
+    sub: "transport pulse", fam: "service", rows, allowXS: true,
     vizHTML: `<div class="pingpad">◔</div>`,
     kill: () => send({type: "remove_clock", id: gid}),
-    ports: [["out", "ping", "ping"]]});
+    ports: [["out", "bin", "out"]]});
 }
-// item 8: threshold — a comparator watching a CV (its cv-in takes an LFO's
-// mod wire); the server fires ONE ping per crossing (edge-notify, /tr).
-// level/hysteresis are in the LFO's normalized bipolar terms (−1..1).
+// threshold — a comparator watching a CV (its cv-in takes an LFO's mod
+// wire); binary rework: its out is a binary LEVEL (the mode-mapped Schmitt
+// state), edge-notified server-side — never polled. level/hysteresis are
+// in the LFO's normalized bipolar terms (−1..1).
 function buildThresholdCard(t) {
   const gid = t.id;
   const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
@@ -4077,10 +4351,10 @@ function buildThresholdCard(t) {
     }),
   ];
   const n = addCard({gid, name: "Threshold" + suffix, short: "Thr" + suffix,
-    sub: t.source ? "◁ " + t.source : "cv edge → ping",
+    sub: t.source ? "◁ " + t.source : "cv edge → binary",
     fam: "service", rows,
     kill: () => send({type: "remove_threshold", id: gid}),
-    ports: [["in", "mod", "cv"], ["out", "ping", "ping"]]});
+    ports: [["in", "mod", "cv"], ["out", "bin", "out"]]});
   // the cv-in is a QUIET single-input handle riding the level row's line —
   // the level is what the incoming CV is compared against
   const cv = n.ports.find(p => p.sig === "mod" && p.dir === "in");
@@ -4088,45 +4362,20 @@ function buildThresholdCard(t) {
   return n;
 }
 
-// ---- GATE suite (item 8): Switch (manual hi/lo) + Logic (op node) ----------
-// Both are Python-side LEVEL nodes (see synthbase/gate.py): their outgoing
-// ctl_wires are GATE wires; {"kind":"gate","id","on"} events light the LEDs.
-function buildSwitchCard(s) {
-  const gid = s.id;
-  const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
-  const n = addCard({gid, name: "Switch" + suffix, short: "Sw" + suffix,
-    sub: "gate source · hi/lo", fam: "service", rows: [],
-    vizHTML: `<button type="button" class="powpad" role="switch"
-      title="toggle hi/lo">⏻</button>`,
-    kill: () => send({type: "remove_switch", id: gid}),
-    ports: [["in", "ping", "flip"], ["out", "gate", "level"]]});
-  const pad = n.el.querySelector(".powpad");
-  const sync = (on) => {
-    pad.classList.toggle("on", !!on);
-    pad.setAttribute("aria-checked", String(!!on));
-  };
-  sync(s.on);
-  // live follow: state broadcasts rebuild; gate events land here (onMidi)
-  uiParam[gid + ".led"] = (u, on) => sync(on);
-  pad.addEventListener("pointerdown", (e) => e.stopPropagation());
-  pad.addEventListener("click", (e) => {
-    e.stopPropagation();
-    s.on = !s.on;          // local flip (set_switch broadcast excludes us)
-    sync(s.on);
-    send({type: "set_switch", id: gid, on: s.on});
-    e.target.blur();
-  });
-  // the flip-in is a QUIET ping trigger-in anchored to the pad row —
-  // a wired ping toggles the switch exactly like a click
-  const flip = n.ports.find(p => p.sig === "ping");
-  if (flip) { flip.quiet = true; flip.rowEl = n.el.querySelector(".viz-sec"); }
-  return n;
+// ---- Logic: the binary-plane op node (see synthbase/gate.py) ---------------
+// A Python-side LEVEL node: its outgoing ctl_wires are BINARY wires;
+// {"kind":"gate","id","on"} events light the LED and the circuit viz.
+// Inputs are NAMED single-input endpoints ("<id>:a"/"<id>:b", ":a" only
+// for NOT, ":set"/":reset" for SR latch) — bare-id dsts are gone.
+function logicInsOf(op) {
+  if (op === "SR latch") return [["set", "set"], ["reset", "reset"]];
+  if (op === "NOT") return [["a", "A"]];
+  return [["a", "A"], ["b", "B"]];   // AND / OR / XOR
 }
 function buildLogicCard(t) {
   const gid = t.id;
   const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
   const ops = t.ops || ["AND", "OR", "NOT", "XOR", "SR latch"];
-  const isSR = t.op === "SR latch";
   const rows = [
     rowChip({gid}, "op", {
       text: t.op,
@@ -4135,34 +4384,33 @@ function buildLogicCard(t) {
         chip.textContent = v;
         t.op = v;
         send({type: "set_logic", id: gid, op: v});
-        // the port SHAPE follows the op (SR latch: named set/reset ins vs
-        // the bare fan-in) — rebuild locally (state-driven, like the
-        // Instant's value row); other clients follow the broadcast
+        // the port SHAPE follows the op (per-op named ins; the server
+        // drops wires whose endpoint died) — rebuild locally (state-
+        // driven); other clients follow the broadcast
         rebuildGraph();
       },
     }),
   ];
-  const mkIn = (label) => {   // bare label rows the quiet gate-ins ride
-    const row = document.createElement("div");
-    row.className = "mini";
-    row.innerHTML = `<label title="${esc(label)}">${esc(label)}</label>`;
-    rows.push(row);
-    return row;
-  };
-  const inRows = isSR ? [mkIn("set"), mkIn("reset")] : [mkIn("in")];
+  // circuit-diagram viz: pin labels ride the canvas at the trace heights —
+  // the quiet in-handles anchor to them (offsetWithin handles the nesting)
+  const ins = logicInsOf(t.op);
+  const pinTop = (i) => ins.length === 1 ? 50 : (i === 0 ? 28 : 72);
   const n = addCard({gid, name: "Logic" + suffix, short: "Log" + suffix,
-    sub: `${t.op} · gate logic`, fam: "service", rows,
+    sub: `${t.op} · binary logic`, fam: "service", rows, allowXS: true,
+    vizHTML: `<canvas class="lvz" height="20"></canvas>`
+      + ins.map(([sub, label], i) =>
+          `<span class="lpin" data-pin="${esc(sub)}"
+             style="top: calc(${pinTop(i)}% - 5px)">${esc(label)}</span>`)
+        .join(""),
     kill: () => send({type: "remove_logic", id: gid}),
-    ports: isSR
-      ? [["in", "gate", "set"], ["in", "gate", "reset"],
-         ["out", "gate", "out"]]
-      : [["in", "gate", "in"], ["out", "gate", "out"]]});
-  // gate-ins: quiet, row-anchored, carrying their wire ENDPOINT — SR latch
-  // uses named "<id>:set"/"<id>:reset"; every other op fans in on the bare id
-  const eps = isSR ? {set: `${gid}:set`, reset: `${gid}:reset`} : {in: gid};
-  n.ports.filter(p => p.dir === "in").forEach((p, i) => {
-    p.quiet = true; p.gate = eps[p.label]; p.rowEl = inRows[i];
-  });
+    ports: [["out", "bin", "out"]]});
+  // named ins: quiet, SINGLE-INPUT (no +; a drop onto an occupied pin cuts
+  // the old wire first — the server steals anyway), each riding its pin
+  const pinEls = [...n.el.querySelectorAll(".lpin")];
+  ins.forEach(([sub, label], i) => n.ports.push({
+    dir: "in", sig: "bin", label, quiet: true, single: true,
+    ep: `${gid}:${sub}`, rowEl: pinEls[i]}));
+  n.logicViz = true;   // redrawLogicViz targets
   // small output LED in the head (lit = out hi; follows gate events live)
   const led = document.createElement("span");
   led.className = "gled" + (t.out ? " on" : "");
@@ -4173,6 +4421,156 @@ function buildLogicCard(t) {
   n.el.querySelector(".head").insertBefore(led, kill);
   uiParam[gid + ".led"] = (u, on) => led.classList.toggle("on", !!on);
   return n;
+}
+
+// ---- Relay: the type-agnostic switched junction (see synthbase/relay.py) ---
+// Circuits are vertically-paired TOP in / BOTTOM out handles ("relay:k" both
+// ways — direction disambiguates); each wears its CLAIMED kind's sig (audio/
+// ctl/bin) or the neutral "any" until first wired. AUTO-SIZE: XS shows
+// circuits 1..4 while ≤4 are in use, S shows all 9 (re-derived per
+// broadcast). The center power button is the manual switch (set_relay,
+// last-writer-wins with the quiet "relay:ctl" binary level-in).
+function buildRelayCard(r) {
+  const gid = r.id;
+  const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
+  const circ = r.circuits || {};
+  const used = Object.keys(circ).map(Number)
+    .filter(k => Number.isInteger(k) && k >= 1 && k <= RELAY_MAX);
+  const nine = used.length > 4 || used.some(k => k > 4);
+  const nCirc = nine ? RELAY_MAX : 4;
+  const n = addCard({gid, name: "Relay" + suffix, short: "Rly" + suffix,
+    sub: `signal relay · ${nCirc} circuits`, fam: "service", allowXS: true,
+    vizHTML: `<div class="relaybtn${r.closed ? " on" : ""}" title="relay: click to toggle">⏻</div>`,
+    kill: () => send({type: "remove_relay", id: gid}),
+    ports: []});
+  n.size = nine ? "S" : "XS";   // auto-size (spec): >4 circuits in use → S
+  n.sizeLocked = true;          // measured sizes don't apply — state decides
+  n.relayN = nCirc;
+  for (let k = 1; k <= nCirc; k++) {
+    const sig = RELAY_SIG[(circ[String(k)] || {}).kind] || "any";
+    const frac = k / (nCirc + 1);   // in k rides directly above out k
+    n.ports.push({dir: "in", sig, label: "in." + k, ep: `${gid}:${k}`,
+                  lane: k, relayCirc: k, fixEdge: "T", fixFrac: frac});
+    n.ports.push({dir: "out", sig, label: "out." + k, ep: `${gid}:${k}`,
+                  lane: k, relayCirc: k, fixEdge: "B", fixFrac: frac});
+  }
+  const btn = n.el.querySelector(".relaybtn");
+  // the quiet binary control-in ("relay:ctl") rides the power button's line
+  n.ports.push({dir: "in", sig: "bin", label: "ctl", quiet: true,
+                single: true, ep: `${gid}:ctl`, rowEl: btn});
+  const sync = (on) => btn.classList.toggle("on", !!on);
+  uiParam[gid + ".led"] = (u, on) => sync(on);   // follows {"kind":"gate"}
+  btn.addEventListener("pointerdown", (e) => e.stopPropagation());
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const rr = ((state && state.relays) || []).find(x => x.id === gid) || r;
+    rr.closed = !rr.closed;      // local echo (broadcast excludes the sender)
+    sync(rr.closed);
+    send({type: "set_relay", id: gid, closed: rr.closed});
+  });
+  return n;
+}
+
+// ---- the logic circuit viz: pin traces → gate symbol → out trace -----------
+// Levels are DERIVED, never polled: the out level rides state.logics[].out
+// (kept live by gate events); an in pin lights when the SOURCE wired into
+// it is hi — resolved via state.ctl_wires + binLevelOf (state "on"/"out"
+// fields shadowed by the live binLevels cache). Unwired pins stay dim.
+// Redraws on events (gate events + relayout), never per-frame.
+const binLevels = new Map();   // node id -> level, from {"kind":"gate"} events
+function binLevelOf(id) {
+  if (binLevels.has(id)) return binLevels.get(id);   // fresher than state
+  const st = state || {};
+  const b = (st.buttons || []).find(x => x.id === id);
+  if (b) return !!b.on;
+  const l = (st.logics || []).find(x => x.id === id);
+  if (l) return !!l.out;
+  const t = (st.thresholds || []).find(x => x.id === id);
+  if (t) return !!t.on;
+  const r = (st.relays || []).find(x => x.id === id);
+  if (r) return !!r.closed;   // the relay's power button level
+  return false;               // clocks (pulse-only) + unknown ids read lo
+}
+const LOGIC_DIM = "#4a4a44", LOGIC_UNWIRED = "#33332e", LOGIC_SYM = "#8a887c";
+function drawLogicCanvas(n) {
+  const cv = n.el.querySelector("canvas.lvz");
+  if (!cv || !cv.clientWidth || !cv.clientHeight) return;
+  if (cv.width !== cv.clientWidth) cv.width = cv.clientWidth;
+  if (cv.height !== cv.clientHeight) cv.height = cv.clientHeight;
+  const t = ((state && state.logics) || []).find(x => x.id === n.gid);
+  if (!t) return;
+  const ctx = cv.getContext("2d"), W = cv.width, H = cv.height;
+  ctx.clearRect(0, 0, W, H);
+  const ins = logicInsOf(t.op);
+  const cy = H / 2, gx0 = W * 0.40, gx1 = W * 0.62;
+  const gy0 = Math.max(1.5, H * 0.14), gy1 = H - gy0, gh = gy1 - gy0;
+  // pin trace y's MATCH the pin labels (handles + labels + traces align)
+  const pinY = (i) => {
+    const el = n.el.querySelectorAll(".lpin")[i];
+    return el ? offsetWithin(el, n.el.querySelector(".viz-sec"))
+                + el.offsetHeight / 2 - cv.offsetTop
+              : (ins.length === 1 ? cy : (i === 0 ? H * 0.28 : H * 0.72));
+  };
+  const pin = (x0, y, x1, hex, wired) => {   // one trace + its pin dot
+    ctx.strokeStyle = ctx.fillStyle =
+      wired === false ? LOGIC_UNWIRED : hex;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x0 < gx0 ? x0 + 1.5 : x1 - 1.5, y, 1.8, 0, Math.PI * 2);
+    ctx.fill();
+  };
+  // in traces: bin-family colors when hi (A yellow, B orange), dim when lo
+  const inLo = W * 0.045, inHi = t.op === "XOR" ? gx0 + 3.5 : gx0 + 0.75;
+  ins.forEach(([sub], i) => {
+    const w = ((state && state.ctl_wires) || [])
+      .find(x => x.to === `${n.gid}:${sub}`);
+    const lit = !!w && binLevelOf(String(w.from).split(":")[0]);
+    pin(inLo, pinY(i), inHi, lit ? LINES.bin[i ? 1 : 0] : LOGIC_DIM, !!w);
+  });
+  // out trace: pink when the out level is hi
+  const out = binLevelOf(n.gid);
+  pin(gx1 - 0.75, cy, W - W * 0.045, out ? LINES.bin[3] : LOGIC_DIM);
+  // the gate symbol — proper distinctive glyphs
+  ctx.strokeStyle = LOGIC_SYM;
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  if (t.op === "AND") {                       // D-shape
+    const r = Math.min(gh / 2, gx1 - gx0), fx = gx1 - r;
+    ctx.moveTo(fx, gy0); ctx.lineTo(gx0, gy0); ctx.lineTo(gx0, gy1);
+    ctx.lineTo(fx, gy1); ctx.arc(fx, cy, gh / 2, Math.PI / 2, -Math.PI / 2, true);
+  } else if (t.op === "OR" || t.op === "XOR") {   // curved-back shield
+    ctx.moveTo(gx0, gy0);
+    ctx.quadraticCurveTo(gx0 + (gx1 - gx0) * 0.7, gy0, gx1, cy);
+    ctx.quadraticCurveTo(gx0 + (gx1 - gx0) * 0.7, gy1, gx0, gy1);
+    ctx.quadraticCurveTo(gx0 + (gx1 - gx0) * 0.28, cy, gx0, gy0);
+    if (t.op === "XOR") {                     // the second input arc
+      ctx.moveTo(gx0 - 3.5, gy0);
+      ctx.quadraticCurveTo(gx0 - 3.5 + (gx1 - gx0) * 0.28, cy, gx0 - 3.5, gy1);
+    }
+  } else if (t.op === "NOT") {                // triangle + bubble
+    const bx = gx1 - 4;
+    ctx.moveTo(gx0, gy0); ctx.lineTo(bx, cy); ctx.lineTo(gx0, gy1);
+    ctx.closePath();
+    ctx.moveTo(gx1 - 2, cy);
+    ctx.arc(gx1 - 2, cy, 2, 0, Math.PI * 2);
+  } else {                                    // SR latch: small labeled box
+    ctx.rect(gx0, gy0, gx1 - gx0, gh);
+  }
+  ctx.stroke();
+  if (t.op === "SR latch") {
+    ctx.fillStyle = LOGIC_SYM;
+    ctx.font = "600 " + Math.min(8, gh - 3) + "px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("SR", (gx0 + gx1) / 2, cy + 0.5);
+  }
+}
+function redrawLogicViz() {
+  for (const n of nodes.values())
+    if (n.logicViz) {
+      try { drawLogicCanvas(n); } catch (_) {}   // one bad card ≠ no layout
+    }
 }
 
 // ---- key shifter: Grasshopper-ish key popover + progression step strip ----
@@ -4350,12 +4748,12 @@ function buildDeckCard() {
     miniViz: true,   // item 4: collapsed deck shows a mini track strip
     vizHTML: `<canvas class="vz" data-viz="deck" height="54"></canvas>`,
     ports: [["in", "ctl", "notes"], ["out", "ctl", "replay"]]});
-  // item 8: four QUIET gate toggle-ins, one per control button (rising edge
-  // = press; a ping just presses) — all anchored to the button row, spaced
-  // by the standard quiet-handle separation
+  // four QUIET binary trig-ins, one per control button (rising edge =
+  // press) — all anchored to the button row, spaced by the standard
+  // quiet-handle separation
   for (const a of ["rec", "stop", "play", "clear"])
-    n.ports.push({dir: "in", sig: "gate", label: a, quiet: true,
-                  rowEl: btns, gate: "deck:" + a});
+    n.ports.push({dir: "in", sig: "bin", label: a, quiet: true,
+                  rowEl: btns, ep: "deck:" + a});
   n.subEl = n.el.querySelector(".sub");
   updateDeckCard(n);
   return n;
@@ -4395,9 +4793,9 @@ function buildDrumsCard() {
     headCheck: {checked: d.enabled, onChange: (on) => {
       d.enabled = on; send({type: "set_drums", enabled: on}); }},
     ports: [["out", "audio", "hits"]]});
-  // item 8: quiet gate toggle-in on the enable, anchored to the head light
-  n.ports.push({dir: "in", sig: "gate", label: "pwr", quiet: true,
-                rowEl: n.el.querySelector(".head"), gate: "drums:pwr"});
+  // quiet binary level-in on the enable, anchored to the head light
+  n.ports.push({dir: "in", sig: "bin", label: "pwr", quiet: true,
+                rowEl: n.el.querySelector(".head"), ep: "drums:pwr"});
   for (const btn of n.el.querySelectorAll(".dstep")) {
     btn.addEventListener("pointerdown", (e) => e.stopPropagation());
     btn.addEventListener("click", () => {
@@ -4579,7 +4977,7 @@ function rebuildGraph() {
   }
   for (const w of [...wires]) removeWire(w);
   lineCount.audio = 0; lineCount.ctl = 0; lineCount.mod = 0;
-  lineCount.ping = 0; lineCount.gate = 0;
+  lineCount.bin = 0;
   for (const n of [...nodes.values()]) if (!n.persistent) removeNode(n);
   for (const k of Object.keys(uiParam))
     if (!k.startsWith("mon:")) delete uiParam[k];
@@ -4597,9 +4995,9 @@ function rebuildGraph() {
   const trigNodes = [...(state.buttons || []).map(buildButtonCard),
                      ...(state.clocks || []).map(buildClockCard),
                      ...(state.thresholds || []).map(buildThresholdCard)];
-  // item 8: gate nodes — old servers have no switches/logics keys
-  const gateNodes = [...(state.switches || []).map(buildSwitchCard),
-                     ...(state.logics || []).map(buildLogicCard)];
+  // logic + relay nodes — old servers have neither key (defaults empty)
+  const logicNodes = (state.logics || []).map(buildLogicCard);
+  const relayNodes = (state.relays || []).map(buildRelayCard);
   const services = [], chainNodes = [];
   for (const mod of state.chain) {
     const n = buildChainCard(mod);
@@ -4619,8 +5017,8 @@ function rebuildGraph() {
   };
   placeGroup([keys, arp, deck, ...voiceNodes], 0);
   placeGroup([...chainNodes, master], 2);
-  placeGroup([...tonicNodes, ...ksNodes, ...trigNodes, ...gateNodes,
-              ...services], 1);
+  placeGroup([...tonicNodes, ...ksNodes, ...trigNodes, ...logicNodes,
+              ...relayNodes, ...services], 1);
   placeGroup([drums], 5);
   for (let i = 0; i < lfoNodes.length; i++) {
     const n = lfoNodes[i], l = state.lfos[i];
@@ -4634,9 +5032,9 @@ function rebuildGraph() {
   // ---- wires (derived, exactly mirroring server truth) ----
   const port = (n, dir, sig, param, lane) => n && n.ports.find(p =>
     p.dir === dir && p.sig === sig && (!param || p.param === param) &&
-    // quiet↔param pairing binds MOD handles only; a ping trigger-in is
+    // quiet↔param pairing binds MOD handles only; a binary trigger-in is
     // quiet but node-scoped (no param)
-    (sig === "ping" || !!param === !!p.quiet) &&
+    (sig === "bin" || !!param === !!p.quiet) &&
     (lane === undefined || p.lane === lane));
   const W = (a, asig, b, bsig, opts) => a && b && addWire(
     {node: a, port: port(a, "out", asig, null, opts && opts.fromLane)},
@@ -4656,23 +5054,24 @@ function rebuildGraph() {
     if (!a || !b) continue;   // e.g. a wired node whose card isn't spawned
     const cut = () => send({type: "ctl_wire", action: "remove",
                             from: cw.from, to: cw.to});
-    // a wire FROM a switch/logic node is a GATE wire (item 8, kind inferred
-    // from the source endpoint) — it lands on the toggle-in whose port
-    // carries the wire's full endpoint (":pwr" / "deck:…" / logic ins)
-    if (gateSrcIds().has(fromBase)) {
-      const gp = b.ports.find(p => p.gate === cw.to);
-      if (gp) addWire({node: a, port: port(a, "out", "gate")},
-                      {node: b, port: gp}, {cut});
-      continue;
-    }
-    // a wire FROM a button/clock is a PING wire (kind inferred from the
-    // source endpoint) — it lands on the target's quiet trigger-in, or
-    // (item 8) on a gate toggle-in (alternator; deck buttons = press)
-    if (pingSrcIds().has(fromBase)) {
-      const gp = b.ports.find(p => p.gate === cw.to);
-      if (gp) addWire({node: a, port: port(a, "out", "ping")},
-                      {node: b, port: gp}, {cut});
-      else W(a, "ping", b, "ping", {cut});
+    // a wire FROM a binary source (button/clock/threshold/logic, or a
+    // binary-claimed relay circuit out — kind inferred from the source
+    // endpoint) is a BIN wire: it lands on the in whose port carries the
+    // wire's full endpoint (":pwr" / "deck:…" / logic named ins / relay
+    // circuit ins / "relay:ctl"), else on a deriver's quiet trigger-in.
+    // Relay circuit ports share one ep between their in and out — the
+    // lookups pin the direction.
+    if (binSrcEp(cw.from)) {
+      const ap = relayIds().has(fromBase)
+        ? a.ports.find(p => p.relayCirc === fromLane && p.dir === "out")
+        : port(a, "out", "bin");
+      const gp = b.ports.find(p => p.ep === cw.to && p.dir === "in");
+      if (ap && gp) addWire({node: a, port: ap}, {node: b, port: gp}, {cut});
+      else if (gp) addWire({node: a, port: port(a, "out", "bin")},
+                           {node: b, port: gp}, {cut});
+      else if (ap) addWire({node: a, port: ap},
+                           {node: b, port: port(b, "in", "bin")}, {cut});
+      else W(a, "bin", b, "bin", {cut});
       continue;
     }
     // a Note Monitor may RIDE this wire (visual splice): draw A→mon→B but
@@ -4698,7 +5097,13 @@ function rebuildGraph() {
   // wire cuts with graph_wire remove; master's in port takes any fan-in.
   const audioNode = (k) => k === "master" ? master : nodes.get("m:" + k);
   const audioWires = state.wires || deriveLinearWires();
+  // relay-routed sources: state.wires is the RESOLVED routing (a closed
+  // relay shows src→realDst, an open one shows nothing) — the GUI's stored
+  // relay hops (relayAW) draw instead, so the resolved duplicate is skipped
+  relayAWPrune();
+  const relayFed = new Set(relayAW.map(w => w.from));
   for (const wr of audioWires) {
+    if (relayFed.has(wr.from)) continue;
     const a = audioNode(wr.from), b = audioNode(wr.to);
     if (!a || !b) continue;
     const cut = () => send({type: "graph_wire", action: "remove", from: wr.from});
@@ -4723,6 +5128,25 @@ function rebuildGraph() {
   const dNode = dTarget != null ? (audioNode(dTarget) || master) : null;
   if (dNode) W(drums, "audio", dNode, "audio",
     {cut: () => send({type: "set_drums", target: null})});
+  // audio wires through relay circuits (GUI-side stored truth, see relayAW):
+  // src → circuit IN and circuit OUT → dst draw in the audio family; cutting
+  // either sends the targeted graph_wire remove and forgets the hop
+  for (const rw of relayAW) {
+    const [fb, fl] = splitEp(rw.from), [tb, tl] = splitEp(rw.to);
+    const a = relayIds().has(fb) ? nodes.get(fb) : audioNode(rw.from);
+    const b = relayIds().has(tb) ? nodes.get(tb) : audioNode(rw.to);
+    if (!a || !b) continue;
+    const cut = () => { send({type: "graph_wire", action: "remove",
+                              from: rw.from});
+                        relayAWRemove(rw.from); };
+    const ap = relayIds().has(fb)
+      ? a.ports.find(p => p.relayCirc === fl && p.dir === "out")
+      : port(a, "out", "audio");
+    const bp = relayIds().has(tb)
+      ? b.ports.find(p => p.relayCirc === tl && p.dir === "in")
+      : port(b, "in", "audio");
+    if (ap && bp) addWire({node: a, port: ap}, {node: b, port: bp}, {cut});
+  }
   // mod: one wire per LFO DESTINATION (fan-out) → each param's quiet
   // handle. Cutting a wire removes just that destination — the LFO card
   // stays (it's a standalone node now). Legacy (pre-item-7) entries cut
@@ -4802,13 +5226,13 @@ function renderPalette() {
   h4("extractors");
   btn("Theory Wizard", "#9085e9", () => send({type: "spawn_tonic"}));
   btn("Instant", "#9085e9", () => send({type: "spawn_literal"}));
-  h3("triggers");
-  btn("Button ◉", "#f0b37e", () => send({type: "spawn_button"}));
-  btn("Clock ◔", "#f0b37e", () => send({type: "spawn_clock"}));
-  btn("Threshold ⌁", "#f0b37e", () => send({type: "spawn_threshold"}));
-  h3("logic");   // item 8 GATE suite: hi/lo level nodes
-  btn("Switch", "#e05c5c", () => send({type: "spawn_switch"}));
-  btn("Logic", "#e05c5c", () => send({type: "spawn_logic"}));
+  h3("triggers");   // binary sources (the ONE hi/lo kind)
+  btn("Button ◉", "#e6c34a", () => send({type: "spawn_button"}));
+  btn("Clock ◔", "#e6c34a", () => send({type: "spawn_clock"}));
+  btn("Threshold ⌁", "#e6c34a", () => send({type: "spawn_threshold"}));
+  h3("logic");   // the binary-plane op node + the type-agnostic junction
+  btn("Logic", "#e6c34a", () => send({type: "spawn_logic"}));
+  btn("Relay", "#e6c34a", () => send({type: "spawn_relay"}));
   // the palette NEVER removes placed modules: any entry can be spawned
   // again — every click/drag makes a fresh instance ("lowpass.2", ...)
   const avail = (state && state.available) || [];
@@ -4923,6 +5347,7 @@ function startPaletteDrag(e, btn, a) {
 
 // ---------- state → toolbar ----------
 function onState() {
+  binLevels.clear();   // the snapshot's on/out fields are truth again
   renderPalette();
   checkSrMismatch();
   $("patch-sel").innerHTML = (state.patches || []).map(p =>
@@ -5044,16 +5469,24 @@ function onMidi(e) {
     const t = (state && state.tonics || []).find(x => x.id === e.id);
     if (t) t.root = e.root;
   } else if (e.kind === "ping") {
-    pingFlash(e.src);   // a trigger fired (clock tick / MIDI / another client)
+    pingFlash(e.src);   // a rising edge (clock tick / MIDI / another client)
   } else if (e.kind === "gate") {
-    // item 8: a switch/logic node's OUTPUT level changed — light its LED
-    // in place and keep the local state model in step (rebuild-safe)
-    const sw = (state && state.switches || []).find(x => x.id === e.id);
-    if (sw) sw.on = !!e.on;
+    // binary rework: ANY binary level change (logic out, button level,
+    // threshold level, relay closed) — light the LED in place, keep the
+    // local state model in step (rebuild-safe), feed the level cache the
+    // logic circuit viz derives its in-pin lighting from
+    binLevels.set(e.id, !!e.on);
+    const bt = (state && state.buttons || []).find(x => x.id === e.id);
+    if (bt) bt.on = !!e.on;
     const lg = (state && state.logics || []).find(x => x.id === e.id);
     if (lg) lg.out = !!e.on;
+    const th = (state && state.thresholds || []).find(x => x.id === e.id);
+    if (th) th.on = !!e.on;
+    const rl = (state && state.relays || []).find(x => x.id === e.id);
+    if (rl) rl.closed = !!e.on;   // the relay card's power button follows
     const setter = uiParam[`${e.id}.led`];
     if (setter) setter(0, !!e.on);
+    redrawLogicViz();
   } else if (e.kind === "ping_bound") {
     // server-side MIDI capture landed: update the card's chip in place
     const b = (state && state.buttons || []).find(x => x.id === e.id);
@@ -5610,8 +6043,7 @@ function tapColor(src, style) {
   if (TAP_COLORS[src]) return TAP_COLORS[src];
   if (String(src).startsWith("tonic")) return "#d9a521";    // deriver root fires
   if (String(src).startsWith("keyshift")) return "#4fd08c"; // shifter out fires
-  if (String(src).startsWith("switch") ||
-      String(src).startsWith("logic")) return "#e05c5c";    // gate node fires
+  if (String(src).startsWith("logic")) return "#e6c34a";    // binary node fires
   return style.getPropertyValue("--ctl");
 }
 function drawNotesViz(n, ctx, W, H, now, style) {
@@ -5751,13 +6183,39 @@ function handlePingKey(e) {
   if (e.repeat) return false;
   for (const b of (state && state.buttons) || [])
     if (b.binding && b.binding.kind === "key" && b.binding.code === e.code) {
-      send({type: "fire_button", id: b.id});
+      // binary rework: a bound key is the keycap — momentary buttons go
+      // DOWN here and UP on keyup (keyHeld tracks the hold); latch
+      // buttons keep the click-compat toggle (fire_button)
+      if (b.latch) send({type: "fire_button", id: b.id});
+      else { keyHeld.add(b.id); send({type: "button_down", id: b.id}); }
       pingFlash(b.id);
       e.preventDefault();
       return true;
     }
   return false;
 }
+// bound-key HOLDS in flight (momentary buttons): keyup releases; losing
+// the window releases everything (a stuck hi level is worse than a lost one)
+const keyHeld = new Set();
+function releaseBoundKey(e) {
+  for (const b of (state && state.buttons) || [])
+    if (b.binding && b.binding.kind === "key" && b.binding.code === e.code &&
+        keyHeld.delete(b.id)) {
+      send({type: "button_up", id: b.id});
+      e.preventDefault();
+      return true;
+    }
+  return false;
+}
+function releaseAllBoundKeys() {
+  for (const id of [...keyHeld]) {
+    keyHeld.delete(id);
+    send({type: "button_up", id});
+  }
+}
+window.addEventListener("blur", releaseAllBoundKeys);
+document.addEventListener("visibilitychange",
+  () => { if (document.hidden) releaseAllBoundKeys(); });
 window.addEventListener("keydown", (e) => {
   syncCaps(e);
   if (handlePingKey(e)) return;   // pairing capture / bound trigger keys
@@ -5789,6 +6247,7 @@ window.addEventListener("keydown", (e) => {
 });
 window.addEventListener("keyup", (e) => {
   syncCaps(e);
+  if (releaseBoundKey(e)) return;   // a held momentary button lets go
   if (e.key === " " && !keyTarget(e)) { e.preventDefault(); return; }
   const k = e.key.toLowerCase();
   if (k in KEYMAP) {

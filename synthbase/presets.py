@@ -70,11 +70,13 @@ def snapshot(app) -> dict:
                        if k in ("id", "key", "length", "steps")}
                       for ks in getattr(app, "keyshifts", {}).values()],
         "buttons": [{k: v for k, v in b.settings().items()
-                     if k in ("id", "binding")}
+                     if k in ("id", "binding", "latch")}
                     for b in getattr(app, "buttons", {}).values()],
         "clocks": [{k: v for k, v in c.settings().items()
                     if k in ("id", "division")}
                    for c in getattr(app, "clocks", {}).values()],
+        "relays": [{"id": r.id, "closed": bool(r.closed)}
+                   for r in getattr(app, "relays", {}).values()],
     }
     if getattr(app, "drums", None):
         data["drums"] = app.drums.snapshot()
@@ -148,7 +150,8 @@ def _apply(app, data: dict) -> None:
         for b in data.get("buttons", []):
             bid = b.get("id") or "button"
             app.spawn_button(want_id=bid)
-            app.set_button(bid, binding=b.get("binding"))
+            app.set_button(bid, binding=b.get("binding"),
+                           latch=b.get("latch"))
         for c in data.get("clocks", []):
             cid = c.get("id") or "clock"
             app.spawn_clock(want_id=cid)
@@ -199,7 +202,14 @@ def _apply(app, data: dict) -> None:
         if getattr(app, "thresholds", None) and "thresholds" in data:
             app.thresholds.restore(data["thresholds"])
         if getattr(app, "gates", None) and "gates" in data:
-            app.gates.restore(data["gates"])
+            app.gates.restore(data["gates"])   # legacy "switches" ignored
+        # relays BEFORE the resume ctl/graph wire replay (apply_resume runs
+        # after _apply): circuit endpoints must exist for wires to re-add
+        if hasattr(app, "spawn_relay"):
+            for r in data.get("relays", []):
+                rid = r.get("id") or "relay"
+                app.spawn_relay(want_id=rid)
+                app.set_relay(rid, closed=bool(r.get("closed")))
 
 
 # -- restart resume: snapshot + wiring, restored automatically on boot --------

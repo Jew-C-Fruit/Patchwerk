@@ -4,12 +4,15 @@
 
 Covers: spawn/remove/id alloc, the CV wire (watch synth ADD_AFTER its LFO
 norm, reading the shared norm bus, single-input source replace), configure
-→ synth param mapping (level/hysteresis → Schmidt lo/hi, mode → edge
-gates), the /tr edge-notify dispatch (tag routing, arm-delay swallow of
-the spawn-time phantom falling edge), the ping wire grammar (threshold is
-a ping SOURCE: out lands only on trigger-ins, nothing lands on it), LFO
-removal unwiring, the pure-Python feed() Schmitt (sensors, item 8b stub),
-and preset snapshot/restore round-trips.
+→ synth param mapping (level/hysteresis → Schmidt lo/hi; since the binary
+rework BOTH edge gates stay on — Python mirrors the full Schmitt state and
+the MODE filters taps/level Python-side), the /tr edge-notify dispatch
+(tag routing, arm-delay swallow of the spawn-time phantom falling edge),
+the binary wire grammar (threshold is a binary SOURCE: out lands only on
+binary ins, nothing lands on it), the mode-mapped out_level (rising →
+state, falling → NOT state, both → pinned lo with each crossing a PULSE),
+LFO removal unwiring, the pure-Python feed() Schmitt (sensors, item 8b
+stub), and preset snapshot/restore round-trips.
 
 Server interactions run against a fake supriya server so the exact
 add_synth/set/free traffic is assertable (test_lfo's pattern).
@@ -144,8 +147,10 @@ def test_instances_and_wire():
     check("watch spawns AFTER its norm (add_after)",
           ws[0].kwargs["target_node"] is norm
           and ws[0].kwargs["add_action"] == AddAction.ADD_AFTER)
-    check("default mode gates: rising only",
-          ws[0].kwargs["r_on"] == 1 and ws[0].kwargs["f_on"] == 0,
+    # binary rework: BOTH edge triggers always on — Python mirrors the
+    # full Schmitt state; mode filtering lives Python-side
+    check("edge gates: both always on (Python tracks the full state)",
+          ws[0].kwargs["r_on"] == 1 and ws[0].kwargs["f_on"] == 1,
           str(ws[0].kwargs))
     check("/tr callback registered once",
           len(app.engine.server.callbacks) == 1
@@ -202,11 +207,14 @@ def test_configure():
           abs(ws.sets[-1]["lo"] - 0.2) < 1e-9
           and abs(ws.sets[-1]["hi"] - 0.4) < 1e-9,
           str(ws.sets))
+    # binary rework: a mode change never touches the edge gates — they
+    # stay 1/1 so Python's Schmitt mirror sees EVERY crossing; the mode
+    # remaps the level / filters taps Python-side
     app.set_threshold(tid, mode="falling")
-    check("falling mode gates: f_on only",
-          ws.sets[-1]["r_on"] == 0 and ws.sets[-1]["f_on"] == 1)
+    check("falling mode keeps both edge gates on",
+          ws.sets[-1]["r_on"] == 1 and ws.sets[-1]["f_on"] == 1)
     app.set_threshold(tid, mode="both")
-    check("both mode gates: r_on + f_on",
+    check("both mode keeps both edge gates on",
           ws.sets[-1]["r_on"] == 1 and ws.sets[-1]["f_on"] == 1)
     app.set_threshold(tid, level=5.0, hysteresis=9.0)
     st = app.thresholds.state()[0]
@@ -271,8 +279,13 @@ def test_ping_grammar_and_fanout():
     hits = []
     app.tonics[d1].trigger = lambda: hits.append("est")
     app.literals[d2].trigger = lambda: hits.append("lit")
-    app.thresholds.instances[tid]["node"].fire()
+    # binary rework: a rising crossing raises the node's LEVEL; the
+    # lo→hi edge fires every wired trig-in
+    app.thresholds.instances[tid]["node"].fire(rising=True)
     check("fire fans out to every wired trigger-in",
+          sorted(hits) == ["est", "lit"], str(hits))
+    app.thresholds.instances[tid]["node"].fire(rising=False)
+    check("falling crossing drops the level without firing trig-ins",
           sorted(hits) == ["est", "lit"], str(hits))
 
     for dst in ("arp", "voice", "deck"):
@@ -327,10 +340,13 @@ def test_feed():
     node.feed(0.9)
     node.feed(0.15)
     check("no re-fire without leaving the window", calls == [True])
-    node.feed(-0.2)                    # crosses lo → falling, but mode=rising
-    check("falling crossing silent in rising mode", calls == [True])
+    # binary rework: node.fire is called on EVERY crossing (Python tracks
+    # the full Schmitt state); the MODE filters taps/level inside fire()
+    node.feed(-0.2)                    # crosses lo → falling crossing
+    check("falling crossing still reaches fire (rising=False)",
+          calls == [True, False])
     node.feed(0.2)
-    check("re-crossing hi fires again", calls == [True, True])
+    check("re-crossing hi fires again", calls == [True, False, True])
 
     app.set_threshold(tid, mode="both")   # window/mode change → re-latch
     calls2 = spy(node)
@@ -339,6 +355,57 @@ def test_feed():
     node.feed(0.2)
     check("both mode fires on each direction (after the re-latch)",
           calls2 == [False, True], str(calls2))
+
+
+# ---- the binary level: mode-mapped out_level + both-mode pulses --------------
+
+def test_binary_level():
+    """Binary rework: the node carries a mode-mapped LEVEL (rising →
+    state, falling → NOT state, both → pinned lo, pulse-only)."""
+    app = make_app(server=False)
+    tid = app.spawn_threshold()
+    node = app.thresholds.instances[tid]["node"]
+
+    check("fresh node reads lo (rising mode, state lo)",
+          node.out_level is False and node.settings()["on"] is False)
+    node.fire(rising=True)
+    check("rising mode: out_level follows the state (hi)",
+          node.out_level is True and node.settings()["on"] is True)
+    app.set_threshold(tid, mode="falling")
+    check("falling mode: out_level is NOT state (state hi → lo)",
+          node.out_level is False)
+    node.fire(rising=False)
+    check("falling mode: state lo → out_level hi", node.out_level is True)
+    app.set_threshold(tid, mode="both")
+    check("both mode: out_level pinned lo whatever the state",
+          node.out_level is False)
+    node.fire(rising=True)
+    check("both mode: still lo after a rising crossing",
+          node.out_level is False)
+
+    # both-mode crossings arrive as PULSES: a wired deriver commits on
+    # BOTH edges (that is the whole point of pulse-only mode)
+    app2 = make_app(server=False)
+    tid2 = app2.spawn_threshold()
+    node2 = app2.thresholds.instances[tid2]["node"]
+    app2.set_threshold(tid2, level=0.0, hysteresis=0.1, mode="both")
+    d1 = app2.spawn_tonic()
+    app2.set_ctl_wire("add", tid2, d1)
+    hits = []
+    app2.tonics[d1].trigger = lambda: hits.append(1)
+    node2.feed(-0.5)                   # latch below — no crossing yet
+    check("both-mode latch feed pulses nothing", hits == [])
+    node2.feed(0.5)                    # rising crossing → pulse
+    check("both-mode rising crossing pulses the wired deriver",
+          hits == [1])
+    node2.feed(-0.5)                   # falling crossing → pulse again
+    check("both-mode falling crossing pulses it too (both edges fire)",
+          hits == [1, 1])
+    check("the level stays pinned lo between pulses",
+          app2.gates.level_of_src(tid2) is False)
+
+    for d in app2.tonics.values():
+        d.shutdown()
 
 
 # ---- engine swap (device switch reboots the engine) --------------------------
@@ -440,6 +507,7 @@ def main():
     test_ping_grammar_and_fanout()
     test_lfo_removal()
     test_feed()
+    test_binary_level()
     test_engine_swap()
     test_persistence()
     print()

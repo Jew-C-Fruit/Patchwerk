@@ -23,6 +23,8 @@ from .keyshift import KeyShifter
 from .gate import GateManager
 from .lfo import LFOManager
 from .ping import ButtonTrigger, ClockTrigger
+from . import relay as relay_mod
+from .relay import RelayNode
 from .threshold import ThresholdManager
 from .scope import Scope
 from .looper import Looper
@@ -286,17 +288,20 @@ class SynthApp:
         # v6: key shifters (spawnable 4-lane ctl modifiers)
         self.keyshifts: dict[str, KeyShifter] = {}
         self._drone_sinks: dict[str, _DroneSink] = {}  # drone id -> mono sink
-        # ping sources (edge signals; wires ride ctl_wires, kind inferred
-        # from the source endpoint — see synthbase/ping.py)
+        # binary sources (hi/lo levels; wires ride ctl_wires, kind inferred
+        # from the source endpoint — see synthbase/gate.py for the model)
         self.buttons: dict[str, ButtonTrigger] = {}
         self.clocks: dict[str, ClockTrigger] = {}
+        # binary rework: relays (type-agnostic switched junctions),
+        # keyshift-style dict of nodes
+        self.relays: dict[str, RelayNode] = {}
         # item 8: thresholds (CV edge → ping; watch synths + /tr edge-notify)
         self.thresholds = ThresholdManager(self)
         self._legacy_drone = False               # set_drone compat pair active
         self._legacy_drone_id: str | None = None
         self.drums = DrumMachine(self)
         self.lfos = LFOManager(self)
-        self.gates = GateManager(self)   # item 8: hi/lo LEVEL kind (switch/logic)
+        self.gates = GateManager(self)   # the binary plane (logic + effects)
         self.looper = Looper(self)
         self.scope = Scope(self)
         # control plane: wires among {keys, arp, deck, voice ids, tonic ids,
@@ -453,6 +458,13 @@ class SynthApp:
             self.rack.reorder_for_wires(self.graph_wires)
         except Exception:  # noqa: BLE001
             pass
+        if self.relays:
+            # relay-routed sources were skipped above (their stored dst is
+            # a virtual endpoint) — resolve them against the fresh rack
+            try:
+                relay_mod.resolve_audio(self)
+            except Exception:  # noqa: BLE001
+                pass
 
     def _on_node_replaced(self, key: str) -> None:
         self.lfos.on_node_replaced(key)
@@ -492,28 +504,24 @@ class SynthApp:
             return base, -1  # malformed lane — never validates
 
     def _is_ping_src(self, nid) -> bool:
-        """Ping sources (button/clock/threshold ids). Their outgoing wires
-        ARE ping wires — the wire kind is inferred from the source endpoint."""
-        return (nid in self.buttons or nid in self.clocks
-                or nid in self.thresholds.instances)
+        """BINARY sources (the name survives the binary rework — plenty of
+        call sites): button/clock/threshold/logic ids, or a relay circuit
+        endpoint whose circuit kind is binary. Their outgoing wires ARE
+        binary wires — the wire kind is inferred from the source endpoint.
+        A logic out wired into a deriver suppresses its grid timer exactly
+        like a button used to (_ping_driven reads this predicate)."""
+        if (nid in self.buttons or nid in self.clocks
+                or nid in self.thresholds.instances
+                or nid in self.gates.logics):
+            return True
+        rk = relay_mod.relay_ep(self, nid)
+        return rk is not None and rk[0].kinds.get(rk[1]) == "binary"
 
-    def _ping_sinks(self, src: str) -> list:
-        """Resolve a ping source's outgoing wires to trigger() sinks, live
-        (mirrors _ctl_sinks — rewires take effect on the very next edge)."""
-        sinks = []
-        for w in self.ctl_wires:
-            if w["from"] != src:
-                continue
-            t = w["to"]
-            d = self._deriver(t)
-            if d is not None:
-                sinks.append(d)   # deriver: trigger() = commit
-            elif t in self.gates.switches:
-                sinks.append(self.gates.switches[t])   # ping flips the switch
-            elif self.gates.is_toggle_dst(t):
-                # toggle target: alternator adapter (deck buttons: press)
-                sinks.append(self.gates.ping_sink(src, t))
-        return sinks
+    def _relay_refresh_kinds(self) -> None:
+        """After any wire removal: circuits no wire touches forget their
+        kind (the next wire re-infers it)."""
+        for r in self.relays.values():
+            r.refresh_kinds()
 
     def _deriver(self, nid):
         """Any deriver node (estimator or literal) by id, else None."""
@@ -523,6 +531,8 @@ class SynthApp:
         base, lane = self._split_ep(src)
         if base in self.keyshifts:
             return lane is not None and 1 <= lane <= 4
+        if base in self.relays:   # a circuit endpoint sources its note out
+            return lane is not None and 1 <= lane <= relay_mod.MAX_CIRCUITS
         return lane is None and (base in CTL_SOURCES or base in self.tonics
                                  or base in self.literals)
 
@@ -530,6 +540,8 @@ class SynthApp:
         base, lane = self._split_ep(dst)
         if base in self.keyshifts:
             return lane is not None and 1 <= lane <= 4
+        if base in self.relays:   # a circuit endpoint sinks its note in
+            return lane is not None and 1 <= lane <= relay_mod.MAX_CIRCUITS
         return lane is None and (
             base in CTL_TARGETS or base == "voice"  # primary id is reserved
             or base in self.voices or base in self.tonics
@@ -561,6 +573,11 @@ class SynthApp:
                 sinks.append(self.literals[t])
             elif self._is_drone_id(t):
                 sinks.append(self._drone_sink(t))  # mono last-note freq sink
+            elif base in self.relays and lane is not None:
+                try:                     # relay circuit note-in adapter
+                    sinks.append(self.relays[base].circuit_in(lane))
+                except ValueError:
+                    pass  # stale wire with a bad circuit — skip
             elif base in self.keyshifts and lane is not None:
                 try:
                     sinks.append(self.keyshifts[base].lane_in(lane))
@@ -576,42 +593,26 @@ class SynthApp:
             if src == "drone" and src not in self.tonics and \
                     not self._is_drone_id("drone"):
                 src = "tonic"
-            # PING wires (kind inferred from the source endpoint): ping-out
-            # lands on trigger-ins OR toggle targets (item 8: alternator
-            # semantics — ping 1 → hi, ping 2 → lo; deck buttons: press);
-            # never on note sinks
+            # BINARY wires (ONE kind since the binary rework, inferred from
+            # the source endpoint): a binary source's level lands on level-
+            # ins (:pwr, logic named ins, relay circuit ins, relay:ctl) or
+            # trig-ins (deriver ids, deck buttons — rising edge fires).
+            # Cross-node feedback loops are legal (the settle pass freezes
+            # them); direct self-wires are not. Single-input endpoints
+            # STEAL: the new wire replaces the old (GUI steal-on-drop).
             if self._is_ping_src(src):
-                if action == "add":
-                    ok = (self._deriver(dst) is not None
-                          or dst in self.gates.switches
-                          or self.gates.is_toggle_dst(dst))
-                    if not ok:
-                        raise ValueError(
-                            f"{src!r} emits pings — {dst!r} has no trigger"
-                            " or toggle input")
-                    w = {"from": src, "to": dst}
-                    if w not in self.ctl_wires:
-                        self.ctl_wires.append(w)
-                elif action == "remove":
-                    self.ctl_wires = [w for w in self.ctl_wires
-                                      if not (w["from"] == src and w["to"] == dst)]
-                    self.gates.on_wire_change(src, dst, removed=True)
-                else:
-                    raise ValueError(f"unknown ctl_wire action {action!r}")
-                return
-            # GATE wires (item 8, kind inferred from the source endpoint):
-            # a hi/lo LEVEL — lands ONLY on toggle targets (module :pwr,
-            # arp/drums :pwr, deck buttons, logic gate-ins). Cross-node
-            # feedback loops are legal (the settle pass freezes them);
-            # direct self-wires are not.
-            if self.gates.is_gate_src(src):
                 if action == "add":
                     if not self.gates.is_toggle_dst(dst):
                         raise ValueError(
-                            f"{src!r} emits a gate level — {dst!r} has no"
-                            " toggle input")
+                            f"{src!r} is a binary source — {dst!r} has no"
+                            " binary input")
                     if self.gates._base(src) == self.gates._base(dst):
                         raise ValueError(f"{src} → {dst} would loop on itself")
+                    rk = relay_mod.relay_ep(self, dst)
+                    if rk is not None:      # circuit in: claim/verify kind
+                        rk[0].claim(rk[1], "binary")
+                    if self.gates.is_single_input(dst):
+                        self.gates.steal_input(dst)
                     w = {"from": src, "to": dst}
                     if w not in self.ctl_wires:
                         self.ctl_wires.append(w)
@@ -619,6 +620,7 @@ class SynthApp:
                 elif action == "remove":
                     self.ctl_wires = [w for w in self.ctl_wires
                                       if not (w["from"] == src and w["to"] == dst)]
+                    self._relay_refresh_kinds()
                     self.gates.on_wire_change(src, dst, removed=True)
                 else:
                     raise ValueError(f"unknown ctl_wire action {action!r}")
@@ -633,6 +635,10 @@ class SynthApp:
                 # synchronously through the shifter
                 if self._split_ep(src)[0] == self._split_ep(dst)[0]:
                     raise ValueError(f"{src} → {dst} would loop on itself")
+                for ep in (src, dst):       # relay circuits: claim/verify NOTES
+                    rk = relay_mod.relay_ep(self, ep)
+                    if rk is not None:
+                        rk[0].claim(rk[1], "notes")
                 w = {"from": src, "to": dst}
                 if w not in self.ctl_wires:
                     self.ctl_wires.append(w)
@@ -653,6 +659,12 @@ class SynthApp:
                 self.ctl_wires = [w for w in self.ctl_wires
                                   if not (w["from"] == src and w["to"] == dst)]
                 if len(self.ctl_wires) != n0:
+                    # unhooking a relay circuit's note-in: silence downstream
+                    # (the adapter forwards all_off even while open)
+                    rk = relay_mod.relay_ep(self, dst)
+                    if rk is not None and rk[0].kinds.get(rk[1]) == "notes":
+                        rk[0].circuit_in(rk[1]).all_off()
+                    self._relay_refresh_kinds()
                     # unhooking a node's LAST input silences it — a stuck
                     # note is worse live than a dropped one
                     if dst == "arp" and self.arp and \
@@ -809,6 +821,7 @@ class SynthApp:
                 self.ctl_wires = [w for w in self.ctl_wires
                                   if key not in (w.get("from"), w.get("to"))
                                   and w.get("to") != f"{key}:pwr"]
+                self._relay_refresh_kinds()
                 self._drone_sinks.pop(key, None)
                 if self._legacy_drone_id == key:
                     self._legacy_drone_id = None
@@ -854,20 +867,32 @@ class SynthApp:
     def graph_wire(self, action: str, src: str, dst: str | None = None) -> None:
         """Live audio rewiring: add (src → dst|"master") or remove (park src on
         the null bus). One outgoing audio wire per source; fan-in is free
-        (buses sum). Stored so rebuilds re-apply it."""
+        (buses sum). Stored so rebuilds re-apply it.
+
+        Binary rework: relay CIRCUIT endpoints ("relay:3") are legal on
+        either end — they bypass rack.find and are stored VERBATIM; the
+        audio consequences resolve through relay.resolve_audio (closed →
+        rewire through the circuit, open → parked)."""
         with self._lock:
             if not self.rack:
                 raise RuntimeError("no rack running")
-            # normalize legacy type keys to instance ids (raises for the GUI)
-            src = self.rack.find(src).key
+            src_rk = relay_mod.relay_ep(self, src)
+            if src_rk is None:
+                # normalize legacy type keys to instance ids (raises for GUI)
+                src = self.rack.find(src).key
             if self.graph_wires is None:
                 self.graph_wires = self.rack.audio_wires()
             wires = [w for w in self.graph_wires if w["from"] != src]
             if action == "add":
                 if not dst:
                     raise ValueError("graph_wire add needs a destination")
-                if dst != "master":
+                dst_rk = relay_mod.relay_ep(self, dst)
+                if dst != "master" and dst_rk is None:
                     dst = self.rack.find(dst).key
+                if dst != "master":
+                    # cycle guard over the STORED wires — relay endpoints
+                    # walk like nodes, so a would-be loop through a relay
+                    # is rejected regardless of its closed state
                     adj = {w["from"]: w["to"] for w in wires}
                     cur, hops = dst, 0
                     while cur not in (None, "master") and hops < 64:
@@ -875,16 +900,30 @@ class SynthApp:
                             raise ValueError(f"{src} → {dst} would create an audio cycle")
                         cur = adj.get(cur)
                         hops += 1
+                # relay circuits carry ONE kind: claim/verify audio
+                for rk in (src_rk, dst_rk):
+                    if rk is not None:
+                        rk[0].claim(rk[1], "audio")
                 wires.append({"from": src, "to": dst})
                 self.graph_wires = wires
-                self.rack.audio_rewire(src, dst)
+                if src_rk is None and dst_rk is None:
+                    self.rack.audio_rewire(src, dst)   # plain wire: as before
             elif action == "remove":
                 wires.append({"from": src, "to": None})
                 self.graph_wires = wires
-                self.rack.audio_disconnect(src)
+                if src_rk is None:
+                    self.rack.audio_disconnect(src)
+                self._relay_refresh_kinds()
             else:
                 raise ValueError(f"unknown graph_wire action {action!r}")
-            self.rack.reorder_for_wires(self.graph_wires)
+            if any(relay_mod.relay_ep(self, w.get("from")) is not None
+                   or relay_mod.relay_ep(self, w.get("to")) is not None
+                   for w in self.graph_wires):
+                # resolves relay-routed sources AND reorders on the
+                # RESOLVED edges (virtual endpoints replaced)
+                relay_mod.resolve_audio(self)
+            else:
+                self.rack.reorder_for_wires(self.graph_wires)
 
     def swap_synth(self, key: str, new_type: str) -> None:
         """Swap a running instance's module type IN PLACE (the Instrument
@@ -990,20 +1029,62 @@ class SynthApp:
                 pass
             self.ctl_wires = [w for w in self.ctl_wires
                               if vid not in (w.get("from"), w.get("to"))]
+            self._relay_refresh_kinds()
 
-    # -- gate suite (item 8: switch + logic, hi/lo levels) -------------------------
+    # -- the binary plane: logic gates + relays ------------------------------------
 
-    def spawn_switch(self, want_id: str | None = None) -> str:
+    def spawn_relay(self, want_id: str | None = None) -> str:
         with self._lock:
-            return self.gates.spawn_switch(want_id)
+            rid = want_id or alloc_id("relay", self.relays.keys())
+            if rid not in self.relays:
+                self.relays[rid] = RelayNode(self, rid)
+            return rid
 
-    def remove_switch(self, sid: str) -> None:
+    def remove_relay(self, rid: str) -> None:
         with self._lock:
-            self.gates.remove_switch(sid)
+            r = self.relays.get(rid)
+            if r is None:
+                raise KeyError(f"no relay {rid!r}")
+            # silence downstream note sinks FIRST (their wires must still
+            # resolve for the all_off to reach them)
+            for k, kind in list(r.kinds.items()):
+                if kind == "notes":
+                    try:
+                        r.circuit_in(k).all_off()
+                    except Exception:  # noqa: BLE001
+                        pass
+            eps = {f"{rid}:{k}"
+                   for k in range(1, relay_mod.MAX_CIRCUITS + 1)}
+            eps.add(f"{rid}:ctl")
+            # park every source that fed its audio circuits
+            if self.rack is not None and self.graph_wires is not None:
+                for w in self.graph_wires:
+                    if w.get("to") in eps and \
+                            relay_mod.relay_ep(self, w.get("from")) is None:
+                        try:
+                            self.rack.audio_disconnect(w["from"])
+                        except Exception:  # noqa: BLE001
+                            pass
+                self.graph_wires = [
+                    {**w, "to": None} if w.get("to") in eps else w
+                    for w in self.graph_wires if w.get("from") not in eps]
+            self.ctl_wires = [w for w in self.ctl_wires
+                              if w.get("from") not in eps
+                              and w.get("to") not in eps]
+            del self.relays[rid]
+            for ep in eps:                  # edge state dies with the node
+                self.gates._edge.pop(ep, None)
+            self.gates.recompute()
 
-    def set_switch(self, sid: str, on=None) -> None:
+    def set_relay(self, rid: str, closed=None) -> None:
+        """The manual click. Last writer wins — a wired relay:ctl level
+        simply overwrites this on its next change, and vice versa."""
         with self._lock:
-            self.gates.set_switch(sid, on=on)
+            r = self.relays.get(rid)
+            if r is None:
+                raise KeyError(f"no relay {rid!r}")
+            if closed is not None:
+                r.set_closed(closed)
 
     def spawn_logic(self, want_id: str | None = None) -> str:
         with self._lock:
@@ -1053,6 +1134,7 @@ class SynthApp:
             outs = [w["to"] for w in self.ctl_wires if w.get("from") == tid]
             self.ctl_wires = [w for w in self.ctl_wires
                               if tid not in (w.get("from"), w.get("to"))]
+            self._relay_refresh_kinds()
             self._heal_ctl_snip(ins, outs)
             if self._legacy_drone and tid == "tonic":
                 self._legacy_drone = False
@@ -1084,6 +1166,7 @@ class SynthApp:
             outs = [w["to"] for w in self.ctl_wires if w.get("from") == lid]
             self.ctl_wires = [w for w in self.ctl_wires
                               if lid not in (w.get("from"), w.get("to"))]
+            self._relay_refresh_kinds()
             self._heal_ctl_snip(ins, outs)
 
     def set_literal(self, lid: str, **settings) -> None:
@@ -1093,7 +1176,19 @@ class SynthApp:
                 raise KeyError(f"no literal deriver {lid!r}")
             d.configure(**settings)
 
-    # -- ping trigger sources (button / clock) -----------------------------------
+    # -- binary trigger sources (button / clock) ----------------------------------
+
+    def _drop_binary_src_wires(self, nid: str) -> None:
+        """A binary source is gone: its wires go too, their targets start
+        edge-fresh, and orphaned relay circuits forget their kind."""
+        dropped = [w.get("to") for w in self.ctl_wires
+                   if nid in (w.get("from"), w.get("to"))]
+        self.ctl_wires = [w for w in self.ctl_wires
+                          if nid not in (w.get("from"), w.get("to"))]
+        for d in dropped:
+            self.gates._edge.pop(d, None)
+        self._relay_refresh_kinds()
+        self.gates.recompute()
 
     def spawn_button(self, want_id: str | None = None) -> str:
         with self._lock:
@@ -1108,9 +1203,8 @@ class SynthApp:
             if b is None:
                 raise KeyError(f"no button trigger {bid!r}")
             b.shutdown()
-            # a trigger source's wires go with it (no heal: pings have no thru)
-            self.ctl_wires = [w for w in self.ctl_wires
-                              if bid not in (w.get("from"), w.get("to"))]
+            # a binary source's wires go with it (no heal: levels have no thru)
+            self._drop_binary_src_wires(bid)
 
     def set_button(self, bid: str, **settings) -> None:
         with self._lock:
@@ -1125,10 +1219,25 @@ class SynthApp:
             b.configure(**settings)
 
     def fire_button(self, bid: str) -> None:
+        """Click compat: momentary → a pulse; latch → toggle."""
         b = self.buttons.get(bid)
         if b is None:
             raise KeyError(f"no button trigger {bid!r}")
         b.fire()
+
+    def button_down(self, bid: str) -> None:
+        """Mouse/key DOWN: momentary level hi while held; latch toggles."""
+        b = self.buttons.get(bid)
+        if b is None:
+            raise KeyError(f"no button trigger {bid!r}")
+        b.press()
+
+    def button_up(self, bid: str) -> None:
+        """Mouse/key UP: momentary level back lo; latch ignores."""
+        b = self.buttons.get(bid)
+        if b is None:
+            raise KeyError(f"no button trigger {bid!r}")
+        b.release()
 
     def spawn_clock(self, want_id: str | None = None) -> str:
         with self._lock:
@@ -1143,8 +1252,7 @@ class SynthApp:
             if c is None:
                 raise KeyError(f"no clock trigger {cid!r}")
             c.shutdown()
-            self.ctl_wires = [w for w in self.ctl_wires
-                              if cid not in (w.get("from"), w.get("to"))]
+            self._drop_binary_src_wires(cid)
 
     def set_clock(self, cid: str, **settings) -> None:
         with self._lock:
@@ -1162,9 +1270,8 @@ class SynthApp:
     def remove_threshold(self, tid: str) -> None:
         with self._lock:
             self.thresholds.remove(tid)
-            # a trigger source's wires go with it (no heal: pings have no thru)
-            self.ctl_wires = [w for w in self.ctl_wires
-                              if tid not in (w.get("from"), w.get("to"))]
+            # a binary source's wires go with it (no heal: levels have no thru)
+            self._drop_binary_src_wires(tid)
 
     def set_threshold(self, tid: str, **settings) -> None:
         with self._lock:
@@ -1206,6 +1313,7 @@ class SynthApp:
                 w for w in self.ctl_wires
                 if kid not in (self._split_ep(w.get("from"))[0],
                                self._split_ep(w.get("to"))[0])]
+            self._relay_refresh_kinds()
             for ins, outs in lane_pairs:
                 self._heal_ctl_snip(ins, outs)
 
@@ -1434,6 +1542,7 @@ class SynthApp:
     def select_patch(self, patch_name: str) -> None:
         with self._lock:
             self.ctl_wires = default_ctl_wires()  # fresh patch, fresh control plane
+            self._relay_refresh_kinds()           # note/binary circuits re-infer
             self._build_patch(patch_name)
 
     def set_devices(self, input_device: str | None, output_device: str | None) -> None:
@@ -1580,7 +1689,8 @@ class SynthApp:
                 "looper": self.looper.settings(),
                 "lfos": self.lfos.state(),
                 "thresholds": self.thresholds.state(),
-                **self.gates.state(),   # "switches" + "logics" (item 8)
+                **self.gates.state(),   # "logics" (binary rework: no switches)
+                "relays": [r.settings() for r in self.relays.values()],
                 "presets": presets_mod.list_presets(),
                 "available": sorted(
                     ({"key": m.key, "name": m.name, "kind": m.kind,
