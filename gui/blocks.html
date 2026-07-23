@@ -3616,8 +3616,9 @@ function buildVoiceCard(v) {
                   ports: [["in", "ctl", "notes"], ["out", "ctl", "drive"]]});
 }
 
-// one ESTIMATOR card per state.tonics entry: statistical root derivation
-// (settle-and-land). Notes in are evidence; the committed root is the mono
+// one ESTIMATOR card per state.tonics entry: two-layer scale-aware root
+// derivation (instant commit; the old settle-and-land hysteresis is gone).
+// Notes in are evidence; the committed root is the mono
 // ctl out. Knobs are live; the 12-bar histogram breathes on the ~5 Hz
 // "deriver" analysis broadcast (presence/scores toggle, leading outlined,
 // committed root amber, confidence readout).
@@ -3660,13 +3661,6 @@ function buildTonicCard(t) {
       onUnit: (u) => throttled(gid + ".memory", () =>
         send({type: "set_tonic", id: gid, memory: Math.pow(30, u)}), 80),
     }),
-    rowSlider({gid}, "stickiness", {   // hysteresis 1.0..2.0
-      unit: Math.max(0, Math.min(1, ((t.stickiness || 1.25) - 1))),
-      text: "+" + Math.round(((t.stickiness || 1.25) - 1) * 100) + "%",
-      valText: (u) => "+" + Math.round(u * 100) + "%",
-      onUnit: (u) => throttled(gid + ".stick", () =>
-        send({type: "set_tonic", id: gid, stickiness: 1 + u}), 80),
-    }),
     rowSlider({gid}, "bass", {   // bass emphasis 0..0.2
       unit: Math.max(0, Math.min(1, (t.bass ?? 0.06) / 0.2)),
       text: (t.bass ?? 0.06).toFixed(2),
@@ -3674,10 +3668,21 @@ function buildTonicCard(t) {
       onUnit: (u) => throttled(gid + ".bass", () =>
         send({type: "set_tonic", id: gid, bass: u * 0.2}), 80),
     }),
+    rowChip({gid}, "deck feed", {   // deck superpower: phrase context feed
+      text: t.deck_feed ? "on" : "off",   // missing (old server) → off
+      onClick: (chip) => {
+        const v = chip.textContent !== "on";
+        chip.textContent = v ? "on" : "off";
+        send({type: "set_tonic", id: gid, deck_feed: v});
+      },
+    }),
+    // inferred scale readout: server label ("C ionian") or the live
+    // deriver broadcast keeps it fresh via uiParam (see renderDeriverViz)
+    rowChip({gid}, "scale", {text: t.scale || "listening…", static: true}),
     rowChip({gid}, "root", {text: t.root || "listening…", static: true}),
   ];
   const n = addCard({gid, name: "Theory Wizard" + suffix, short: "Wiz" + suffix,
-                  sub: "root estimator · statistical", fam: "service", rows,
+                  sub: "root estimator · scale-aware", fam: "service", rows,
                   vizHTML: `<div class="tonicbar">`
                     + `<span class="tmode" title="raw presence / candidate scores">presence</span>`
                     + `<span class="tconf">conf —</span></div>`
@@ -3720,6 +3725,12 @@ function renderDeriverViz(m) {
   const conf = n.el.querySelector(".tconf");
   if (conf) conf.textContent =
     "conf " + Math.round((m.confidence || 0) * 100) + "%";
+  // inferred-scale chip: label + confidence, or chromatic (evidence but
+  // no fitting template), or listening… (no evidence yet)
+  const scText = (m.scale && m.scale.label)
+    ? m.scale.label + " · " + Math.round((m.scale.conf || 0) * 100) + "%"
+    : ((m.weights || []).some(w => w > 0) ? "chromatic" : "listening…");
+  uiParam[m.id + ".scale"] && uiParam[m.id + ".scale"](0, scText);
 }
 
 // one LITERAL card per state.literals entry: deterministic, zero-lag —

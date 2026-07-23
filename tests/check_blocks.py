@@ -594,9 +594,11 @@ def main():
                        {"from": "arp", "to": "voice"},
                        {"from": "keys", "to": "literal"},
                        {"from": "literal", "to": "voice"}],
-            tonics=[{"id": "tonic", "every": "1 bar", "everies": ["1 bar"],
+            tonics=[{"id": "tonic", "every": "1 bar",
+                     "everies": ["1 beat", "2 beats", "1 bar", "2 bars",
+                                 "4 bars", "deck"],
                      "octave": 2, "root": "C", "memory": 6.0,
-                     "stickiness": 1.25, "bass": 0.06,
+                     "bass": 0.06, "deck_feed": False, "scale": None,
                      "listening": "triadic",
                      "listenings": ["triadic", "root+fifth", "chromatic"]}],
             literals=[{"id": "literal", "every": "immediate",
@@ -620,9 +622,44 @@ def main():
         })()""")
         check("estimator card renders 12 histogram cells",
               est["cells"] == 12, str(est))
-        for knob in ("memory", "stickiness", "bass", "listening"):
+        for knob in ("memory", "deck feed", "bass", "listening"):
             check(f"estimator knob row: {knob}", knob in est["labels"],
                   str(est))
+        scale_txt = page.evaluate("""(() => {
+          const n = nodes.get('tonic');
+          const row = [...n.el.querySelectorAll('label')]
+            .find(l => l.title === 'scale');
+          return row && row.parentElement.querySelector('.chip').textContent;
+        })()""")
+        check("estimator scale row exists, idle shows listening…",
+              scale_txt == "listening…", str(scale_txt))
+
+        # deck feed chip: off → click → sends deck_feed:true
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("""() => {
+          const n = nodes.get('tonic');
+          [...n.el.querySelectorAll('label')]
+            .find(l => l.title === 'deck feed')
+            .parentElement.querySelector('.chip').click();
+        }""")
+        sent = page.evaluate("window.__sent")
+        check("deck feed chip sends set_tonic deck_feed:true",
+              {"type": "set_tonic", "id": "tonic", "deck_feed": True}
+              in sent, str(sent))
+
+        # the trigger chip cycles through the server everies to "deck"
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("""() => {
+          const n = nodes.get('tonic');
+          const chip = [...n.el.querySelectorAll('label')]
+            .find(l => l.title === 'trigger')
+            .parentElement.querySelector('.chip');
+          chip.click(); chip.click(); chip.click();   // 1 bar → … → deck
+        }""")
+        sent = page.evaluate("window.__sent")
+        check("trigger chip cycles through to every:'deck'",
+              {"type": "set_tonic", "id": "tonic", "every": "deck"}
+              in sent, str(sent))
 
         # the Literal's trigger-in also rides its trigger row line
         # (rendered layout, post-settle)
@@ -644,21 +681,46 @@ def main():
         page.evaluate("""() => __msg({type: 'deriver', id: 'tonic',
           weights: [1, 0, 0, 0, 0, 0, 0, 0.6, 0, 0, 0, 0],
           scores:  [1, 0, 0, 0, 0, 0, 0, 0.9, 0, 0, 0, 0],
-          leading: 7, root: 0, confidence: 0.42})""")
+          leading: 7, root: 0, confidence: 0.42,
+          scale: {tonic: 0, mode: 'ionian', conf: 0.62, label: 'C ionian'},
+          deck: false})""")
         page.wait_for_timeout(60)
         viz = page.evaluate("""(() => {
           const n = nodes.get('tonic');
           const cells = [...n.el.querySelectorAll('.tonic > div')];
+          const srow = [...n.el.querySelectorAll('label')]
+            .find(l => l.title === 'scale');
           return {h0: cells[0].querySelector('span').style.height,
                   root0: cells[0].classList.contains('root'),
                   lead7: cells[7].classList.contains('lead'),
-                  conf: n.el.querySelector('.tconf').textContent};
+                  conf: n.el.querySelector('.tconf').textContent,
+                  scale: srow
+                    && srow.parentElement.querySelector('.chip').textContent};
         })()""")
         check("histogram bars follow the weights", viz["h0"] == "100%",
               str(viz))
         check("committed root marked distinctly", viz["root0"], str(viz))
         check("leading candidate outlined", viz["lead7"], str(viz))
         check("confidence readout shown", "42" in viz["conf"], str(viz))
+        check("scale readout follows the broadcast",
+              viz["scale"] is not None and "C ionian" in viz["scale"]
+              and "62" in viz["scale"], str(viz))
+
+        # scale: null WITH evidence → chromatic fallback on the chip
+        page.evaluate("""() => __msg({type: 'deriver', id: 'tonic',
+          weights: [1, 0.4, 0.7, 0, 0.5, 0, 0, 0.6, 0, 0.3, 0, 0.2],
+          scores:  [1, 0, 0, 0, 0, 0, 0, 0.9, 0, 0, 0, 0],
+          leading: 0, root: 0, confidence: 0.1,
+          scale: null, deck: false})""")
+        page.wait_for_timeout(60)
+        sc_null = page.evaluate("""(() => {
+          const n = nodes.get('tonic');
+          return [...n.el.querySelectorAll('label')]
+            .find(l => l.title === 'scale')
+            .parentElement.querySelector('.chip').textContent;
+        })()""")
+        check("scale:null with evidence reads chromatic",
+              sc_null == "chromatic", str(sc_null))
 
         # presence/scores toggle swaps the vector
         page.evaluate("""() => {
@@ -1416,9 +1478,11 @@ def main():
         st12c = base_state(
             [inst_bell], [{"from": "fm_bell", "to": "master"}],
             available=AVAIL2,
-            tonics=[{"id": "tonic", "every": "1 bar", "everies": ["1 bar"],
+            tonics=[{"id": "tonic", "every": "1 bar",
+                     "everies": ["1 beat", "2 beats", "1 bar", "2 bars",
+                                 "4 bars", "deck"],
                      "octave": 2, "root": "C", "memory": 6.0,
-                     "stickiness": 1.25, "bass": 0.06,
+                     "bass": 0.06, "deck_feed": False, "scale": None,
                      "listening": "triadic",
                      "listenings": ["triadic", "root+fifth", "chromatic"]}],
             literals=[{"id": "literal", "every": "immediate",

@@ -1228,10 +1228,13 @@ def test_tonic_drone():
         and e.get("root") == "C" for e in events))
 
     # root moves on → MONO handoff: previous root off, new root on
-    for _ in range(30):
-        d.est.observe(43)
+    # (instant model: the HELD SET decides at commit — the held C was
+    # pinning the root; release it and hold G instead)
+    app.note_off(48)
+    app.note_on(43)                       # G, held at commit time
+    for _ in range(4):
         d.est.observe(50)
-        d.est.observe(55)  # strong G evidence
+        d.est.observe(55)                 # supporting G evidence
     d.decide()
     check("root moved on", d.root == 7)
     check("mono out: old root off, new root on",

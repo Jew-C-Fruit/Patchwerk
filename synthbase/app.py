@@ -1240,10 +1240,11 @@ class SynthApp:
             return {"weights": [0.0] * 12, "root": None}
         weights = d.est.weights()
         total = max(sum(weights), 1e-9)
-        est = d.est.estimate(d.root)
+        # instant model: the committed root, else the current leading pc
+        pc = d.root if d.root is not None else d.est.analysis(d.root)["leading"]
         return {
             "weights": [round(w / total, 4) for w in weights],
-            "root": NOTE_NAMES[est] if est is not None else None,
+            "root": NOTE_NAMES[pc] if pc is not None else None,
         }
 
     def set_drone(self, enabled=None, every=None, octave=None, **_ignored) -> None:

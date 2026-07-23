@@ -31,10 +31,12 @@ Protocol (JSON messages):
     {"type": "spawn_voice"} / {"type": "remove_voice", "id": "voice.2"}
     {"type": "spawn_tonic"} / {"type": "remove_tonic", "id": "tonic.2"}
     {"type": "set_tonic", "id": "tonic", "every": "1 bar", "octave": 2,
-     "memory": 6.0, "stickiness": 1.25, "bass": 0.06, "listening": "triadic"}
-        (the ESTIMATOR deriver: statistical, settle-and-land; its analysis
-         — weights/scores/leading/confidence — broadcasts ~5 Hz as
-         {"type": "deriver", "id", ...} for the card histogram)
+     "memory": 6.0, "bass": 0.06, "listening": "triadic", "deck_feed": false}
+        (the ESTIMATOR deriver: two-layer scale-aware INSTANT derivation;
+         every may also be "deck" (loop-synced commits). Its analysis —
+         weights/scores/leading/confidence/scale — broadcasts ~5 Hz as
+         {"type": "deriver", "id", ...} for the card histogram + scale
+         readout)
     {"type": "spawn_literal"} / {"type": "remove_literal", "id": "literal.2"}
     {"type": "set_literal", "id": "literal", "every": "immediate",
      "extract": "lowest-held", "place": "absolute", "fold_octave": 3,
@@ -245,8 +247,8 @@ class GuiServer:
         elif t == "set_tonic":
             self.synth.set_tonic(
                 m["id"], every=m.get("every"), octave=m.get("octave"),
-                memory=m.get("memory"), stickiness=m.get("stickiness"),
-                bass=m.get("bass"), listening=m.get("listening"))
+                memory=m.get("memory"), bass=m.get("bass"),
+                listening=m.get("listening"), deck_feed=m.get("deck_feed"))
             await self._broadcast_state(exclude=sender)
         elif t == "spawn_keyshift":
             self.synth.spawn_keyshift()
