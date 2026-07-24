@@ -52,12 +52,27 @@ GLOBAL. Everything else — who hears whom — is wire-defined.
 
 ## GUIs
 
-The flex patch canvas is the front door (`/`): cards + subway-routed wires
-derived from every `state` message, positions persisted per patch in
-localStorage. The legacy panel lives at `/legacy` — when changing protocol
-semantics, check BOTH pages (v8's "vanishing palette" bug lived only in the
-legacy page's stale already-placed filter). The full websocket protocol is
-documented in `synthbase/server.py`'s docstring.
+**`gui/blocks.html` IS the UI.** It is the only page served — at `/` and
+at `/blocks` (an alias kept for bookmarks). Cards + gutter-routed subway
+wires derived from every `state` message; positions persisted per patch
+in localStorage, so the server never sees card geometry. There is ONE
+page and TWO GEOMETRY MODES inside it: **blocks** (the snapping grid) and
+**flex** (free px positions, auto height), swapped by the toggle in the
+top bar. New geometry behavior goes through the `uiMode` dispatch in
+`place()` / `nodeUnitRect()` — never parallel per-mode card code — and
+the blocks paths must behave identically when `uiMode === "blocks"`
+(`check_blocks` sections 1–10 are the regression net).
+
+The older pages (`flex.html`, `index.html`, the graph view) are ARCHIVED
+under `gui/legacy/`, **unserved and unmaintained**; there is no
+`/legacy` route. Do not "check both pages" — the archived flex page
+predates the rework and speaks a dead protocol. Note `tests/gui_check8.py`
+still loads `gui/legacy/{flex,index}.html` by path: if those files move
+again, CI breaks there first.
+
+The full websocket protocol is documented in `synthbase/server.py`'s
+docstring, and `docs/REFERENCE.md` is the code-verified reference for
+every module, signal plane and IO route.
 
 **Monitors: local vs global.** Note/Waveform monitors and the scope are
 LOCAL when wired/riding a wire (they show that path's traffic) and GLOBAL
@@ -91,6 +106,29 @@ GRAPHIC, never to more param columns. Where a body genuinely needs two
 columns, split it with `splitColumns(n)`: the LEFT column keeps every row
 that owns a handle and the RIGHT column is 100% handle-free params, so
 the 1:1 row↔handle line is structural rather than lucky.
+
+**Card chrome (Cole, 2026-07-24).** The card's COLOUR BAR is the power
+indicator — outline = off, filled = on, in the category colour; there is
+no round head LED any more, and `bindNode` distinguishes a stationary
+press (toggle) from a drag (move). Banner cards (the binary family) have
+a coloured head instead and therefore no family stripe to fill. Input
+handles wear a PASTEL of their data colour and hover-declare
+`"data type > target name"` — handles never name their own card, wire
+labels do; one `portTarget()` helper feeds both, so they cannot drift
+apart. Small-print SUBTITLES are gone from every card except the four
+that carry live state duplicated nowhere: Loop Deck (transport state),
+the monitors (local/global scope), Threshold (its source) and LFO (its
+destinations). Input handles normally fill one edge; `dualEdge` is an
+opt-in OVERFLOW-only flag (once the primary edge is full, the rest spill
+onto the other in-edge) so a light patch renders exactly as before —
+Master Out is the only card that sets it today.
+
+**QUIET param handles stay on their row.** The flex dead-zone nudge
+exempts them, and `QUIET_SEP` fires only on a genuine SAME-ROW
+collision. Never reintroduce a proximity-based separation: on a packed
+card rows sit ~0.69u apart and it silently walks every handle off its
+row. Where a handle truly cannot sit on its row it grows an on-card link
+wire into that row instead.
 
 **REACTIVE-INDICATOR DOCTRINE (Cole, 2026-07-24 — standing).** Every
 indicator must react to LOGIC input, not just to clicks. State applied
@@ -219,6 +257,20 @@ On the Mac, `python -m synthbase test` is the real proof.
   per state snapshot.
 - GUI sends during a websocket reconnect gap must queue, not drop (note-offs
   especially); macOS swallows letter keyups while ⌘ is held.
+- A canvas with zero `clientHeight` must NOT draw: it skips the height sync
+  and then paints against stale geometry. No box, no paint.
+- Assert the COMPUTED property, never a substring of it — a translucency
+  check for `"rgba"` passes on plenty of opaque colours, and Chromium
+  computes `color-mix()` to `color(srgb … / 0.88)`. Parse and compare.
+- **No top margin above the card grid.** Item 20 added one (`TOPM`) and it
+  was REVERTED in PR #40: it desynchronised the card grid from the wire
+  router. Reintroducing it means re-deriving the router geometry with it,
+  not just threading a constant.
+- Engine rebuilds invalidate server-side registration: `set_devices` makes a
+  NEW scsynth, so anything holding "already sent to the server" state must
+  track the server OBJECT, not a boolean (the LFO and threshold managers do;
+  any future manager that sends synthdefs or registers OSC callbacks must
+  too).
 
 `docs/TROUBLESHOOTING.md` has the complementary, symptom-indexed list —
 runtime/hardware gotchas (sample rate, Bluetooth, MIDI controllers) that
