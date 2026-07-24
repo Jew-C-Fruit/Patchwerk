@@ -238,6 +238,7 @@ def write_resume(app) -> None:
             "graph_wires": (app.graph_wires if app.graph_wires is not None
                             else (app.rack.audio_wires() if app.rack else [])),
             "ctl_wires": [dict(w) for w in app.ctl_wires],
+            "mod_wires": [dict(w) for w in getattr(app, "mod_wires", [])],
             "voice_targets": {vid: getattr(v, "target_key", None)
                               for vid, v in app.voices.items()},
             "drums_target": (app.drums.target
@@ -296,6 +297,13 @@ def apply_resume(app) -> bool:
     for w in r.get("ctl_wires", []):
         try:
             app.set_ctl_wire("add", w.get("from"), w.get("to"))
+        except Exception:  # noqa: BLE001
+            pass
+    # the mod plane AFTER the lfos restore in _apply (the LFO ids must
+    # exist) — resolve_mod then re-maps whatever the relays are passing
+    for w in r.get("mod_wires", []):
+        try:
+            app.mod_wire("add", w.get("from"), w.get("to"))
         except Exception:  # noqa: BLE001
             pass
     for vid, tgt in (r.get("voice_targets") or {}).items():

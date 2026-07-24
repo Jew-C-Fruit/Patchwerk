@@ -829,6 +829,7 @@ const SIG_NAME = {audio: "audio", ctl: "notes", mod: "mod", bin: "binary",
 function portTarget(port) {
   if (!port) return "";
   if (port.param) return port.param;
+  if (port.relayCirc) return "circuit " + port.relayCirc;   // "mod > circuit 1"
   if (port.ep) {
     const sub = String(port.ep).split(":")[1];
     if (sub) return sub;
@@ -1797,9 +1798,12 @@ const PRIMARY_SIGS = new Set(["audio", "ctl", "bin"]);
 // voice, it doesn't add; a drone's play-in takes one root source), and
 // single-input binary ins (logic named ins — the server steals on add).
 function portAllowsPlus(port) {
+  // single FIRST — a 1:1 contact never grows a +, on EITHER side. Relay
+  // circuits are the outs that need this (Cole, 07-24: "each I/O set is a
+  // 1 to 1"); logic named ins and relay:ctl are the ins.
+  if (port.single) return false;
   if (port.dir === "out") return true;
   if (port.sig === "mod") return false;                     // param ins
-  if (port.single) return false;                            // logic named ins
   if (port.label === "play") return false;
   return true;
 }
@@ -2927,6 +2931,36 @@ function renderParamLinks() {
   }
 }
 // ---- tag placement: clear of corners, crossings, other tags -----------------
+// the names a wire's label spells out, in flow order. Mirrors flex's
+// labelGeom: quiet targets read "Node.target" — item 26's fix routes that
+// through portTarget, so a quiet BINARY in (":pwr", "deck:rec", logic ":a"
+// — label + ep, no param) reads "Echo.pwr", never "Echo.undefined". Wire
+// labels DO name the card (the handle title deliberately doesn't).
+// Cole, 07-24: a wire touching a relay CIRCUIT names the real ends of the
+// hop — "Keys → Relay → Voice" — by looking up the circuit's other half
+// among the drawn wires. Both halves therefore carry the SAME text (as
+// they carry the same colour), and an end that isn't wired yet is simply
+// left off ("Keys → Relay").
+function endName(end) {
+  const t = portTarget(end.port);
+  return (end.port && end.port.quiet && t)
+    ? `${end.node.short}.${t}` : end.node.short;
+}
+function wireNames(w) {
+  const fp = w.from.port, tp = w.to.port;
+  if (tp && tp.relayCirc) {                       // … → circuit IN
+    const o = wires.find(x => x.from.node === w.to.node && x.from.port
+                              && x.from.port.relayCirc === tp.relayCirc);
+    return [endName(w.from), w.to.node.short, ...(o ? [endName(o.to)] : [])];
+  }
+  if (fp && fp.relayCirc) {                       // circuit OUT → …
+    const i = wires.find(x => x.to.node === w.from.node && x.to.port
+                              && x.to.port.relayCirc === fp.relayCirc);
+    return [...(i ? [endName(i.from)] : []), w.from.node.short,
+            endName(w.to)];
+  }
+  return [endName(w.from), endName(w.to)];
+}
 function placeTags(routed) {
   const CORNER_CLR = 17, TAG_SEP = 17, HANDLE_CLR = 12;
   // avoid points are [x, y] or [x, y, clearance] (default CORNER_CLR)
@@ -2996,16 +3030,9 @@ function placeTags(routed) {
       }
       if (best) { r.tagPt = best; placed.push([best.x, best.y]); orient(bestSeg[0], bestSeg[1]); }
     }
-    // label text mirrors flex's labelGeom: quiet targets read "Node.target".
-    // item 26 BUG fix: the target comes from portTarget, so a quiet BINARY
-    // in (":pwr", "deck:rec", logic ":a" — label+ep, no param) reads
-    // "Echo.pwr" instead of the old "Echo.undefined". Wire labels DO name
-    // the card (the handle title deliberately doesn't).
-    const dstT = portTarget(r.w.to.port);
-    const dst = (r.w.to.port && r.w.to.port.quiet && dstT)
-      ? `${r.w.to.node.short}.${dstT}` : r.w.to.node.short;
-    r.labelTxt = r.tagFlip ? `${dst} ← ${r.w.from.node.short}`
-                           : `${r.w.from.node.short} → ${dst}`;
+    const names = wireNames(r.w);
+    r.labelTxt = r.tagFlip ? names.slice().reverse().join(" ← ")
+                           : names.join(" → ");
     r.balloon = false; r.bFlip = false;
     if (r.tagPt) {
       const estW = r.labelTxt.length * 5.3 + 18;
@@ -3938,8 +3965,11 @@ function addWire(from, to, opts = {}) {
   if (!from.port || !to.port) return null;
   if (wires.some(w => w.from.port === from.port && w.to.port === to.port)) return null;
   const sig = from.port.sig;
-  const n = lineCount[sig]++;
-  const color = LINES[sig][n % LINES[sig].length];
+  // opts.color pins a wire to an already-allocated line (relay circuits:
+  // both halves of one contact set share ONE colour) — and deliberately
+  // does NOT consume a fresh line number
+  const color = opts.color
+    || LINES[sig][lineCount[sig]++ % LINES[sig].length];
   const seq = wireSeq++;
   const NS = "http://www.w3.org/2000/svg";
   const mk = (cls, width) => {
@@ -4049,7 +4079,7 @@ function binSrcIds() {
 // sig "any": their IN accepts any of audio/notes/bin drags; their OUT has
 // no kind yet and refuses (the kind comes from the first wire INTO it).
 const RELAY_MAX = 9;
-const RELAY_SIG = {audio: "audio", notes: "ctl", binary: "bin"};
+const RELAY_SIG = {audio: "audio", notes: "ctl", binary: "bin", mod: "mod"};
 function relayIds() {
   return new Set(((state && state.relays) || []).map(r => r.id));
 }
@@ -4059,6 +4089,31 @@ function relayCircKind(base, k) {   // claimed kind of circuit k, else null
   return (c && c.kind) || null;
 }
 function relayLaneOk(l) { return Number.isInteger(l) && l >= 1 && l <= RELAY_MAX; }
+// COLOUR-MATCHED PAIRS (Cole, 07-24): a circuit is one contact set, so its
+// IN wire and its OUT wire draw in the SAME line colour — light green in,
+// light green out. The colour is allocated from the circuit's own family on
+// first sight and reused by the other half; cleared with lineCount on every
+// rebuild so a patch renders identically twice running.
+let relayCircColor = new Map();
+function circuitColor(ep, sig) {
+  if (!ep || !LINES[sig]) return null;
+  const key = sig + "|" + ep;
+  if (!relayCircColor.has(key))
+    relayCircColor.set(key, LINES[sig][lineCount[sig]++ % LINES[sig].length]);
+  return relayCircColor.get(key);
+}
+// the {color} opt for a wire touching a relay circuit (either end), else {}
+function circuitOpt(fromEp, toEp, sig) {
+  for (const ep of [fromEp, toEp]) {
+    if (typeof ep !== "string" || ep.indexOf(":") < 0) continue;  // cheap out
+    const [b, l] = splitEp(ep);
+    if (relayIds().has(b) && relayLaneOk(l)) {
+      const c = circuitColor(ep, sig);
+      return c ? {color: c} : {};
+    }
+  }
+  return {};
+}
 // binary source ENDPOINT: a bare bin id or a binary-claimed relay circuit
 function binSrcEp(ep) {
   const [b, l] = splitEp(ep);
@@ -4174,7 +4229,27 @@ function connectAction(out, inn) {
     // Fan-out is free (one LFO, many params); the param side is
     // single-input — the server STEALS an already-mapped param from its
     // old LFO on add.
+    // Cole, 07-24: the relay carries MOD too. Anything touching a circuit
+    // rides the mod_wire protocol (stored server-side, resolved through
+    // the closed relays); a plain LFO→param drop stays on lfo_wire.
     const src = out.node;
+    if (po.relayCirc || pi.relayCirc) {
+      const from = po.relayCirc ? po.ep : src.gid.slice(4);
+      if (!po.relayCirc) {
+        if (!src.gid.startsWith("lfo:")) return null;
+        const l0 = ((state && state.lfos) || []).find(x => x.id === from);
+        if (l0 && lfoIsLegacy(l0)) return null;   // no norm bus to route
+      }
+      let to;
+      if (pi.relayCirc) to = pi.ep;
+      else {
+        // circuit OUT → a param's quiet handle ("<key>:<param>")
+        if (!pi.quiet || !pi.param || !inn.node.chainKey) return null;
+        to = `${inn.node.chainKey}:${pi.param}`;
+      }
+      if (splitEp(from)[0] === splitEp(to)[0]) return null;   // self-wire
+      return () => send({type: "mod_wire", action: "add", from, to});
+    }
     if (!src.gid.startsWith("lfo:")) return null;
     if (thresholdIds().has(inn.node.gid)) {
       // the threshold cv-in is single-input: add REPLACES the source.
@@ -5231,7 +5306,8 @@ function buildRelayCard(r) {
     .filter(k => Number.isInteger(k) && k >= 1 && k <= RELAY_MAX);
   const nine = used.length > 4 || used.some(k => k > 4);
   const nCirc = nine ? RELAY_MAX : 4;
-  const n = addCard({gid, name: "Relay" + suffix, short: "Rly" + suffix,
+  // the banner spells RELAY IN FULL even at XS (Cole, 07-24: there's room)
+  const n = addCard({gid, name: "Relay" + suffix, short: "Relay" + suffix,
     sub: `signal relay · ${nCirc} circuits`, fam: "service",
     banner: BANNER_LATCH, allowXS: true,
     vizHTML: `<div class="relaybtn${r.closed ? " on" : ""}" title="relay: click to toggle">⏻</div>`,
@@ -5243,10 +5319,14 @@ function buildRelayCard(r) {
   for (let k = 1; k <= nCirc; k++) {
     const sig = RELAY_SIG[(circ[String(k)] || {}).kind] || "any";
     const frac = k / (nCirc + 1);   // in k rides directly above out k
+    // a circuit is a 1:1 CONTACT SET (Cole, 07-24): ONE wire per side, no
+    // + on either handle — the server steals on add, both planes
     n.ports.push({dir: "in", sig, label: "in." + k, ep: `${gid}:${k}`,
-                  lane: k, relayCirc: k, fixEdge: "T", fixFrac: frac});
+                  lane: k, relayCirc: k, single: true,
+                  fixEdge: "T", fixFrac: frac});
     n.ports.push({dir: "out", sig, label: "out." + k, ep: `${gid}:${k}`,
-                  lane: k, relayCirc: k, fixEdge: "B", fixFrac: frac});
+                  lane: k, relayCirc: k, single: true,
+                  fixEdge: "B", fixFrac: frac});
   }
   if (!nine && used.length === 4) {
     // all four XS slots claimed (Cole, 07-24): a little + to the RIGHT of
@@ -5968,6 +6048,7 @@ function rebuildGraph() {
   for (const w of [...wires]) removeWire(w);
   lineCount.audio = 0; lineCount.ctl = 0; lineCount.mod = 0;
   lineCount.bin = 0;
+  relayCircColor = new Map();   // circuit colours re-allocate with the lines
   for (const n of [...nodes.values()]) if (!n.persistent) removeNode(n);
   for (const k of Object.keys(uiParam))
     if (!k.startsWith("mon:")) delete uiParam[k];
@@ -6066,23 +6147,26 @@ function rebuildGraph() {
         ? a.ports.find(p => p.relayCirc === fromLane && p.dir === "out")
         : port(a, "out", "bin");
       const gp = b.ports.find(p => p.ep === cw.to && p.dir === "in");
-      if (ap && gp) addWire({node: a, port: ap}, {node: b, port: gp}, {cut});
+      // both halves of one circuit share a colour (see circuitColor)
+      const o = {cut, ...circuitOpt(cw.from, cw.to, "bin")};
+      if (ap && gp) addWire({node: a, port: ap}, {node: b, port: gp}, o);
       else if (gp) addWire({node: a, port: port(a, "out", "bin")},
-                           {node: b, port: gp}, {cut});
+                           {node: b, port: gp}, o);
       else if (ap) addWire({node: a, port: ap},
-                           {node: b, port: port(b, "in", "bin")}, {cut});
-      else W(a, "bin", b, "bin", {cut});
+                           {node: b, port: port(b, "in", "bin")}, o);
+      else W(a, "bin", b, "bin", o);
       continue;
     }
     // a Note Monitor may RIDE this wire (visual splice): draw A→mon→B but
     // keep the backend wire A→B — cutting either half cuts the real wire
     const ride = [...monRide].find(([gid, set]) =>
       set.has(`${cw.from}>${cw.to}`) && nodes.get(gid));
+    const cc = circuitOpt(cw.from, cw.to, "ctl");
     if (ride) {
       const mon = nodes.get(ride[0]);
-      W(a, "ctl", mon, "ctl", {cut, fromLane});
-      W(mon, "ctl", b, "ctl", {cut, toLane});
-    } else W(a, "ctl", b, "ctl", {cut, fromLane, toLane});
+      W(a, "ctl", mon, "ctl", {cut, fromLane, ...cc});
+      W(mon, "ctl", b, "ctl", {cut, toLane, ...cc});
+    } else W(a, "ctl", b, "ctl", {cut, fromLane, toLane, ...cc});
   }
   // each voice → its target source stays derived (re-drag/chip-click =
   // set_voice_target; a mono voice always drives exactly one target, so
@@ -6145,7 +6229,31 @@ function rebuildGraph() {
     const bp = relayIds().has(tb)
       ? b.ports.find(p => p.relayCirc === tl && p.dir === "in")
       : port(b, "in", "audio");
-    if (ap && bp) addWire({node: a, port: ap}, {node: b, port: bp}, {cut});
+    if (ap && bp) addWire({node: a, port: ap}, {node: b, port: bp},
+                          {cut, ...circuitOpt(rw.from, rw.to, "audio")});
+  }
+  // MOD through a relay (Cole, 07-24): SERVER TRUTH — state.mod_wires holds
+  // the stored hops (LFO out → circuit in, circuit out → "<key>:<param>").
+  // Whether the modulation actually MOVES is the relay's business; the wire
+  // is drawn either way, exactly like an open audio circuit.
+  for (const mw of (state.mod_wires || [])) {
+    const [fb, fl] = splitEp(mw.from), [tb, tl] = splitEp(mw.to);
+    const fromCirc = relayIds().has(fb) && relayLaneOk(fl);
+    const toCirc = relayIds().has(tb) && relayLaneOk(tl);
+    const a = fromCirc ? nodes.get(fb) : nodes.get("lfo:" + mw.from);
+    const b = toCirc ? nodes.get(tb) : nodes.get("m:" + tb);
+    if (!a || !b) continue;
+    const ap = fromCirc
+      ? a.ports.find(p => p.relayCirc === fl && p.dir === "out")
+      : port(a, "out", "mod");
+    const bp = toCirc
+      ? b.ports.find(p => p.relayCirc === tl && p.dir === "in")
+      : b.ports.find(p => p.quiet && p.param === String(mw.to).slice(tb.length + 1));
+    if (!ap || !bp) continue;
+    addWire({node: a, port: ap}, {node: b, port: bp},
+            {cut: () => send({type: "mod_wire", action: "remove",
+                              from: mw.from, to: mw.to}),
+             ...circuitOpt(mw.from, mw.to, "mod")});
   }
   // mod: one wire per LFO DESTINATION (fan-out) → each param's quiet
   // handle. Cutting a wire removes just that destination — the LFO card

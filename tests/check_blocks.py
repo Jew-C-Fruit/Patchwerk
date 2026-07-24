@@ -2786,8 +2786,16 @@ def main():
               rl18["size"] == "XS" and rl18["relayN"] == 4
               and rl18["nCirc"] == 8, str(rl18))
         check("relay title/sub read Relay · signal relay · 4 circuits",
-              rl18["name"] == "Rly"
+              rl18["name"] == "Relay"
               and rl18["sub"] == "signal relay · 4 circuits", str(rl18))
+        # Cole, 07-24: the banner spells RELAY IN FULL — at XS too, and it
+        # must actually FIT (shrink-to-fit, never an ellipsis/overflow)
+        ttl18 = page.evaluate("""(() => {
+          const t = nodes.get('relay').el.querySelector('.title');
+          return {txt: t.textContent, over: t.scrollWidth - t.clientWidth};
+        })()""")
+        check("the full word fits the XS banner (no overflow)",
+              ttl18["txt"] == "Relay" and ttl18["over"] <= 1, str(ttl18))
         # banner colors across the binary plane (Cole, 07-24): sources
         # (clock/threshold) yellow, relay orange (logic checked in §17)
         ban18 = page.evaluate("""(() => {
@@ -2841,6 +2849,54 @@ def main():
               and bool(rw18["bout"]) and rw18["bout"]["binFam"], str(rw18))
         check("the ctl level-in wire lands on relay:ctl (bin family)",
               bool(rw18["ctl"]) and rw18["ctl"]["binFam"], str(rw18))
+
+        # ---- Cole, 07-24: 1:1 contacts, matched pairs, path labels -----
+        one18 = page.evaluate("""(() => {
+          const n = nodes.get('relay');
+          const circ = n.ports.filter(p => p.relayCirc);
+          const plus = n.lay.handles.filter(h => h.role === 'plus'
+                                                 && h.port.relayCirc
+                                                 && !h.port.plusSlot);
+          return {allSingle: circ.every(p => p.single === true),
+                  anyPlus: circ.some(p => portAllowsPlus(p)),
+                  plusHandles: plus.length,
+                  title: portTitle(n.ports.find(p => p.relayCirc === 2
+                                                     && p.dir === 'in')),
+                  ctlTitle: portTitle(n.ports.find(p => p.ep === 'relay:ctl'))};
+        })()""")
+        check("every circuit contact is 1:1 — no + on either side",
+              one18["allSingle"] and not one18["anyPlus"]
+              and one18["plusHandles"] == 0, str(one18))
+        check("a circuit handle declares its type and CIRCUIT (item 26 form)",
+              one18["title"] == "notes > circuit 2"
+              and one18["ctlTitle"] == "binary > ctl", str(one18))
+        pair18 = page.evaluate("""(() => {
+          const f = (pred) => wires.find(pred);
+          const kin = f(w => w.from.node.gid === 'keys'
+                             && w.to.port.ep === 'relay:2');
+          const kout = f(w => w.from.port.ep === 'relay:2'
+                              && w.to.node.gid === 'voice');
+          const bin = f(w => w.from.node.gid === 'button'
+                             && w.to.port.ep === 'relay:3');
+          const bout = f(w => w.from.port.ep === 'relay:3'
+                              && w.to.port.ep === 'logic:a');
+          const lbl = (w) => wireNames(w).join(' > ');
+          return {notesPair: kin.color === kout.color,
+                  binPair: bin.color === bout.color,
+                  across: kin.color !== bin.color,
+                  kinLbl: lbl(kin), koutLbl: lbl(kout),
+                  binLbl: lbl(bin),
+                  ctlLbl: lbl(f(w => w.to.port.ep === 'relay:ctl'))};
+        })()""")
+        check("each circuit's in/out pair draws in ONE matched colour",
+              pair18["notesPair"] and pair18["binPair"]
+              and pair18["across"], str(pair18))
+        check("relay wires label the WHOLE hop (Keys > Relay > Voice)",
+              pair18["kinLbl"] == "Keys > Relay > Voice"
+              and pair18["koutLbl"] == "Keys > Relay > Voice"
+              and pair18["binLbl"] == "Btn > Relay > Log.a", str(pair18))
+        check("a plain (non-circuit) wire labels as before",
+              pair18["ctlLbl"] == "Btn > Relay.ctl", str(pair18))
 
         # ---- relay switch: click sends set_relay; LED follows gates ----
         page.evaluate("window.__sent.length = 0")
@@ -3048,6 +3104,94 @@ def main():
               page.evaluate("nodes.get('relay').size") == "S"
               and page.evaluate(
                   "!nodes.get('relay').ports.some(p => p.plusSlot)"))
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st18)
+        page.wait_for_timeout(400)
+
+        # ---- 18b: the MOD circuit (Cole, 07-24 — "compatible with all
+        # wire types, including LFO"). state.mod_wires is server truth:
+        # LFO out → circuit in, circuit out → "<key>:<param>".
+        echo_m = mod("echo", "Echo", "effect", "time",
+                     {"amp": param(), "mix": param(0.3),
+                      "feedback": param(0.4)})
+        st18m = base_state(
+            [sg, echo_m],
+            [{"from": "signal_gen", "to": "echo"},
+             {"from": "echo", "to": "master"}],
+            lfos=[{"id": "lfo", "rate": 1.0, "shape": 0, "depth": 0.5,
+                   "shapes": ["sine", "tri", "ramp", "square", "s&h"],
+                   "dests": []}],
+            relays=[{"id": "relay", "closed": False,
+                     "circuits": {"1": {"kind": "mod"}}}],
+            mod_wires=[{"from": "lfo", "to": "relay:1"},
+                       {"from": "relay:1", "to": "echo:mix"}])
+        page.evaluate("posMem = {}; relayAW = [];")
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st18m)
+        page.wait_for_timeout(500)
+        mod18 = page.evaluate("""(() => {
+          const n = nodes.get('relay');
+          const p = (d) => n.ports.find(x => x.relayCirc === 1
+                                             && x.dir === d);
+          const inW = wires.find(w => w.from.node.gid === 'lfo:lfo'
+                                      && w.to.port.ep === 'relay:1');
+          const outW = wires.find(w => w.from.port.ep === 'relay:1'
+                                       && w.to.node.gid === 'm:echo');
+          return {sigIn: p('in').sig, sigOut: p('out').sig,
+                  drawn: !!inW && !!outW,
+                  fam: !!inW && LINES.mod.includes(inW.color),
+                  paired: !!inW && !!outW && inW.color === outW.color,
+                  param: outW && outW.to.port.param,
+                  quiet: outW && !!outW.to.port.quiet,
+                  lbl: inW && wireNames(inW).join(' > '),
+                  cut: !!(inW && inW.cutAction)};
+        })()""")
+        check("a mod-claimed circuit wears the mod sig on both contacts",
+              mod18["sigIn"] == "mod" and mod18["sigOut"] == "mod",
+              str(mod18))
+        check("state.mod_wires draws LFO → circuit → the param's handle",
+              mod18["drawn"] and mod18["fam"] and mod18["cut"]
+              and mod18["param"] == "mix" and mod18["quiet"], str(mod18))
+        check("the mod pair is colour-matched and labels the whole hop",
+              mod18["paired"]
+              and mod18["lbl"] == "LFO > Relay > Echo.mix", str(mod18))
+        modact = page.evaluate("""(() => {
+          const n = nodes.get('relay'), lfoN = nodes.get('lfo:lfo');
+          const echoN = nodes.get('m:echo');
+          const mout = {node: lfoN,
+            port: lfoN.ports.find(p => p.sig === 'mod' && p.dir === 'out')};
+          const cin = (k) => ({node: n,
+            port: n.ports.find(p => p.relayCirc === k && p.dir === 'in')});
+          const cout = (k) => ({node: n,
+            port: n.ports.find(p => p.relayCirc === k && p.dir === 'out')});
+          const pin = (name) => ({node: echoN,
+            port: echoN.ports.find(p => p.quiet && p.param === name)});
+          window.__sent.length = 0;
+          const r = {};
+          r.lfo_to_unclaimed = !!connectAction(mout, cin(2));
+          const a1 = connectAction(mout, cin(2));
+          if (a1) a1();
+          const a2 = connectAction(cout(1), pin('feedback'));
+          r.circ_out_to_param = !!a2;
+          if (a2) a2();
+          r.mod_to_ctlpin = !!connectAction(mout,
+            {node: n, port: n.ports.find(p => p.ep === 'relay:ctl')});
+          wires.find(w => w.from.port.ep === 'relay:1').cutAction();
+          return {r, sent: window.__sent};
+        })()""")
+        check("LFO out → an unclaimed circuit IN sends mod_wire add",
+              modact["r"]["lfo_to_unclaimed"] and
+              {"type": "mod_wire", "action": "add", "from": "lfo",
+               "to": "relay:2"} in modact["sent"], str(modact))
+        check("a mod circuit OUT → a param handle sends mod_wire add",
+              modact["r"]["circ_out_to_param"] and
+              {"type": "mod_wire", "action": "add", "from": "relay:1",
+               "to": "echo:feedback"} in modact["sent"], str(modact))
+        check("relay:ctl still refuses a mod wire (binary only)",
+              not modact["r"]["mod_to_ctlpin"], str(modact))
+        check("cutting a mod hop sends the targeted mod_wire remove",
+              {"type": "mod_wire", "action": "remove", "from": "relay:1",
+               "to": "echo:mix"} in modact["sent"], str(modact))
+        page.screenshot(path="/tmp/binB_relay_mod.png",
+                        clip=relay_clip(page))
         page.evaluate("(s) => __msg({type: 'state', ...s})", st18)
         page.wait_for_timeout(400)
 
