@@ -4061,6 +4061,59 @@ def main():
               abs(lk23["top"] - lk23["left"]) < 0.05
               and abs(lk23["top"] - 2) < 0.05, str(lk23))
 
+        # ================================================================
+        # 24 — TIDY FILLS THE VISIBLE FRAME (Cole, 07-24: "tidy throwing
+        # unconnected/small groups of cards out of the viewport shouldn't be
+        # possible if there's space in the viewport"). The pour used to run
+        # 4 rows deep by the whole 12-column board and spend a blank
+        # separator column on EVERY component — so each unconnected card
+        # (exactly what the relay-era XS family produces) cost two columns
+        # and marched the pour off the right edge while the rows underneath
+        # sat empty. Measured before the fix on this very state: 3 cards
+        # outside a locked 6x4 frame with 15 block slots free inside it,
+        # and the pour reaching column 11.
+        # ================================================================
+        st24 = base_state(
+            [sg, echo],
+            [{"from": "signal_gen", "to": "echo"},
+             {"from": "echo", "to": "master"}],
+            buttons=[{"id": f"button{i}" if i else "button", "binding": None,
+                      "armed": False, "latch": False, "on": False}
+                     for i in range(3)],
+            clocks=[{"id": f"clock{i}" if i else "clock", "division": "1/4",
+                     "divisions": ["1/4", "1/8"]} for i in range(2)],
+            logics=[{"id": "logic", "op": "AND",
+                     "ops": ["AND", "OR", "NOR", "XOR", "SR latch"],
+                     "out": False}],
+            relays=[{"id": "relay", "closed": False, "circuits": {}}])
+        page.evaluate("posMem = {}; relayAW = [];")
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st24)
+        page.wait_for_timeout(600)
+        for cols, rows in ((6, 4), (5, 3)):
+            t24 = page.evaluate("""(([cols, rows]) => {
+              panLocked = true; blocksFree = null;
+              viewCols = cols; viewRows = rows;
+              applyView();
+              compactLayout();
+              const out = [], seen = new Set();
+              let maxCol = -1;
+              for (const n of nodes.values()) {
+                if (n.bx === undefined || n.bx === null) continue;
+                const w = n.size === 'L' ? 2 : 1;
+                maxCol = Math.max(maxCol, n.bx + w - 1);
+                // the pour's own budget is max(6,cols) x max(4,rows) — it is
+                // never allowed to be TIGHTER than the historical 6x4
+                if (n.bx + w > Math.max(6, cols) || n.by >= Math.max(4, rows))
+                  out.push(`${n.gid}@${n.bx},${n.by}`);
+                seen.add(`${n.bx},${n.by}`);
+              }
+              return {out, maxCol, placed: seen.size};
+            })""", [cols, rows])
+            check(f"tidy: a {cols}x{rows} frame keeps every card inside it",
+                  not t24["out"], str(t24))
+            check(f"tidy: a {cols}x{rows} pour stays compact (no column march)",
+                  t24["maxCol"] <= max(6, cols) - 1, str(t24))
+
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()
 
