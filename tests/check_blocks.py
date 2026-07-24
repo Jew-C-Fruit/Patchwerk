@@ -3789,8 +3789,15 @@ def main():
           }
           return {cardBg, prim, hits};
         })()""")
-        check("item 17: flex cards are slightly translucent (wires show through)",
-              "rgba" in fx21["cardBg"] or "0." in fx21["cardBg"], str(fx21))
+        # color-mix() computes to the color() syntax in Chromium, so read the
+        # ALPHA rather than pattern-matching "rgba" (which passed too easily)
+        alpha21 = page.evaluate("""(bg) => {
+          const m = String(bg).match(/\\/\\s*([0-9.]+)\\s*\\)/)
+                 || String(bg).match(/rgba\\([^)]*,\\s*([0-9.]+)\\s*\\)/);
+          return m ? parseFloat(m[1]) : 1;
+        }""", fx21["cardBg"])
+        check("item 17: flex cards are slightly translucent (alpha < 1)",
+              alpha21 < 1, f"alpha={alpha21} {fx21}")
         check("item 16: no flex wire handle sits on top of a control",
               fx21["prim"] > 0 and fx21["hits"] == 0, str(fx21))
         page.evaluate("() => setMode('blocks')")
