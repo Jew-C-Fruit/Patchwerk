@@ -131,10 +131,14 @@ Current coverage:
      section (after LOGIC) spawning canvas VIEWS of the ONE global
      transport (spawn_transport_card play/tempo; cards build from
      state.transport_cards; kill = remove_transport_card). Play/Stop
-     ("tplay", XS): ONE big bold button showing the CURRENT state — red
-     ⏹ STOP stopped / green ⏵ PLAY running — whose click toggles via
-     set_transport {playing}; a quiet bin LEVEL-in "run" →
-     "transport:run". Tempo/Click ("ttempo", M): tempo slider (40–220,
+     ("tplay", XS, 07-24 restyle): NO title banner — a big SQUARE button
+     CENTERED in the card with a small state label under it; GLYPH is the
+     ACTION (⏹ stop while playing / ⏵ play while stopped), colored by the
+     universal red-STOP / green-PLAY convention (the OPPOSITE of the glow);
+     the CARD GLOW + label are the STATE (green playing — thickened — / red
+     stopped); the ✕ rides an absolute top drag strip; click toggles via
+     set_transport {playing}; a quiet bin
+     LEVEL-in "run" → "transport:run". Tempo/Click ("ttempo", M): tempo slider (40–220,
      the top bar's mapping), TIME SIG detents mirroring the top bar's
      meter select, DOWNBEAT detents re-derived from the CURRENT meter
      (text "beat N", 1-based), click+accent power-LED toggles with quiet
@@ -3044,18 +3048,31 @@ def main():
         check("Tempo/Click measures M (5 rows + metronome strip)",
               got19 and got19["tt"] == ["M", 160, 160], str(got19))
 
-        # ---- Play/Stop: the button shows the CURRENT state -------------
+        # ---- Play/Stop: GLYPH = the ACTION, CARD GLOW = the STATE ------
+        # no title banner; stopped → ⏵ play button, red button + red glow
         pb = page.evaluate("""(() => {
-          const b = nodes.get('tplay').el.querySelector('.tpbtn');
+          const n = nodes.get('tplay'), b = n.el.querySelector('.tpbtn');
+          const title = n.el.querySelector('.head .title');
+          const lab = n.el.querySelector('.tplabel');
           return {txt: b.textContent, stopped: b.classList.contains('stopped'),
                   playing: b.classList.contains('playing'),
                   color: getComputedStyle(b).color,
-                  bold: getComputedStyle(b).fontWeight};
+                  bw: b.offsetWidth, bh: b.offsetHeight,
+                  cardStopped: n.el.classList.contains('stopped'),
+                  cardPlaying: n.el.classList.contains('playing'),
+                  lab: lab && lab.textContent, labColor: lab && getComputedStyle(lab).color,
+                  titleHidden: !title || title.offsetParent === null};
         })()""")
-        check("stopped payload → bold red ⏹ STOP",
-              pb["stopped"] and not pb["playing"] and "⏹" in pb["txt"]
-              and "STOP" in pb["txt"] and pb["color"] == "rgb(227, 73, 72)"
-              and int(pb["bold"]) >= 700, str(pb))
+        check("stopped payload → ⏵ GREEN play button + red card glow + 'stopped' label",
+              pb["stopped"] and not pb["playing"] and "⏵" in pb["txt"]
+              and "STOP" not in pb["txt"] and "PLAY" not in pb["txt"]
+              and pb["color"] == "rgb(27, 175, 122)"
+              and pb["cardStopped"] and not pb["cardPlaying"]
+              and pb["lab"] == "stopped" and pb["labColor"] == "rgb(227, 73, 72)",
+              str(pb))
+        check("Play/Stop button is enlarged + square, banner removed",
+              abs(pb["bw"] - pb["bh"]) <= 1 and pb["bw"] >= 40
+              and pb["titleHidden"], str(pb))
         page.evaluate("window.__sent.length = 0")
         page.evaluate("nodes.get('tplay').el.querySelector('.tpbtn').click()")
         check("button click toggles: set_transport playing:true",
@@ -3067,13 +3084,19 @@ def main():
         page.evaluate("(s) => __msg({type: 'state', ...s})", st19b)
         page.wait_for_timeout(400)
         pb = page.evaluate("""(() => {
-          const b = nodes.get('tplay').el.querySelector('.tpbtn');
+          const n = nodes.get('tplay'), b = n.el.querySelector('.tpbtn');
+          const lab = n.el.querySelector('.tplabel');
           return {txt: b.textContent, playing: b.classList.contains('playing'),
-                  color: getComputedStyle(b).color};
+                  color: getComputedStyle(b).color,
+                  cardPlaying: n.el.classList.contains('playing'),
+                  lab: lab && lab.textContent, labColor: lab && getComputedStyle(lab).color};
         })()""")
-        check("playing payload → green ⏵ PLAY (follows state.transport)",
-              pb["playing"] and "⏵" in pb["txt"] and "PLAY" in pb["txt"]
-              and pb["color"] == "rgb(27, 175, 122)", str(pb))
+        check("playing payload → ⏹ RED stop button + green card glow + 'playing' label",
+              pb["playing"] and "⏹" in pb["txt"]
+              and pb["color"] == "rgb(227, 73, 72)"
+              and pb["cardPlaying"]
+              and pb["lab"] == "playing" and pb["labColor"] == "rgb(27, 175, 122)",
+              str(pb))
 
         # ---- tempo slider: the top bar's 40–220 mapping ----------------
         page.evaluate("nodes.get('ttempo').el.scrollIntoView("
