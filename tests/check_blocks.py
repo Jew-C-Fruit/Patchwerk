@@ -3382,6 +3382,53 @@ def main():
               and met19["b1"][1][1] and met19["b1"][1][2] > met19["b1"][0][2],
               str(met19))
 
+        # ================================================================
+        # 20 — item 28 (Cole, 07-24): Master Out takes handles on BOTH its
+        # top and its side edge. Everything eventually lands on master, so a
+        # heavy fan-in must not march its handles off the end of one edge —
+        # the second edge is used on OVERFLOW ONLY (a small patch is
+        # unchanged).
+        # ================================================================
+        many = [mod(f"src{i}", f"Src {i}", "source", "voice")
+                for i in range(1, 9)]
+        st20 = base_state(many, [{"from": f"src{i}", "to": "master"}
+                                 for i in range(1, 9)])
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st20)
+        page.wait_for_timeout(600)
+        m20 = page.evaluate("""(() => {
+          const n = nodes.get('master');
+          const hs = n.lay.handles.filter(h => h.side === 'in');
+          const edges = {};
+          for (const h of hs) edges[h.edge] = (edges[h.edge] || 0) + 1;
+          const r = nodeUnitRect(n);
+          const off = hs.filter(h => h.edge === 'L' || h.edge === 'R'
+            ? (h.y / U) > r.y + r.h + 0.01 : (h.x / U) > r.x + r.w + 0.01);
+          return {edges, total: hs.length, off: off.length,
+                  dual: !!n.ports[0].dualEdge};
+        })()""")
+        check("Master Out declares itself dual-edge", m20["dual"], str(m20))
+        check("heavy fan-in spreads master's handles over TWO edges",
+              len(m20["edges"]) == 2 and min(m20["edges"].values()) >= 1,
+              str(m20))
+        check("no master handle runs off the end of its edge",
+              m20["off"] == 0, str(m20))
+        # every wire still gets exactly one handle (nothing dropped/doubled)
+        check("all 8 fan-in wires keep a handle (+ the fan-in plus slot)",
+              m20["total"] == 9, str(m20))
+        # a SMALL patch stays single-edged — the spill is overflow-only
+        st20b = base_state([mod("src1", "Src 1", "source", "voice")],
+                           [{"from": "src1", "to": "master"}])
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st20b)
+        page.wait_for_timeout(500)
+        m20b = page.evaluate("""(() => {
+          const hs = nodes.get('master').lay.handles.filter(h => h.side === 'in');
+          return [...new Set(hs.map(h => h.edge))].length;
+        })()""")
+        check("a light patch keeps master on ONE edge (no gratuitous split)",
+              m20b == 1, str(m20b))
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st19)
+        page.wait_for_timeout(500)
+
         # ---- screenshots for Cole --------------------------------------
         # fresh broadcast first: the LED test-clicks left local echoes
         page.evaluate("(s) => __msg({type: 'state', ...s})", st19b)

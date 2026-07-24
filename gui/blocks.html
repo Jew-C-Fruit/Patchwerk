@@ -1772,10 +1772,28 @@ function computeLayout(n) {
   const byEdge = { L: [], R: [], T: [], B: [] };
   for (const p of ports) byEdge[p.edge].push(p);
   const handles = [];
-  const slotsOf = (p) => p.ws.length
+  const slotsOf = (p) => p.slots ? p.slots : (p.ws.length
     ? [...p.ws.map(w => ({ role: "wire", wire: w })),
        ...(portAllowsPlus(p.port) ? [{ role: "plus" }] : [])]
-    : [{ role: p.port.plusSlot ? "plus" : "empty" }];   // relay expansion +
+    : [{ role: p.port.plusSlot ? "plus" : "empty" }]);   // relay expansion +
+  // item 28 (Cole, 07-24): a DUAL-EDGE input (Master Out) may use BOTH its
+  // top and its side edge, so heavy fan-in keeps every handle reachable.
+  // The second edge is used only on OVERFLOW — a small patch looks exactly
+  // as it did, and a busy master spills onto its other edge instead of
+  // marching its handles off the card.
+  for (const p of [...ports]) {
+    if (!p.port.dualEdge || p.isMod || p.port.fixFrac != null) continue;
+    if (p.edge !== "T" && p.edge !== "L") continue;      // ins only: T <-> L
+    const slots = slotsOf(p);
+    const edgeLen = p.edge === "L" ? r.h : r.w;
+    const cap = Math.max(1,
+      Math.floor((edgeLen - T_LEAD - END_MARGIN) / FAN_PITCH));
+    if (slots.length <= cap) continue;
+    const alt = p.edge === "T" ? "L" : "T";
+    p.slots = slots.slice(0, cap);
+    const spill = { ...p, edge: alt, slots: slots.slice(cap) };
+    byEdge[alt].push(spill);
+  }
   for (const edge of ["L", "R", "T", "B"]) {
     const prim = byEdge[edge].filter(p => !p.isMod);
     const mod  = byEdge[edge].filter(p => p.isMod);
@@ -5281,8 +5299,13 @@ function buildMasterCard() {
   rows.push(rowDevSelect("output", (state.devices || {}).outputs || [],
     state.current_output,
     (name) => send({type: "set_devices", output: name})));
-  return addCard({gid, name: "Master Out", short: "Master", sub: "",
-                  fam: "io", rows, ports: [["in", "audio", "in"]]});
+  const n = addCard({gid, name: "Master Out", short: "Master", sub: "",
+                    fam: "io", rows, ports: [["in", "audio", "in"]]});
+  // item 28 (Cole, 07-24): everything eventually lands here, so Master Out
+  // is allowed handles on BOTH its top and its side edge (computeLayout
+  // spills onto the second edge once the first one is full).
+  n.ports[0].dualEdge = true;
+  return n;
 }
 // corner toast: input+output sample-rate mismatch (only matters when BOTH
 // hardware ends are in play — output-only rigs never see it)
