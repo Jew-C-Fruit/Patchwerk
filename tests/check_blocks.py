@@ -85,18 +85,26 @@ Current coverage:
      wears the amplitude band; pre-item-7 per-assignment entries (the
      check_real fixture's shape) still render as one-dest legacy cards
      whose wires/kill fall back to lfo_unassign.
-  17. The BINARY plane (binary rework, 07-23): ONE hi/lo signal kind
-     ("bin", yellow→pink family, ONE "binary" legend swatch — ping and
-     gate merged, the Switch node is GONE). The Logic card's op chip (set_logic)
-     and per-op NAMED single-input ins (":a"/":b", ":a" only for NOT,
-     ":set"/":reset" for SR — bare-id dsts refused, no + handle) riding
-     pin labels on the NEW circuit-diagram canvas (per-op gate glyphs;
-     traces light from live levels — pixel-diffed lo vs hi); the Button's
-     mode chip (set_button latch) + momentary down/up messages + head
-     level LED following {"kind":"gate"} events; head enable power-LED
-     buttons with QUIET ":pwr" level-ins (modules/arp/drums) and the
-     deck's four button-ins; the bin grammar (bin→pwr/deck/logic-in/
-     deriver-trigger yes; bin→note/mod/audio + self-wires no).
+  17. The BINARY plane (binary rework, 07-23; card redesign, 07-24): ONE
+     hi/lo signal kind ("bin", yellow→pink family, ONE "binary" legend
+     swatch — ping and gate merged, the Switch node is GONE). Binary
+     cards wear COLORED TITLE BANNERS instead of the family stripe:
+     yellow (--bin) for sources (momentary button/clock/threshold),
+     orange (--binlatch) for latch button/logic/relay. The Logic card
+     has NO title — its banner carries a clickable CIRCUIT SELECTOR
+     (cycles ops, set_logic) — and per-op NAMED single-input ins
+     (":a"/":b", ":a" only for NOT, ":set"/":reset" for SR — bare-id
+     dsts refused, no + handle) riding pin labels on the circuit-diagram
+     canvas (per-op gate glyphs; traces light from live levels —
+     pixel-diffed lo vs hi); its out LED sits at the card's RIGHT-HAND
+     CENTER with the bin-out handle FIXED in line with it. The Button's
+     banner carries a BTN tag + the MOM|LATCH segmented toggle
+     (set_button latch; banner repaints with the mode) + momentary
+     down/up messages + the same right-center LED/out-handle pairing;
+     head enable power-LED buttons with QUIET ":pwr" level-ins
+     (modules/arp/drums) and the deck's four button-ins; the bin
+     grammar (bin→pwr/deck/logic-in/deriver-trigger yes;
+     bin→note/mod/audio + self-wires no).
   18. GUI pass B (07-23): the XS card size — 4.5u x 4.5u, OPT-IN
      (cfg.allowXS: Button/Clock/Logic/Relay; every other card's floor
      stays S), quadrant-resolution slots (2 per half block at a 5.5u
@@ -644,11 +652,11 @@ def main():
               and not [m for m in sent if m.get("type") == "fire_button"],
               str(sent))
 
-        # pairing: arm via the bindline, then an ASSIGNED (note) key must
-        # NOT bind…
+        # pairing: arm via the ↻ rebind icon (07-24: the bindline is gone),
+        # then an ASSIGNED (note) key must NOT bind…
         page.evaluate("window.__sent.length = 0")
         page.evaluate(
-            "nodes.get('button').el.querySelector('.bindline').click()")
+            "nodes.get('button').el.querySelector('.rebind').click()")
         page.wait_for_timeout(60)
         sent = page.evaluate("window.__sent")
         check("arming sends set_button armed",
@@ -1806,6 +1814,8 @@ def main():
         page.wait_for_timeout(500)
 
         # keycap renders the binding LARGE: key glyph / CC number / unbound
+        # (07-24: SQUARE keycap; the bindline is gone — the keycap title
+        # carries the readable label and the ↻ icon re-pairs)
         caps = page.evaluate("""(() => {
           const g = (gid) => {
             const n = nodes.get(gid);
@@ -1813,76 +1823,112 @@ def main():
             return {txt: cap.textContent, unbound:
                       cap.classList.contains('unbound'),
                     cc: !!cap.querySelector('small'),
-                    line: n.el.querySelector('.bindline').textContent,
+                    title: cap.title,
+                    word: cap.classList.contains('word'),
+                    sq: [cap.offsetWidth, cap.offsetHeight],
+                    rebind: !!n.el.querySelector('.rebind'),
+                    line: !n.el.querySelector('.bindline'),
                     size: n.size};
           };
           return {b: g('button'), b2: g('button.2'), b3: g('button.3')};
         })()""")
         check("bound key renders its glyph on the keycap",
               caps["b"]["txt"] == "N" and not caps["b"]["cc"], str(caps))
-        check("binding label sits underneath",
-              caps["b"]["line"] == "key N", str(caps))
-        check("unbound keycap shows ＋ / pair…",
-              caps["b2"]["txt"] == "＋" and caps["b2"]["unbound"]
-              and caps["b2"]["line"] == "pair…", str(caps))
+        check("keycap is SQUARE and the readable label rides its title",
+              caps["b"]["sq"][0] == caps["b"]["sq"][1]
+              and caps["b"]["title"] == "key N", str(caps))
+        check("bindline is gone; the ↻ rebind icon replaces it",
+              all(caps[k]["rebind"] and caps[k]["line"]
+                  for k in ("b", "b2", "b3")), str(caps))
+        check("unbound keycap shows ＋",
+              caps["b2"]["txt"] == "＋" and caps["b2"]["unbound"], str(caps))
         check("CC binding renders CC prefix + number",
               caps["b3"]["cc"] and "21" in caps["b3"]["txt"], str(caps))
         check("button cards still measure into XS",
               all(caps[k]["size"] == "XS" for k in ("b", "b2", "b3")),
               str(caps))
 
-        # the ◉ heartbeat icon rides next to the rendered bin-out handle
-        fi = page.evaluate("""(() => {
+        # whole-word bindings ("L SHIFT") render whole on the square cap
+        stw = json.loads(json.dumps(st16))
+        stw["buttons"][1]["binding"] = {"kind": "key", "code": "ShiftLeft"}
+        page.evaluate("(s) => __msg({type: 'state', ...s})", stw)
+        page.wait_for_timeout(350)
+        word = page.evaluate("""(() => {
+          const cap = nodes.get('button.2').el.querySelector('.keycap');
+          const g = cap.querySelector('.kglyph');
+          return {txt: g.textContent, word: cap.classList.contains('word'),
+                  fits: g.scrollWidth <= cap.clientWidth
+                        && g.scrollHeight <= cap.clientHeight};
+        })()""")
+        check("ShiftLeft renders as the whole word L SHIFT",
+              word["txt"] == "L SHIFT" and word["word"], str(word))
+        check("the word fits inside the square keycap", word["fits"],
+              str(word))
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st16)
+        page.wait_for_timeout(350)
+
+        # the level LED sits at the card's RIGHT-HAND CENTER and the
+        # bin-out handle is fixed exactly in line with it (07-24: the ◉
+        # heartbeat icon is gone — the LED is the out-side indicator)
+        led16 = page.evaluate("""(() => {
+          rerouteAll();   // measure a settled layout, not a mid-shove one
           const n = nodes.get('button');
+          const led = n.el.querySelector('.gled.side');
           const H = n.lay.handles.find(h => h.sig === 'bin'
                                             && h.side === 'out');
-          const el = n.fireIcon;
-          if (!H || !el) return null;
-          const ix = n.el.offsetLeft + el.offsetLeft + 6;
-          const iy = n.el.offsetTop + el.offsetTop + 6;
-          return {d: Math.hypot(ix - H.x, iy - H.y),
-                  inX: el.offsetLeft >= 0
-                       && el.offsetLeft + 12 <= n.el.offsetWidth,
-                  inY: el.offsetTop >= 0
-                       && el.offsetTop + 12 <= n.el.offsetHeight};
+          if (!led || !H) return null;
+          const r = n.el.getBoundingClientRect(),
+                lr = led.getBoundingClientRect();
+          const ly = lr.top + lr.height / 2 - r.top;
+          return {noIcon: !n.el.querySelector('.fireicon'),
+                  right: lr.left - r.left > r.width * 0.7,
+                  centered: Math.abs(ly - r.height / 2) < 3,
+                  edge: H.edge,
+                  // offset coords on BOTH sides (rects carry the zoom)
+                  hy: Math.abs((H.y - n.el.offsetTop)
+                               - n.el.offsetHeight / 2)};
         })()""")
-        check("fire icon sits next to the out handle (<24px)",
-              fi is not None and fi["d"] < 24, str(fi))
-        check("fire icon stays inside the card", fi is not None
-              and fi["inX"] and fi["inY"], str(fi))
+        check("button LED sits at the right-hand center of the card",
+              led16 is not None and led16["noIcon"] and led16["right"]
+              and led16["centered"], str(led16))
+        check("bin-out handle is fixed at the right edge, in line with "
+              "the LED", led16 is not None and led16["edge"] == "R"
+              and led16["hy"] < 3, str(led16))
 
-        # pressing pulses BOTH the keycap and the fire icon (rising edge)
+        # pressing pulses BOTH the keycap and the right-center LED
         pulsed = page.evaluate("""(() => {
           const n = nodes.get('button');
           const cap = n.el.querySelector('.keycap');
           cap.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}));
           const out = {cap: cap.classList.contains('pulse'),
-                       icon: n.fireIcon.classList.contains('pulse')};
+                       led: n.sideLed.classList.contains('pulse')};
           cap.dispatchEvent(new PointerEvent('pointerup', {bubbles: true}));
           return out;
         })()""")
-        check("press pulses keycap + heartbeat icon",
-              pulsed["cap"] and pulsed["icon"], str(pulsed))
+        check("press pulses keycap + right-center LED",
+              pulsed["cap"] and pulsed["led"], str(pulsed))
 
         # arming flips the keycap to … and Escape restores it
         page.evaluate(
-            "nodes.get('button.2').el.querySelector('.bindline').click()")
+            "nodes.get('button.2').el.querySelector('.rebind').click()")
         armed = page.evaluate("""(() => {
           const n = nodes.get('button.2');
           return {cap: n.el.querySelector('.keycap').textContent,
-                  line: n.el.querySelector('.bindline').textContent};
+                  arming: n.el.querySelector('.rebind')
+                    .classList.contains('arming')};
         })()""")
-        check("arming shows … / press a key/CC…",
-              armed == {"cap": "…", "line": "press a key/CC…"}, str(armed))
+        check("arming shows … on the keycap + lights the ↻",
+              armed == {"cap": "…", "arming": True}, str(armed))
         page.keyboard.press("Escape")
         page.wait_for_timeout(60)
         armed = page.evaluate("""(() => {
           const n = nodes.get('button.2');
           return {cap: n.el.querySelector('.keycap').textContent,
-                  line: n.el.querySelector('.bindline').textContent};
+                  arming: n.el.querySelector('.rebind')
+                    .classList.contains('arming')};
         })()""")
-        check("Escape cancels pairing back to ＋ / pair…",
-              armed == {"cap": "＋", "line": "pair…"}, str(armed))
+        check("Escape cancels pairing back to ＋",
+              armed == {"cap": "＋", "arming": False}, str(armed))
 
         # clock multi-bar: the extended ladder cycles through the chip —
         # from the ladder's end (1/32) one click wraps to 8/1
@@ -1968,16 +2014,22 @@ def main():
         check("state.relays builds a Relay card now (GUI pass B)",
               page.evaluate("nodes.has('relay')"))
 
-        # the Logic card @AND: op chip, TWO named SINGLE-INPUT ins riding
-        # A/B pin labels, one bin out, an unlit LED, the circuit canvas
+        # the Logic card @AND (07-24 rework): NO title/sub — the ORANGE
+        # banner carries the clickable circuit selector; TWO named SINGLE-
+        # INPUT ins riding A/B pin labels, one bin out FIXED at the right
+        # edge's center, the right-center LED, the circuit canvas
         lg17 = page.evaluate("""(() => {
           const n = nodes.get('logic');
           if (!n) return null;
           const pins = [...n.el.querySelectorAll('.lpin')];
           const ins = n.ports.filter(p => p.sig === 'bin' && p.dir === 'in');
+          const head = n.el.querySelector('.head');
           return {size: n.size,
-                  sub: (n.el.querySelector('.sub')||{}).textContent,
-                  led: !!n.el.querySelector('.gled'),
+                  banner: head.classList.contains('banner'),
+                  bg: head.style.background,
+                  noTitle: !n.el.querySelector('.title'),
+                  opsel: (n.el.querySelector('.opsel')||{}).textContent,
+                  led: !!n.el.querySelector('.gled.side'),
                   ledOn: n.el.querySelector('.gled')
                     && n.el.querySelector('.gled').classList.contains('on'),
                   canvas: !!n.el.querySelector('canvas.lvz'),
@@ -1994,13 +2046,31 @@ def main():
                   ["logic:b", "B", True, True, False, True]], str(lg17))
         check("logic@AND: A/B pin labels ride the circuit viz",
               lg17 and lg17["pins"] == ["A", "B"], str(lg17))
-        check("logic has ONE bin out + head LED (unlit) + circuit canvas",
-              lg17 and lg17["outs"] == 1 and lg17["led"]
+        check("logic has ONE bin out + right-center LED (unlit) + circuit "
+              "canvas", lg17 and lg17["outs"] == 1 and lg17["led"]
               and lg17["ledOn"] is False and lg17["canvas"], str(lg17))
-        check("logic sub shows the current op", lg17
-              and lg17["sub"] == "AND · binary logic", str(lg17))
+        check("logic head is an ORANGE banner with NO title",
+              lg17 and lg17["banner"] and lg17["noTitle"]
+              and "binlatch" in lg17["bg"], str(lg17))
+        check("banner circuit selector shows the current op", lg17
+              and lg17["opsel"] == "AND", str(lg17))
         check("logic card sizes to XS (opted in, pass B)",
               lg17 and lg17["size"] == "XS", str(lg17))
+
+        # the logic out handle sits at the right edge's CENTER, in line
+        # with the right-center LED (Cole, 07-24)
+        lgout = page.evaluate("""(() => {
+          rerouteAll();   // measure a settled layout, not a mid-shove one
+          const n = nodes.get('logic');
+          const H = n.lay.handles.find(h => h.sig === 'bin'
+                                            && h.side === 'out');
+          return H && {edge: H.edge,
+                       dy: Math.abs((H.y - n.el.offsetTop)
+                                    - n.el.offsetHeight / 2)};
+        })()""")
+        check("logic out handle fixed at right-center (LED-aligned)",
+              bool(lgout) and lgout["edge"] == "R" and lgout["dy"] < 3,
+              str(lgout))
 
         # the A and B in-handles land on SEPARATE lines (per-pin rows)
         aby = page.evaluate("""(() => {
@@ -2075,42 +2145,58 @@ def main():
           __msg({type: 'midi', event: {kind: 'gate', id: 'logic', on: false}});
         }""")
 
-        # button cards: mode chip from latch, head level LED from on
+        # button cards (07-24): the banner IS the mode readout — yellow
+        # momentary / orange latch, MOM|LATCH segmented toggle, tiny BTN
+        # tag, NO title/sub; the level LED (right-center) seeds from on
         bt17 = page.evaluate("""(() => {
           const g = (gid) => {
             const n = nodes.get(gid);
-            const chip = [...n.el.querySelectorAll('label')]
-              .find(l => l.title === 'mode')
-              .parentElement.querySelector('.chip');
-            return {mode: chip.textContent,
-                    led: n.el.querySelector('.gled')
+            const head = n.el.querySelector('.head');
+            const seg = n.el.querySelector('.modeseg');
+            return {banner: head.classList.contains('banner'),
+                    bg: head.style.background,
+                    noTitle: !n.el.querySelector('.title'),
+                    noSub: !n.el.querySelector('.sub'),
+                    tag: (n.el.querySelector('.btntag')||{}).textContent,
+                    mom: seg.querySelector('.mom').classList.contains('on'),
+                    lat: seg.querySelector('.lat').classList.contains('on'),
+                    led: n.el.querySelector('.gled.side')
                       .classList.contains('on')};
           };
           return {b: g('button'), b2: g('button.2')};
         })()""")
-        check("mode chip reads momentary / persistent from latch",
-              bt17["b"]["mode"] == "momentary"
-              and bt17["b2"]["mode"] == "persistent", str(bt17))
-        check("button head LED seeds from settings.on",
+        check("momentary button wears the YELLOW banner, MOM lit",
+              bt17["b"]["banner"] and "--bin)" in bt17["b"]["bg"]
+              and bt17["b"]["mom"] and not bt17["b"]["lat"], str(bt17))
+        check("latch button wears the ORANGE banner, LATCH lit",
+              "binlatch" in bt17["b2"]["bg"] and bt17["b2"]["lat"]
+              and not bt17["b2"]["mom"], str(bt17))
+        check("button banner: BTN tag, no title/sub",
+              bt17["b"]["tag"] == "BTN" and bt17["b"]["noTitle"]
+              and bt17["b"]["noSub"], str(bt17))
+        check("button LED seeds from settings.on",
               bt17["b"]["led"] is False and bt17["b2"]["led"] is True,
               str(bt17))
 
-        # mode chip click sends set_button latch:true (then flip it back)
+        # MOM|LATCH toggle click sends set_button latch:true AND repaints
+        # the banner orange (then flip it back)
         page.evaluate("window.__sent.length = 0")
-        page.evaluate("""() => {
-          const n = nodes.get('button');
-          [...n.el.querySelectorAll('label')].find(l => l.title === 'mode')
-            .parentElement.querySelector('.chip').click();
-        }""")
+        page.evaluate(
+            "nodes.get('button').el.querySelector('.modeseg').click()")
         sent = page.evaluate("window.__sent")
-        check("mode chip cycles momentary→persistent (set_button latch)",
+        check("mode toggle momentary→latch (set_button latch)",
               {"type": "set_button", "id": "button", "latch": True} in sent,
               str(sent))
-        page.evaluate("""() => {
-          const n = nodes.get('button');
-          [...n.el.querySelectorAll('label')].find(l => l.title === 'mode')
-            .parentElement.querySelector('.chip').click();
-        }""")
+        check("mode toggle repaints the banner orange + lights LATCH",
+              page.evaluate("""(() => {
+                const n = nodes.get('button');
+                return n.el.querySelector('.head').style.background
+                         .includes('binlatch')
+                       && n.el.querySelector('.modeseg .lat')
+                         .classList.contains('on');
+              })()"""))
+        page.evaluate(
+            "nodes.get('button').el.querySelector('.modeseg').click()")
 
         # a latch (persistent) button's keycap CLICK sends fire_button —
         # no down/up pair (the server toggles the level)
@@ -2140,7 +2226,7 @@ def main():
         check("gate event on:true lights the button LED", page.evaluate(
             "nodes.get('button.2').el.querySelector('.gled')"
             ".classList.contains('on')"))
-        check("button card (mode row + keycap) still sizes to XS",
+        check("button card (banner + keycap) still sizes to XS",
               page.evaluate("nodes.get('button').size") == "XS")
 
         # grammar: ONE bin branch — accepts pwr/deck/logic-named-ins/
@@ -2192,16 +2278,13 @@ def main():
         check("logic self-wire refused", not acts17["logicSelf"],
               str(acts17))
 
-        # op chip cycles AND→OR and sends set_logic
+        # the banner circuit selector cycles AND→OR and sends set_logic
         page.evaluate("window.__sent.length = 0")
-        page.evaluate("""() => {
-          const n = nodes.get('logic');
-          [...n.el.querySelectorAll('label')].find(l => l.title === 'op')
-            .parentElement.querySelector('.chip').click();
-        }""")
+        page.evaluate(
+            "nodes.get('logic').el.querySelector('.opsel').click()")
         page.wait_for_timeout(120)
         sent = page.evaluate("window.__sent")
-        check("op chip cycles + sends set_logic AND→OR",
+        check("circuit selector cycles + sends set_logic AND→OR",
               {"type": "set_logic", "id": "logic", "op": "OR"} in sent,
               str(sent))
 
@@ -2514,6 +2597,19 @@ def main():
         check("relay title/sub read Relay · signal relay · 4 circuits",
               rl18["name"] == "Rly"
               and rl18["sub"] == "signal relay · 4 circuits", str(rl18))
+        # banner colors across the binary plane (Cole, 07-24): sources
+        # (clock/threshold) yellow, relay orange (logic checked in §17)
+        ban18 = page.evaluate("""(() => {
+          const bg = (gid) => {
+            const h = nodes.get(gid).el.querySelector('.head');
+            return h.classList.contains('banner') ? h.style.background : null;
+          };
+          return {clock: bg('clock'), relay: bg('relay')};
+        })()""")
+        check("clock banner yellow, relay banner orange",
+              ban18["clock"] and "--bin)" in ban18["clock"]
+              and ban18["relay"] and "binlatch" in ban18["relay"],
+              str(ban18))
         check("circuit handles pair vertically (in k above out k)",
               rl18["p1"] and rl18["p1"]["ix"] == rl18["p1"]["ox"]
               and rl18["p3"] and rl18["p3"]["ix"] == rl18["p3"]["ox"]
