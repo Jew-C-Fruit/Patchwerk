@@ -53,7 +53,11 @@ def snapshot(app) -> dict:
             "beats_per_bar": app.transport.beats_per_bar,
             "click": app.transport.click_enabled,
             "accent": app.transport.click_accent,
+            "downbeat": app.transport.downbeat,
         },
+        # item 9: which transport CARDS sit on the canvas (empty default;
+        # presence only — the endpoints/wires are the global transport's)
+        "transport_cards": sorted(getattr(app, "transport_cards", [])),
         "arp": {k: v for k, v in (app.arp.settings() if app.arp else {}).items()
                 if k not in ("patterns", "divisions")},
         "drone": {k: v for k, v in app._legacy_drone_settings().items()
@@ -117,10 +121,17 @@ def _apply(app, data: dict) -> None:
         if data.get("patch") and data["patch"] != app.patch_name:
             app._build_patch(data["patch"])
 
-        # 2. Transport
+        # 2. Transport (+ item 9: card presence — old presets simply lack
+        #    the key, so they restore to no cards)
         t = data.get("transport", {})
         app.set_transport(bpm=t.get("bpm"), beats_per_bar=t.get("beats_per_bar"),
-                          click=t.get("click"), accent=t.get("accent"))
+                          click=t.get("click"), accent=t.get("accent"),
+                          downbeat=t.get("downbeat"))
+        for which in data.get("transport_cards", []):
+            try:
+                app.spawn_transport_card(which)
+            except (ValueError, AttributeError):
+                pass  # unknown card name in a foreign preset — skip
 
         # 3. Tonic derivers, then the legacy drone pair (enable state
         #    spawns/despawns its compat instance)

@@ -117,6 +117,25 @@ Current coverage:
      claimed, a little + right of the 4th slot latches the next wire
      onto circuit 5 ("relay:5"), whose claim expands the card to S
      (Cole, 07-24).
+  19. Transport cards (item 9, 07-24): a top-line "transport" palette
+     section (after LOGIC) spawning canvas VIEWS of the ONE global
+     transport (spawn_transport_card play/tempo; cards build from
+     state.transport_cards; kill = remove_transport_card). Play/Stop
+     ("tplay", XS): ONE big bold button showing the CURRENT state — red
+     ⏹ STOP stopped / green ⏵ PLAY running — whose click toggles via
+     set_transport {playing}; a quiet bin LEVEL-in "run" →
+     "transport:run". Tempo/Click ("ttempo", M): tempo slider (40–220,
+     the top bar's mapping), TIME SIG detents mirroring the top bar's
+     meter select, DOWNBEAT detents re-derived from the CURRENT meter
+     (text "beat N", 1-based), click+accent power-LED toggles with quiet
+     bin level-ins ("transport:click"/":accent"), a quiet bin TRIG-in
+     "tap" ("transport:tap") riding the tempo row, and the LIVE
+     metronome strip (one dot per beat, current lit via the "beat"
+     broadcast, downbeat dot bigger/accented). Cards and top bar send
+     the SAME set_transport messages and both follow the state
+     broadcast; the endpoints are fan-in; wires cut via ctl_wire
+     remove; old servers (no transport_cards/downbeat) render no cards
+     and no errors.
 """
 
 import glob
@@ -1482,7 +1501,8 @@ def main():
         }))()""")
         check("palette top-line sections in order",
               pal["h3"] == ["allocation", "control", "triggers", "logic",
-                            "voices", "fx", "monitors"], str(pal["h3"]))
+                            "transport", "voices", "fx", "monitors"],
+              str(pal["h3"]))
         for sub in ("extractors", "psines", "drone", "filters",
                     "time & space"):
             check(f"palette subsection: {sub}", sub in pal["h4"],
@@ -2752,6 +2772,349 @@ def main():
               {"type": "remove_relay", "id": "relay"}
               in page.evaluate("window.__sent"),
               str(page.evaluate("window.__sent")))
+
+        # ================================================================
+        # 19 — transport cards (item 9): canvas views of the ONE global
+        # transport — Play/Stop + Tempo/Click, lockstep with the top bar
+        # ================================================================
+        st19 = base_state(
+            [sg, echo],
+            [{"from": "signal_gen", "to": "echo"},
+             {"from": "echo", "to": "master"}],
+            ctl_wires=[{"from": "button", "to": "transport:run"},
+                       {"from": "clock", "to": "transport:tap"}],
+            buttons=[{"id": "button", "binding": None, "armed": False,
+                      "latch": False, "on": False}],
+            clocks=[{"id": "clock", "division": "1/4",
+                     "divisions": ["1/4", "1/8"]}],
+            transport_cards=["play", "tempo"],
+            transport={"bpm": 120, "beats_per_bar": 3, "click": True,
+                       "accent": True, "downbeat": 1, "running": False,
+                       "divisions": ["1/4", "1/8"]})
+        page.evaluate("posMem = {}; relayAW = [];")
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st19)
+        page.wait_for_timeout(500)
+
+        # ---- palette: a top-line transport section after LOGIC ---------
+        hs19 = page.evaluate(
+            "[...document.querySelectorAll('#palette h3')]"
+            ".map(h => h.textContent)")
+        check("palette grows a 'transport' section right after logic",
+              "transport" in hs19 and
+              hs19.index("transport") == hs19.index("logic") + 1, str(hs19))
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("""() => {
+          const bs = [...document.querySelectorAll('#palette button')];
+          bs.find(b => b.textContent === 'Play/Stop').click();
+          bs.find(b => b.textContent === 'Tempo/Click').click();
+        }""")
+        sent = page.evaluate("window.__sent")
+        check("palette Play/Stop sends spawn_transport_card play",
+              {"type": "spawn_transport_card", "which": "play"} in sent,
+              str(sent))
+        check("palette Tempo/Click sends spawn_transport_card tempo",
+              {"type": "spawn_transport_card", "which": "tempo"} in sent,
+              str(sent))
+
+        # ---- cards build from state.transport_cards --------------------
+        got19 = page.evaluate("""(() => {
+          const tp = nodes.get('tplay'), tt = nodes.get('ttempo');
+          return tp && tt && {
+            tp: [tp.size, tp.el.offsetWidth, tp.el.offsetHeight],
+            tt: [tt.size, tt.el.offsetWidth, tt.el.offsetHeight]};
+        })()""")
+        check("both transport cards render from the payload",
+              bool(got19), str(got19))
+        check("Play/Stop measures XS (allowXS, 72x72)",
+              got19 and got19["tp"] == ["XS", 72, 72], str(got19))
+        check("Tempo/Click measures M (5 rows + metronome strip)",
+              got19 and got19["tt"] == ["M", 160, 160], str(got19))
+
+        # ---- Play/Stop: the button shows the CURRENT state -------------
+        pb = page.evaluate("""(() => {
+          const b = nodes.get('tplay').el.querySelector('.tpbtn');
+          return {txt: b.textContent, stopped: b.classList.contains('stopped'),
+                  playing: b.classList.contains('playing'),
+                  color: getComputedStyle(b).color,
+                  bold: getComputedStyle(b).fontWeight};
+        })()""")
+        check("stopped payload → bold red ⏹ STOP",
+              pb["stopped"] and not pb["playing"] and "⏹" in pb["txt"]
+              and "STOP" in pb["txt"] and pb["color"] == "rgb(227, 73, 72)"
+              and int(pb["bold"]) >= 700, str(pb))
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("nodes.get('tplay').el.querySelector('.tpbtn').click()")
+        check("button click toggles: set_transport playing:true",
+              {"type": "set_transport", "playing": True}
+              in page.evaluate("window.__sent"),
+              str(page.evaluate("window.__sent")))
+        st19b = json.loads(json.dumps(st19))
+        st19b["transport"]["running"] = True
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st19b)
+        page.wait_for_timeout(400)
+        pb = page.evaluate("""(() => {
+          const b = nodes.get('tplay').el.querySelector('.tpbtn');
+          return {txt: b.textContent, playing: b.classList.contains('playing'),
+                  color: getComputedStyle(b).color};
+        })()""")
+        check("playing payload → green ⏵ PLAY (follows state.transport)",
+              pb["playing"] and "⏵" in pb["txt"] and "PLAY" in pb["txt"]
+              and pb["color"] == "rgb(27, 175, 122)", str(pb))
+
+        # ---- tempo slider: the top bar's 40–220 mapping ----------------
+        page.evaluate("nodes.get('ttempo').el.scrollIntoView("
+                      "{block: 'center', inline: 'center'})")
+        page.wait_for_timeout(150)
+        g19 = slider_geom(page, "ttempo", "tempo")
+        check("tempo slider seeds from the payload (120 bpm → u 0.444)",
+              abs(g19["thumb"] - (120 - 40) / 180) < 0.01, str(g19))
+        page.evaluate("window.__sent.length = 0")
+        page.mouse.move(g19["x"], g19["y"])
+        page.mouse.down()
+        page.mouse.move(g19["x"] + g19["w"] * g19["zoom"] * 0.25, g19["y"],
+                        steps=8)
+        page.mouse.up()
+        page.wait_for_timeout(150)
+        sent = page.evaluate("window.__sent.filter("
+                             "m => m.type === 'set_transport' && 'bpm' in m)")
+        check("tempo drag +25% sends set_transport bpm ≈ 165 (throttled)",
+              sent and abs(sent[-1]["bpm"] - 165) <= 3
+              and all(float(m["bpm"]).is_integer() for m in sent), str(sent))
+
+        # ---- time sig + downbeat step sliders --------------------------
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st19b)
+        page.wait_for_timeout(400)
+        rows19 = page.evaluate("""(() => {
+          const n = nodes.get('ttempo');
+          const row = (label) => {
+            const r = [...n.el.querySelectorAll('.mini.stepped')].find(
+              x => (x.querySelector('label')||{}).title === label);
+            return r && {dets: r.querySelectorAll('.det').length,
+                         v: r.querySelector('.v').textContent};
+          };
+          const bar = [...document.querySelectorAll('#meter option')];
+          return {ts: row('time sig'), db: row('downbeat'),
+                  barVals: bar.map(o => +o.value),
+                  barLabels: bar.map(o => o.textContent)};
+        })()""")
+        check("time sig detents mirror the top bar's meter select",
+              rows19["ts"] and rows19["ts"]["dets"] == len(rows19["barVals"])
+              and rows19["ts"]["v"] == "3/4", str(rows19))
+        check("downbeat detents follow the meter (3/4 → 3), 1-based text",
+              rows19["db"] and rows19["db"]["dets"] == 3
+              and rows19["db"]["v"] == "beat 2", str(rows19))
+
+        def step_drag(label, detents, gaps):
+            return page.evaluate("""(([label, k, gaps]) => {
+              window.__sent.length = 0;
+              const n = nodes.get('ttempo');
+              const row = [...n.el.querySelectorAll('.mini.stepped')].find(
+                x => (x.querySelector('label')||{}).title === label);
+              const track = row.querySelector('.track');
+              const zs = parseFloat(world.style.zoom) || 1;
+              const per = (track.offsetWidth || 1) / gaps;
+              const ev = (type, x) => track.dispatchEvent(new PointerEvent(
+                type, {pointerId: 9, clientX: x, clientY: 0, bubbles: true}));
+              ev('pointerdown', 500);
+              for (let s = 1; s <= 4; s++)
+                ev('pointermove', 500 + (k * per * zs) * s / 4);
+              ev('pointerup', 500 + k * per * zs);
+              return window.__sent.filter(m => m.type === 'set_transport');
+            })""", [label, detents, gaps])
+
+        sent = step_drag("time sig", 1, 3)   # 4 detents → 3 gaps; 3/4 → 4/4
+        check("time sig +1 detent sends set_transport beats_per_bar 4",
+              sent and sent[-1] == {"type": "set_transport",
+                                    "beats_per_bar": 4}, str(sent))
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st19b)
+        page.wait_for_timeout(400)
+        sent = step_drag("downbeat", 1, 2)   # 3 detents → 2 gaps; beat 2 → 3
+        check("downbeat +1 detent sends set_transport downbeat 2",
+              sent and sent[-1] == {"type": "set_transport", "downbeat": 2},
+              str(sent))
+        st19c = json.loads(json.dumps(st19b))
+        st19c["transport"]["beats_per_bar"] = 4
+        st19c["transport"]["downbeat"] = 0
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st19c)
+        page.wait_for_timeout(400)
+        redet = page.evaluate("""(() => {
+          const n = nodes.get('ttempo');
+          const row = [...n.el.querySelectorAll('.mini.stepped')].find(
+            x => (x.querySelector('label')||{}).title === 'downbeat');
+          return {dets: row.querySelectorAll('.det').length,
+                  v: row.querySelector('.v').textContent,
+                  dots: n.el.querySelectorAll('.metrostrip i').length};
+        })()""")
+        check("meter change re-derives the downbeat detents (4/4 → 4)",
+              redet["dets"] == 4 and redet["v"] == "beat 1"
+              and redet["dots"] == 4, str(redet))
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st19b)
+        page.wait_for_timeout(400)
+
+        # ---- click + accent power-LED toggles --------------------------
+        page.evaluate("window.__sent.length = 0")
+        leds19 = page.evaluate("""(() => {
+          const n = nodes.get('ttempo');
+          const led = (label) => [...n.el.querySelectorAll('.mini')].find(
+            x => (x.querySelector('label')||{}).title === label)
+            .querySelector('.onoff');
+          const c = led('click'), a = led('accent');
+          const lit = [c.classList.contains('on'), a.classList.contains('on')];
+          c.click(); a.click();
+          return {lit, sent: window.__sent};
+        })()""")
+        check("click + accent LEDs seed lit from the payload",
+              leds19["lit"] == [True, True], str(leds19))
+        check("LED clicks send set_transport click:false / accent:false",
+              {"type": "set_transport", "click": False} in leds19["sent"]
+              and {"type": "set_transport", "accent": False}
+              in leds19["sent"], str(leds19))
+
+        # ---- quiet endpoint handles + payload wires --------------------
+        eps19 = page.evaluate("""(() => {
+          const tp = nodes.get('tplay'), tt = nodes.get('ttempo');
+          const q = (n, ep) => { const p = n.ports.find(x => x.ep === ep);
+            return p && [p.dir, p.sig, !!p.quiet, !!p.single,
+                         portAllowsPlus(p)]; };
+          const w = (pred) => { const x = wires.find(pred);
+            return x && {sig: x.sig, binFam: LINES.bin.includes(x.color),
+                         cut: !!x.cutAction}; };
+          return {run: q(tp, 'transport:run'), tap: q(tt, 'transport:tap'),
+                  click: q(tt, 'transport:click'),
+                  accent: q(tt, 'transport:accent'),
+                  wRun: w(x => x.from.node.gid === 'button'
+                              && x.to.port.ep === 'transport:run'),
+                  wTap: w(x => x.from.node.gid === 'clock'
+                              && x.to.port.ep === 'transport:tap')};
+        })()""")
+        for ep in ("run", "tap", "click", "accent"):
+            check(f"quiet fan-in bin handle carries transport:{ep}",
+                  eps19[ep] == ["in", "bin", True, False, True], str(eps19))
+        check("payload wires land on the transport handles (bin family)",
+              eps19["wRun"] and eps19["wRun"]["binFam"]
+              and eps19["wRun"]["cut"]
+              and eps19["wTap"] and eps19["wTap"]["binFam"], str(eps19))
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("""() => {
+          wires.find(x => x.from.node.gid === 'button'
+                          && x.to.port.ep === 'transport:run').cutAction();
+        }""")
+        check("cutting the run wire sends the targeted ctl_wire remove",
+              {"type": "ctl_wire", "action": "remove", "from": "button",
+               "to": "transport:run"} in page.evaluate("window.__sent"),
+              str(page.evaluate("window.__sent")))
+
+        # ---- grammar: bin lands on the transport ins, audio refused ----
+        gram19 = page.evaluate("""(() => {
+          const tp = nodes.get('tplay'), clk = nodes.get('clock');
+          const sgN = nodes.get('m:signal_gen');
+          const run = {node: tp,
+                       port: tp.ports.find(p => p.ep === 'transport:run')};
+          window.__sent.length = 0;
+          const act = connectAction({node: clk,
+            port: clk.ports.find(p => p.sig === 'bin' && p.dir === 'out')},
+            run);
+          if (act) act();
+          const bad = connectAction({node: sgN,
+            port: sgN.ports.find(p => p.sig === 'audio' && p.dir === 'out')},
+            run);
+          return {ok: !!act, bad: !!bad, sent: window.__sent};
+        })()""")
+        check("clock bin-out → transport:run connects (ctl_wire add)",
+              gram19["ok"] and
+              {"type": "ctl_wire", "action": "add", "from": "clock",
+               "to": "transport:run"} in gram19["sent"], str(gram19))
+        check("audio-out → transport:run refused", not gram19["bad"],
+              str(gram19))
+
+        # ---- live metronome: the beat broadcast moves the strip --------
+        met19 = page.evaluate("""(() => {
+          const n = nodes.get('ttempo');
+          const dots = () => [...n.el.querySelectorAll('.metrostrip i')].map(
+            d => [d.classList.contains('lit'), d.classList.contains('db'),
+                  d.offsetWidth]);
+          __msg({type: 'beat', bar: 0, beat: 0, downbeat: false, loop: null});
+          const b0 = dots();
+          __msg({type: 'beat', bar: 0, beat: 1, downbeat: true, loop: null});
+          const b1 = dots();
+          return {b0, b1};
+        })()""")
+        check("beat 0 lights dot 0 only",
+              [d[0] for d in met19["b0"]] == [True, False, False],
+              str(met19))
+        check("beat 1 moves the light to the DOWNBEAT dot (accented, bigger)",
+              [d[0] for d in met19["b1"]] == [False, True, False]
+              and met19["b1"][1][1] and met19["b1"][1][2] > met19["b1"][0][2],
+              str(met19))
+
+        # ---- screenshots for Cole --------------------------------------
+        # fresh broadcast first: the LED test-clicks left local echoes
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st19b)
+        page.wait_for_timeout(400)
+        page.evaluate("""() => {
+          __msg({type: 'beat', bar: 0, beat: 1, downbeat: true, loop: null});
+          // frame BOTH cards (+ the top bar): sit them side by side in the
+          // first free block pair, then scroll to their midpoint
+          const tp = nodes.get('tplay'), tt = nodes.get('ttempo');
+          const occ = occOf(currentPos(null));
+          const free = (bx, by) => ['top', 'bottom'].every(v =>
+            ['left', 'right'].every(h =>
+              occ.get(`${bx},${by},${v},${h}`) === undefined));
+          outer:
+          for (let by = 0; by < BY; by++)
+            for (let bx = 0; bx + 1 < BX; bx++)
+              if (free(bx, by) && free(bx + 1, by)) {
+                tp.bx = bx; tp.by = by; tp.half = 'top'; tp.hh = 'left';
+                tt.bx = bx + 1; tt.by = by; tt.half = null; tt.hh = null;
+                place(tp); place(tt); rerouteAll();
+                break outer;
+              }
+          const bd = document.getElementById('board');
+          const zs = parseFloat(world.style.zoom) || 1;   // scroll is VISUAL px
+          const mid = (n) => ({x: n.x + n.el.offsetWidth / 2,
+                               y: n.y + n.el.offsetHeight / 2});
+          const A = mid(tp), B = mid(tt);
+          bd.scrollLeft = ((A.x + B.x) / 2) * zs - bd.clientWidth / 2;
+          bd.scrollTop = ((A.y + B.y) / 2) * zs - bd.clientHeight / 2;
+        }""")
+        page.wait_for_timeout(200)
+        page.screenshot(path="/tmp/t9_board.png")
+        page.evaluate("nodes.get('ttempo').el.scrollIntoView("
+                      "{block: 'center', inline: 'center'})")
+        page.wait_for_timeout(150)
+        clip19 = page.evaluate("""(() => {
+          const b = nodes.get('ttempo').el.getBoundingClientRect();
+          const x = Math.max(0, b.x - 16), y = Math.max(0, b.y - 16);
+          return {x, y, width: Math.min(innerWidth - x, b.width + 32),
+                  height: Math.min(innerHeight - y, b.height + 32)};
+        })()""")
+        page.screenshot(path="/tmp/t9_tempo.png", clip=clip19)
+
+        # ---- kill ------------------------------------------------------
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("""() => {
+          nodes.get('tplay').el.querySelector('.kill').click();
+          nodes.get('ttempo').el.querySelector('.kill').click();
+        }""")
+        sent = page.evaluate("window.__sent")
+        check("kills send remove_transport_card play / tempo",
+              {"type": "remove_transport_card", "which": "play"} in sent
+              and {"type": "remove_transport_card", "which": "tempo"}
+              in sent, str(sent))
+
+        # ---- old servers: no transport_cards/downbeat → no cards -------
+        err0 = len(errors)
+        st_old = base_state(
+            [sg, echo],
+            [{"from": "signal_gen", "to": "echo"},
+             {"from": "echo", "to": "master"}])
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st_old)
+        page.wait_for_timeout(400)
+        old19 = page.evaluate(
+            "[nodes.has('tplay'), nodes.has('ttempo')]")
+        check("old-server state renders NO transport cards, no errors",
+              old19 == [False, False] and len(errors) == err0,
+              str([old19, errors[err0:]]))
 
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()

@@ -29,7 +29,7 @@ from .threshold import ThresholdManager
 from .scope import Scope
 from .looper import Looper
 from . import presets as presets_mod
-from .transport import Transport, _click
+from .transport import TapTempo, Transport, _click
 from .audio_devices import list_audio_devices
 from .engine import Engine
 from .master import MasterSection
@@ -54,6 +54,11 @@ PATCHES_DIR = REPO_ROOT / "patches"
 # guard prevents replayed notes from re-recording.
 CTL_SOURCES = ("keys", "arp", "deck")
 CTL_TARGETS = ("arp", "deck")
+
+# item 9: the transport CARDS — canvas views of the ONE global transport
+# ("play" = stop/play, "tempo" = tempo/click). Presence only: the wire
+# endpoints (transport:run/click/accent/tap) live on the GLOBAL transport.
+TRANSPORT_CARDS = ("play", "tempo")
 
 
 def default_ctl_wires() -> list[dict]:
@@ -281,6 +286,12 @@ class SynthApp:
         self.arp: Arpeggiator | None = None
         self._arp_settings: dict = {}  # persists across patch switches
         self.transport = Transport()
+        self._tap_tempo = TapTempo()   # "transport:tap" trig-in state
+        # item 9: transport CARDS on the canvas — a subset of
+        # TRANSPORT_CARDS. Card and top-bar are two views of the one
+        # global transport, kept in lockstep by the state broadcast;
+        # removing a card never unwires the transport's endpoints.
+        self.transport_cards: set[str] = set()
         # v5: tonic derivers (spawnable ctl nodes) replace the DroneBrain.
         self.tonics: dict[str, TonicDeriver] = {}
         # v6 deriver split: literal derivers (deterministic extract/place)
@@ -1337,11 +1348,11 @@ class SynthApp:
         """Runs on the transport's beat thread."""
         if self.transport.click_enabled and self.engine and self.engine.root_group:
             try:
-                hi = beat == 0 and self.transport.click_accent
+                hi = self.transport.accent_on(beat)
                 self.engine.root_group.add_synth(
                     _click,
                     add_action="add_to_tail",
-                    freq=2000 if hi else 1400,   # high tick on the 1 (toggleable)
+                    freq=2000 if hi else 1400,   # high tick on the downbeat
                     amp=0.3 if hi else 0.18,
                 )
             except Exception:  # noqa: BLE001
@@ -1474,7 +1485,7 @@ class SynthApp:
                 self.ctl_wires.append(w)
 
     def set_transport(self, bpm=None, beats_per_bar=None, click=None, accent=None,
-                      playing=None) -> None:
+                      playing=None, downbeat=None) -> None:
         if accent is not None:
             self.transport.click_accent = bool(accent)
         if playing is not None:
@@ -1492,9 +1503,43 @@ class SynthApp:
         if bpm is not None:
             self.transport.set_bpm(bpm)
         if beats_per_bar is not None:
-            self.transport.set_meter(beats_per_bar)
+            self.transport.set_meter(beats_per_bar)   # re-clamps downbeat
+        if downbeat is not None:
+            # AFTER set_meter so a combined meter+downbeat message clamps
+            # against the new bar length
+            self.transport.set_downbeat(downbeat)
         if click is not None:
             self.transport.click_enabled = bool(click)
+
+    # -- transport cards (item 9: canvas views of the GLOBAL transport) -----------
+
+    def spawn_transport_card(self, which: str) -> str:
+        """Put a transport card on the canvas ("play" = stop/play,
+        "tempo" = tempo/click). Idempotent — a card is PRESENCE, not
+        state: the transport stays global and single."""
+        with self._lock:
+            if which not in TRANSPORT_CARDS:
+                raise ValueError(f"unknown transport card {which!r}")
+            self.transport_cards.add(which)
+            return which
+
+    def remove_transport_card(self, which: str) -> None:
+        """Take a transport card off the canvas. Idempotent. The wire
+        endpoints (transport:run/click/accent/tap) belong to the GLOBAL
+        transport, not the card — existing wires persist and keep
+        applying after the card is gone."""
+        with self._lock:
+            if which not in TRANSPORT_CARDS:
+                raise ValueError(f"unknown transport card {which!r}")
+            self.transport_cards.discard(which)
+
+    def _transport_tap(self, now: float | None = None) -> None:
+        """One rising edge on "transport:tap". TEMPO ONLY — never touches
+        running or the beat phase beyond set_bpm's continuous re-anchor.
+        `now` is injectable for tests (defaults to time.monotonic())."""
+        bpm = self._tap_tempo.tap(now)
+        if bpm is not None:
+            self.set_transport(bpm=bpm)
 
     def stop(self) -> None:
         with self._lock:
@@ -1684,6 +1729,7 @@ class SynthApp:
                 "drums_target": self.drums.target,
                 "arp": self.arp.settings() if self.arp else None,
                 "transport": self.transport.settings(),
+                "transport_cards": sorted(self.transport_cards),
                 "drone": self._legacy_drone_settings(),
                 "drums": self.drums.settings(),
                 "looper": self.looper.settings(),
