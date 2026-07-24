@@ -1603,7 +1603,7 @@ function computeLayout(n) {
   const slotsOf = (p) => p.ws.length
     ? [...p.ws.map(w => ({ role: "wire", wire: w })),
        ...(portAllowsPlus(p.port) ? [{ role: "plus" }] : [])]
-    : [{ role: "empty" }];
+    : [{ role: p.port.plusSlot ? "plus" : "empty" }];   // relay expansion +
   for (const edge of ["L", "R", "T", "B"]) {
     const prim = byEdge[edge].filter(p => !p.isMod);
     const mod  = byEdge[edge].filter(p => p.isMod);
@@ -2436,8 +2436,10 @@ function renderHandles() {
       el.style.borderColor = "";
       if (H.role !== "wire") el.style.setProperty("--hc", SIG_CSS[H.sig] || "var(--mod)");
       const pn = H.port.param ? ` · ${H.port.param}` : "";
-      el.title = `${n.name}${pn} (${H.sig})` +
-        (H.role === "wire" ? " — drag to repatch" : H.quiet ? " — single source" : "");
+      el.title = H.port.plusSlot
+        ? `${n.name} — add a 5th circuit (expands the card)`
+        : `${n.name}${pn} (${H.sig})` +
+          (H.role === "wire" ? " — drag to repatch" : H.quiet ? " — single source" : "");
       el.dataset.hidx = HANDLE_LIST.length;
       H.el = el;
       HANDLE_LIST.push(H);
@@ -4453,6 +4455,15 @@ function buildRelayCard(r) {
                   lane: k, relayCirc: k, fixEdge: "T", fixFrac: frac});
     n.ports.push({dir: "out", sig, label: "out." + k, ep: `${gid}:${k}`,
                   lane: k, relayCirc: k, fixEdge: "B", fixFrac: frac});
+  }
+  if (!nine && used.length === 4) {
+    // all four XS slots claimed (Cole, 07-24): a little + to the RIGHT of
+    // the 4th slot (in side). Splicing to it latches the wire onto circuit
+    // 5 — the claim makes 5 circuits in use, so the card re-measures S and
+    // the wire lands on circuit 5's real handles.
+    n.ports.push({dir: "in", sig: "any", label: "in.5", ep: `${gid}:5`,
+                  lane: 5, relayCirc: 5, plusSlot: true,
+                  fixEdge: "T", fixFrac: (nCirc + 0.65) / (nCirc + 1)});
   }
   const btn = n.el.querySelector(".relaybtn");
   // the quiet binary control-in ("relay:ctl") rides the power button's line

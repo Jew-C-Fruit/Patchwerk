@@ -113,7 +113,10 @@ Current coverage:
      single-input bin level-in; AUTO-SIZE XS(4 circuits)↔S(9) from the
      circuits in use; audio hops (never in the RESOLVED state.wires)
      draw from the GUI-kept relayAW store, and every circuit wire cuts
-     with its kind's remove (ctl_wire / graph_wire).
+     with its kind's remove (ctl_wire / graph_wire). With all 4 XS slots
+     claimed, a little + right of the 4th slot latches the next wire
+     onto circuit 5 ("relay:5"), whose claim expands the card to S
+     (Cole, 07-24).
 """
 
 import glob
@@ -2409,11 +2412,25 @@ def main():
         check("memOf records the quadrant (5-tuple ending in hh)",
               len(mem18) == 5 and mem18[3] == "XS"
               and mem18[4] in ("left", "right"), str(mem18))
-        page.evaluate("""() => {
+        # move logic to the bottom-right quadrant of an EMPTY block (found
+        # from the far corner — layout variants never reach it), rebuild
+        spot = page.evaluate("""(() => {
+          const occ = occOf(currentPos(null));
+          for (let bx = BX - 1; bx >= 0; bx--)
+            for (let by = BY - 1; by >= 0; by--) {
+              const cells = [];
+              for (const v of ['top', 'bottom'])
+                for (const h of ['left', 'right'])
+                  cells.push(`${bx},${by},${v},${h}`);
+              if (!cells.some(c => occ.get(c) !== undefined))
+                return [bx, by];
+            }
+        })()""")
+        page.evaluate("""([bx, by]) => {
           const n = nodes.get('logic');   // a real move, then a rebuild:
-          n.bx = 5; n.by = 2; n.half = 'bottom'; n.hh = 'right';
+          n.bx = bx; n.by = by; n.half = 'bottom'; n.hh = 'right';
           place(n); saveLayout();
-        }""")
+        }""", spot)
         page.evaluate("(s) => __msg({type: 'state', ...s})", st18)
         page.wait_for_timeout(400)
         back = page.evaluate("""(() => {
@@ -2421,22 +2438,21 @@ def main():
           return [n.bx, n.by, n.half, n.size, n.hh,
                   posMem['logic'] || null];
         })()""")
+        want = [spot[0], spot[1], "bottom", "XS", "right"]
         check("a moved quadrant position survives the rebuild verbatim",
-              back[:5] == [5, 2, "bottom", "XS", "right"]
-              and back[5] == [5, 2, "bottom", "XS", "right"], str(back))
-        # a point 2u into block (5,2) = its top-left quadrant; 8u in = its
+              back[:5] == want and back[5] == want, str([back, want]))
+        # a point 2u into that block = its top-left quadrant; 8u in = its
         # bottom-right (occupied by logic → the OTHER half's quadrant)
+        px2 = page.evaluate(
+            "([bx,by]) => pxToSlotMem((bx*12+2+2)*16, (by*12+2+2)*16, 'XS')",
+            spot)
+        px8 = page.evaluate(
+            "([bx,by]) => pxToSlotMem((bx*12+2+8)*16, (by*12+2+8)*16, 'XS')",
+            spot)
         check("pxToSlotMem resolves XS drops at quadrant resolution",
-              page.evaluate(
-                  "pxToSlotMem((5*12+2+2)*16, (2*12+2+2)*16, 'XS')")
-              == [5, 2, "top", "XS", "left"]
-              and page.evaluate(
-                  "pxToSlotMem((5*12+2+8)*16, (2*12+2+8)*16, 'XS')")
-              == [5, 2, "top", "XS", "right"],
-              str([page.evaluate(
-                  "pxToSlotMem((5*12+2+2)*16, (2*12+2+2)*16, 'XS')"),
-                   page.evaluate(
-                  "pxToSlotMem((5*12+2+8)*16, (2*12+2+8)*16, 'XS')")]))
+              px2 == [spot[0], spot[1], "top", "XS", "left"]
+              and px8 == [spot[0], spot[1], "top", "XS", "right"],
+              str([px2, px8, spot]))
 
         # ---- Relay: palette spawn + the card itself -------------------
         page.evaluate("window.__sent.length = 0")
@@ -2683,6 +2699,50 @@ def main():
         page.wait_for_timeout(400)
         check("back to ≤4 in use → the relay re-measures XS",
               page.evaluate("nodes.get('relay').size") == "XS")
+
+        # ---- the expansion + (Cole, 07-24): 4 slots claimed on XS ------
+        check("no expansion + while XS has free circuits (2 in use)",
+              page.evaluate(
+                  "!nodes.get('relay').ports.some(p => p.plusSlot)"))
+        st18c = json.loads(json.dumps(st18))
+        st18c["relays"][0]["circuits"] = {
+            str(k): {"kind": "binary"} for k in range(1, 5)}
+        st18c["ctl_wires"] = [{"from": "button", "to": f"relay:{k}"}
+                              for k in range(1, 5)]
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st18c)
+        page.wait_for_timeout(400)
+        plus18 = page.evaluate("""(() => {
+          const n = nodes.get('relay');
+          const H = n.lay.handles.find(h => h.port.plusSlot);
+          const h4 = n.lay.handles.find(h => h.port.relayCirc === 4
+                                             && h.side === 'in'
+                                             && h.role === 'wire');
+          const clk = nodes.get('clock');
+          window.__sent.length = 0;
+          const act = connectAction(
+            {node: clk,
+             port: clk.ports.find(p => p.sig === 'bin' && p.dir === 'out')},
+            {node: n, port: n.ports.find(p => p.plusSlot)});
+          if (act) act();
+          return {size: n.size, role: H && H.role, edge: H && H.edge,
+                  rightOf4: !!(H && h4 && H.x > h4.x),
+                  cls: H && H.el.className, sent: window.__sent};
+        })()""")
+        check("XS + 4 circuits in use → a + appears right of the 4th slot",
+              plus18["size"] == "XS" and plus18["role"] == "plus"
+              and plus18["edge"] == "T" and plus18["rightOf4"]
+              and plus18["cls"] == "bhandle plus", str(plus18))
+        check("splicing to the + latches the wire onto circuit 5",
+              {"type": "ctl_wire", "action": "add", "from": "clock",
+               "to": "relay:5"} in plus18["sent"], str(plus18))
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st18b)
+        page.wait_for_timeout(400)
+        check("5 circuits in use → S face, the + is gone",
+              page.evaluate("nodes.get('relay').size") == "S"
+              and page.evaluate(
+                  "!nodes.get('relay').ports.some(p => p.plusSlot)"))
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st18)
+        page.wait_for_timeout(400)
 
         # ---- kill ------------------------------------------------------
         page.evaluate("window.__sent.length = 0")
