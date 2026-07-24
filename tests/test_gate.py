@@ -5,10 +5,13 @@ no MIDI.
 
 ONE hi/lo signal kind: sources own LEVELS, edges DERIVE from level
 changes, a ping is just a pulse (hi-then-lo) propagating through the
-graph. Covers: logic gates (named single-input ins :a/:b, NOT :a only,
-SR :set/:reset; bare-id dst refused; truth tables via latched buttons;
-unwired in = lo; steal-on-drop; op-swap wire drops + latch clear; SR
-protocol), the rising-edge trig system (momentary press fires once,
+graph. Covers: logic gates (EVERY op exposes exactly :a/:b — the shape
+never changes, so op swaps PRESERVE wires; NOR replaces NOT and acts as
+NOT with one wired in; the SR latch reads :a as SET / :b as RESET with
+reset winning, and starts lo entering AND leaving SR; bare-id dst
+refused; truth tables via latched buttons; unwired in = lo; steal-on-
+drop; migration: restore/configure map op "NOT"→"NOR", wires added to
+":set"/":reset" land on ":a"/":b"), the rising-edge trig system (momentary press fires once,
 latch fires on latch-on only, clock pulse ticks, attach-while-hi is not
 an edge), PING-THRU-LOGIC (a clock pulse passes an AND while the other
 leg is held hi), level ins (:pwr follows the level both ways incl.
@@ -168,8 +171,8 @@ def test_spawn_and_state():
     check("logic settings shape",
           ls == {"id": "logic", "op": "AND", "ops": list(GATE_OPS),
                  "out": False})
-    check("op list is the 5-op ladder ending in SR latch",
-          len(GATE_OPS) == 5 and GATE_OPS[-1] == "SR latch")
+    check("op list is AND/OR/NOR/XOR/SR latch (NOT is gone)",
+          GATE_OPS == ("AND", "OR", "NOR", "XOR", "SR latch"))
     rs = app.relays["relay"].settings()
     check("relay settings shape (open by default, no circuits yet)",
           rs == {"id": "relay", "closed": False, "circuits": {}})
@@ -230,13 +233,11 @@ def test_wire_grammar():
     check("stolen endpoint holds exactly one wire",
           sum(1 for w in app.ctl_wires if w["to"] == f"{lid}:a") == 1)
 
-    # NOT exposes :a only
-    app.set_logic(lid, op="NOT")
-    try:
-        app.set_ctl_wire("add", b1, f"{lid}:b")
-        check("NOT has no :b in", False)
-    except ValueError:
-        check("NOT has no :b in", True)
+    # the endpoint shape is :a/:b for EVERY op — NOR keeps :b too
+    app.set_logic(lid, op="NOR")
+    app.set_ctl_wire("add", b1, f"{lid}:b")
+    check("NOR keeps the :b in (two ins under every op)",
+          {"from": b1, "to": f"{lid}:b"} in app.ctl_wires)
 
     # a binary source can't land on a note sink
     try:
@@ -252,18 +253,15 @@ def test_truth_tables():
     app = SynthApp(use_midi=False, use_reload=False)
     lid = app.spawn_logic()
 
-    # unwired ins read lo — AND/OR/XOR sit lo; NOT of lo is hi (an honest
-    # inverter, unlike the old NOT-as-NOR-of-nothing)
+    # unwired ins read lo — AND/OR/XOR sit lo; NOR of nothing is hi
     for op in ("AND", "OR", "XOR"):
         app.set_logic(lid, op=op)
         check(f"unwired ins → lo under {op}", out(app, lid) is False)
+    app.set_logic(lid, op="NOR")
+    check("NOR of unwired (lo) ins is hi", out(app, lid) is True)
     app.set_logic(lid, op="SR latch")
-    check("unwired SR latch sits lo", out(app, lid) is False)
-    app.set_logic(lid, op="NOT")
-    check("NOT of an unwired (lo) in is hi", out(app, lid) is True)
-    # NOTE (backend behavior): swapping INTO SR while the previous op's
-    # out is hi seeds the latch hi — only LEAVING SR clears it. Tested
-    # from a lo out above; the hi-seeding path is left as documented.
+    check("entering SR starts lo (no seeding from the NOR's hi out)",
+          out(app, lid) is False)
 
     b1 = latch_button(app)
     b2 = latch_button(app)
@@ -296,54 +294,67 @@ def test_truth_tables():
     levels(False, False)
     check("XOR F,F → F", out(app, lid) is False)
 
-    # op swap to NOT: the :b endpoint dies, its wire drops with it
-    app.set_ctl_wire("add", b2, f"{lid}:b")   # re-add after XOR tests
-    app.set_logic(lid, op="NOT")
-    check("op swap drops dead-shaped wires (:b gone)",
-          not any(w["to"] == f"{lid}:b" for w in app.ctl_wires))
-    check(":a wire survives the swap",
-          any(w["to"] == f"{lid}:a" for w in app.ctl_wires))
+    app.set_logic(lid, op="NOR")
+    check("op swap preserves both wires (the shape never changes)",
+          {"from": b1, "to": f"{lid}:a"} in app.ctl_wires
+          and {"from": b2, "to": f"{lid}:b"} in app.ctl_wires)
+    levels(True, True)
+    check("NOR T,T → F", out(app, lid) is False)
+    levels(True, False)
+    check("NOR T,F → F", out(app, lid) is False)
+    levels(False, False)
+    check("NOR F,F → T", out(app, lid) is True)
+
+    # one active connection: NOR functions as NOT (unwired :b reads lo)
+    app.set_ctl_wire("remove", b2, f"{lid}:b")
     set_lvl(app, b1, False)
-    check("NOT lo → hi", out(app, lid) is True)
+    check("NOR with one wired in = NOT: lo → hi", out(app, lid) is True)
     set_lvl(app, b1, True)
-    check("NOT hi → lo", out(app, lid) is False)
+    check("NOR with one wired in = NOT: hi → lo", out(app, lid) is False)
 
 
 # ---- SR latch ----------------------------------------------------------------
 
 def test_sr_latch():
     app = SynthApp(use_midi=False, use_reload=False)
-    lid = app.spawn_logic()
-    b_a = latch_button(app)
+    lid = app.spawn_logic()          # AND
     b_set = latch_button(app)
     b_reset = latch_button(app)
 
-    # a :a wire exists; swapping to SR latch DROPS it (shape died, visible)
-    app.set_ctl_wire("add", b_a, f"{lid}:a")
+    # wires ride the SAME :a/:b endpoints under every op — the swap into
+    # SR preserves them (they just become SET/RESET)
+    app.set_ctl_wire("add", b_set, f"{lid}:a")
+    app.set_ctl_wire("add", b_reset, f"{lid}:b")
     app.set_logic(lid, op="SR latch")
-    check("op swap to SR drops the :a wire",
-          not any(w["to"] == f"{lid}:a" for w in app.ctl_wires))
+    check("AND→SR preserves the :a and :b wires",
+          {"from": b_set, "to": f"{lid}:a"} in app.ctl_wires
+          and {"from": b_reset, "to": f"{lid}:b"} in app.ctl_wires)
 
-    # the full protocol on the named set/reset ins
-    app.set_ctl_wire("add", b_set, f"{lid}:set")
-    app.set_ctl_wire("add", b_reset, f"{lid}:reset")
+    # the full protocol: :a is SET, :b is RESET
     check("latch starts lo", out(app, lid) is False)
     set_lvl(app, b_set, True)
-    check("set hi → latch hi", out(app, lid) is True)
+    check("set (:a) hi → latch hi", out(app, lid) is True)
     set_lvl(app, b_set, False)
     check("latch holds after set drops", out(app, lid) is True)
     set_lvl(app, b_set, True)
     set_lvl(app, b_reset, True)
-    check("reset wins when both hi", out(app, lid) is False)
+    check("reset (:b) wins when both hi", out(app, lid) is False)
     set_lvl(app, b_reset, False)
     check("set still hi → latch hi again", out(app, lid) is True)
 
-    # leaving SR: named wires drop AND the latch clears
-    app.set_logic(lid, op="AND")
-    check("op swap away drops set/reset wires",
-          not any(w["to"] in (f"{lid}:set", f"{lid}:reset")
-                  for w in app.ctl_wires))
-    check("latch state does not survive leaving SR (out lo)",
+    # leaving SR: the wires SURVIVE (the shape never changes) and the
+    # latch state does not
+    set_lvl(app, b_set, False)       # latch holds hi with both ins lo
+    check("latch holds hi pre-swap", out(app, lid) is True)
+    app.set_logic(lid, op="XOR")
+    check("SR→XOR preserves the :a and :b wires (a :b wire survives"
+          " AND→SR→XOR)",
+          {"from": b_set, "to": f"{lid}:a"} in app.ctl_wires
+          and {"from": b_reset, "to": f"{lid}:b"} in app.ctl_wires)
+    check("XOR computes from the live ins (lo,lo → lo)",
+          out(app, lid) is False)
+    app.set_logic(lid, op="SR latch")
+    check("re-entering SR starts lo (the held-hi latch did not survive)",
           out(app, lid) is False)
 
 
@@ -505,8 +516,8 @@ def test_feedback():
     app = SynthApp(use_midi=False, use_reload=False)
     la = app.spawn_logic()
     lb = app.spawn_logic()
-    app.set_logic(la, op="NOT")
-    app.set_logic(lb, op="NOT")
+    app.set_logic(la, op="NOR")      # one wired in each: NOR acts as NOT
+    app.set_logic(lb, op="NOR")
     app.set_ctl_wire("add", la, f"{lb}:a")
     app.set_ctl_wire("add", lb, f"{la}:a")   # returns ⇒ settle pass bounded
     check("cross loop settles to a stable complementary state",
@@ -707,6 +718,47 @@ def test_persistence():
           "logics" in st and "relays" in st and "switches" not in st)
 
 
+# ---- migration: shaped-endpoint saves (op NOT, :set/:reset wires) ------------
+
+def test_migration():
+    app = SynthApp(use_midi=False, use_reload=False)
+
+    # restore maps the retired NOT to NOR (one wired in = the old NOT)
+    app.gates.restore({"logics": [{"id": "logic.7", "op": "NOT"}]})
+    check("restore maps op NOT → NOR",
+          app.gates.logics["logic.7"].op == "NOR")
+
+    # ...and so does the configure path
+    lid = app.spawn_logic()
+    app.set_logic(lid, op="NOT")
+    check("set_logic maps op NOT → NOR", app.gates.logics[lid].op == "NOR")
+
+    # a wire added to the legacy :set/:reset endpoints lands on :a/:b
+    # (old resume files replay their wires through set_ctl_wire)
+    app.set_logic(lid, op="SR latch")
+    b_old = latch_button(app)
+    b_set = latch_button(app)
+    b_reset = latch_button(app)
+    app.set_ctl_wire("add", b_old, f"{lid}:a")   # occupant to be stolen
+    app.set_ctl_wire("add", b_set, f"{lid}:set")
+    check("ctl_wire add to :set lands on :a",
+          {"from": b_set, "to": f"{lid}:a"} in app.ctl_wires
+          and not any(w["to"] == f"{lid}:set" for w in app.ctl_wires))
+    check("the remap steals the :a occupant (single-input holds)",
+          {"from": b_old, "to": f"{lid}:a"} not in app.ctl_wires
+          and sum(1 for w in app.ctl_wires if w["to"] == f"{lid}:a") == 1)
+    app.set_ctl_wire("add", b_reset, f"{lid}:reset")
+    check("ctl_wire add to :reset lands on :b",
+          {"from": b_reset, "to": f"{lid}:b"} in app.ctl_wires
+          and not any(w["to"] == f"{lid}:reset" for w in app.ctl_wires))
+
+    # the remapped wires actually drive the latch
+    set_lvl(app, b_set, True)
+    check("remapped set wire drives the latch hi", out(app, lid) is True)
+    set_lvl(app, b_reset, True)
+    check("remapped reset wire wins", out(app, lid) is False)
+
+
 # ---- GUI events --------------------------------------------------------------
 
 def test_events():
@@ -761,6 +813,7 @@ def main():
     test_relay_binary_and_ctl()
     test_relay_audio_and_removal()
     test_persistence()
+    test_migration()
     test_events()
     print(f"\n{'PASS' if not FAILURES else 'FAIL'} — {len(FAILURES)} failures")
     return 1 if FAILURES else 0

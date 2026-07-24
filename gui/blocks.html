@@ -239,7 +239,7 @@
   .modeseg span.on { background: rgba(22,21,15,0.82); color: var(--ink-1); }
   .modeseg:hover { box-shadow: 0 0 0 1px rgba(22,21,15,0.5); }
   /* the logic banner's circuit selector (replaces the title + op row):
-     click cycles AND → OR → NOT → XOR → SR latch */
+     click cycles AND → OR → NOR → XOR → SR latch */
   .opsel { font-size: 8.5px; font-weight: 800; letter-spacing: 0.2px;
     padding: 1px 5px; border-radius: 4px; background: rgba(22,21,15,0.22);
     color: #16150f; cursor: pointer; white-space: nowrap; overflow: hidden;
@@ -4469,12 +4469,15 @@ function buildThresholdCard(t) {
 // ---- Logic: the binary-plane op node (see synthbase/gate.py) ---------------
 // A Python-side LEVEL node: its outgoing ctl_wires are BINARY wires;
 // {"kind":"gate","id","on"} events light the LED and the circuit viz.
-// Inputs are NAMED single-input endpoints ("<id>:a"/"<id>:b", ":a" only
-// for NOT, ":set"/":reset" for SR latch) — bare-id dsts are gone.
+// Bare-id dsts are gone.
+// EVERY op exposes the same TWO named single-input ins, ":a"/":b" — the
+// endpoint shape never changes across op swaps, so wires never drop
+// (server guarantee, synthbase/gate.py). NOR replaced NOT (one wired leg
+// = NOT); the SR latch reads :a as SET / :b as RESET, so only the pin
+// LABELS change with the op (A/B → S/R), never the handles.
 function logicInsOf(op) {
-  if (op === "SR latch") return [["set", "set"], ["reset", "reset"]];
-  if (op === "NOT") return [["a", "A"]];
-  return [["a", "A"], ["b", "B"]];   // AND / OR / XOR
+  return op === "SR latch" ? [["a", "S"], ["b", "R"]]
+                           : [["a", "A"], ["b", "B"]];
 }
 function buildLogicCard(t) {
   // Cole, 07-24: NO title, NO subtitle, NO op row — the orange banner
@@ -4483,11 +4486,11 @@ function buildLogicCard(t) {
   // handle.
   const gid = t.id;
   const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
-  const ops = t.ops || ["AND", "OR", "NOT", "XOR", "SR latch"];
+  const ops = t.ops || ["AND", "OR", "NOR", "XOR", "SR latch"];
   // circuit-diagram viz: pin labels ride the canvas at the trace heights —
   // the quiet in-handles anchor to them (offsetWithin handles the nesting)
   const ins = logicInsOf(t.op);
-  const pinTop = (i) => ins.length === 1 ? 50 : (i === 0 ? 28 : 72);
+  const pinTop = (i) => i === 0 ? 28 : 72;
   const n = addCard({gid, name: "Logic" + suffix, short: "Log" + suffix,
     fam: "service", banner: BANNER_LATCH, rows: [], allowXS: true,
     vizHTML: `<canvas class="lvz" height="20"></canvas>`
@@ -4500,6 +4503,14 @@ function buildLogicCard(t) {
   // out handle FIXED at the right edge's center — in line with the LED
   n.ports.push({dir: "out", sig: "bin", label: "out",
                 fixEdge: "R", fixFrac: 0.5});
+  // named ins: quiet, SINGLE-INPUT (no +; a drop onto an occupied pin cuts
+  // the old wire first — the server steals anyway), each riding its pin.
+  // The SAME two :a/:b handles serve every op — op swaps never rebuild
+  // or re-anchor them, so wires visually survive.
+  const pinEls = [...n.el.querySelectorAll(".lpin")];
+  ins.forEach(([sub, label], i) => n.ports.push({
+    dir: "in", sig: "bin", label, quiet: true, single: true,
+    ep: `${gid}:${sub}`, rowEl: pinEls[i]}));
   // banner: [circuit selector] [✕] — the title/sub div is gone
   const head = n.el.querySelector(".head");
   head.querySelector(".title").parentElement.remove();
@@ -4511,24 +4522,27 @@ function buildLogicCard(t) {
   opsel.textContent = opText(t.op);
   opsel.title = "circuit — click to change";
   head.insertBefore(opsel, head.querySelector(".kill"));
+  // an op change swaps NOTHING structural (every op keeps :a/:b, the
+  // server never drops wires) — sync the selector, the pin labels
+  // (A/B → S/R in SR mode) and the glyph IN PLACE, no rebuild; other
+  // clients' broadcasts ride the normal state rebuild
+  const syncOp = () => {
+    opsel.textContent = opText(t.op);
+    logicInsOf(t.op).forEach(([sub, label], i) => {
+      if (pinEls[i]) pinEls[i].textContent = label;
+      const p = n.ports.find(q => q.ep === `${gid}:${sub}`);
+      if (p) p.label = label;
+    });
+    drawLogicCanvas(n);
+  };
   opsel.addEventListener("pointerdown", (e) => e.stopPropagation());
   opsel.addEventListener("click", (e) => {
     e.stopPropagation();
     const v = ops[(ops.indexOf(t.op) + 1) % ops.length];
     t.op = v;
-    opsel.textContent = opText(v);
     send({type: "set_logic", id: gid, op: v});
-    // the port SHAPE follows the op (per-op named ins; the server drops
-    // wires whose endpoint died) — rebuild locally (state-driven); other
-    // clients follow the broadcast
-    rebuildGraph();
+    syncOp();
   });
-  // named ins: quiet, SINGLE-INPUT (no +; a drop onto an occupied pin cuts
-  // the old wire first — the server steals anyway), each riding its pin
-  const pinEls = [...n.el.querySelectorAll(".lpin")];
-  ins.forEach(([sub, label], i) => n.ports.push({
-    dir: "in", sig: "bin", label, quiet: true, single: true,
-    ep: `${gid}:${sub}`, rowEl: pinEls[i]}));
   n.logicViz = true;   // redrawLogicViz targets
   // output LED at right-center (lit = out hi; follows gate events live)
   const led = document.createElement("span");
@@ -4743,6 +4757,43 @@ function binLevelOf(id) {
   if (r) return !!r.closed;   // the relay's power button level
   return false;               // clocks (pulse-only) + unknown ids read lo
 }
+// ---- pulse stretcher (GUI only — no semantics change) ----------------------
+// A clock pulse through a bool gate goes hi→lo within one settle pass, so
+// the out LED/trace would never visibly light; a clock's own LEVEL is
+// always lo (it emits {"kind":"ping"} taps, never gate events), so its
+// in-pin trace would never light either. Any hi gate event — and any ping
+// tap from a source wired into a logic named in — holds the lit state for
+// PULSE_MS before the lo shows. A SUSTAINED hi is untouched (the real
+// level keeps it lit past the window). Event-driven: one short setTimeout
+// decays lapsed flashes — the lvz canvases never join a rAF loop.
+const PULSE_MS = 140;
+const binFlash = new Map();   // node id -> lit-until (performance.now ms)
+let pulseTimer = 0;
+function binFlashing(id) {
+  return (binFlash.get(id) || 0) > performance.now();
+}
+function shownLevel(id) {   // what LEDs/traces DISPLAY: level OR flash
+  return binLevelOf(id) || binFlashing(id);
+}
+function pulseBin(id) {
+  binFlash.set(id, performance.now() + PULSE_MS);
+  schedulePulseDecay();
+}
+function schedulePulseDecay() {
+  if (pulseTimer) return;
+  pulseTimer = setTimeout(() => {
+    pulseTimer = 0;
+    const now = performance.now();
+    for (const [id, until] of [...binFlash])
+      if (until <= now) {
+        binFlash.delete(id);
+        const setter = uiParam[id + ".led"];
+        if (setter) setter(0, binLevelOf(id));   // the REAL level shows now
+      }
+    redrawLogicViz();
+    if (binFlash.size) schedulePulseDecay();
+  }, PULSE_MS + 20);
+}
 const LOGIC_DIM = "#4a4a44", LOGIC_UNWIRED = "#33332e", LOGIC_SYM = "#8a887c";
 function drawLogicCanvas(n) {
   const cv = n.el.querySelector("canvas.lvz");
@@ -4761,7 +4812,7 @@ function drawLogicCanvas(n) {
     const el = n.el.querySelectorAll(".lpin")[i];
     return el ? offsetWithin(el, n.el.querySelector(".viz-sec"))
                 + el.offsetHeight / 2 - cv.offsetTop
-              : (ins.length === 1 ? cy : (i === 0 ? H * 0.28 : H * 0.72));
+              : (i === 0 ? H * 0.28 : H * 0.72);
   };
   const pin = (x0, y, x1, hex, wired) => {   // one trace + its pin dot
     ctx.strokeStyle = ctx.fillStyle =
@@ -4773,15 +4824,16 @@ function drawLogicCanvas(n) {
     ctx.fill();
   };
   // in traces: bin-family colors when hi (A yellow, B orange), dim when lo
+  // — via shownLevel, so pulses (clock ticks, sub-frame gate blips) show
   const inLo = W * 0.045, inHi = t.op === "XOR" ? gx0 + 3.5 : gx0 + 0.75;
   ins.forEach(([sub], i) => {
     const w = ((state && state.ctl_wires) || [])
       .find(x => x.to === `${n.gid}:${sub}`);
-    const lit = !!w && binLevelOf(String(w.from).split(":")[0]);
+    const lit = !!w && shownLevel(String(w.from).split(":")[0]);
     pin(inLo, pinY(i), inHi, lit ? LINES.bin[i ? 1 : 0] : LOGIC_DIM, !!w);
   });
-  // out trace: pink when the out level is hi
-  const out = binLevelOf(n.gid);
+  // out trace: pink when the out level is hi (stretched for pulses)
+  const out = shownLevel(n.gid);
   pin(gx1 - 0.75, cy, W - W * 0.045, out ? LINES.bin[3] : LOGIC_DIM);
   // the gate symbol — proper distinctive glyphs
   ctx.strokeStyle = LOGIC_SYM;
@@ -4791,21 +4843,22 @@ function drawLogicCanvas(n) {
     const r = Math.min(gh / 2, gx1 - gx0), fx = gx1 - r;
     ctx.moveTo(fx, gy0); ctx.lineTo(gx0, gy0); ctx.lineTo(gx0, gy1);
     ctx.lineTo(fx, gy1); ctx.arc(fx, cy, gh / 2, Math.PI / 2, -Math.PI / 2, true);
-  } else if (t.op === "OR" || t.op === "XOR") {   // curved-back shield
+  } else if (t.op === "OR" || t.op === "XOR" || t.op === "NOR") {
+    // curved-back shield; NOR (NOT's replacement — one wired leg = NOT)
+    // wears the inverting output BUBBLE at the tip
+    const tip = t.op === "NOR" ? gx1 - 4.5 : gx1;
     ctx.moveTo(gx0, gy0);
-    ctx.quadraticCurveTo(gx0 + (gx1 - gx0) * 0.7, gy0, gx1, cy);
-    ctx.quadraticCurveTo(gx0 + (gx1 - gx0) * 0.7, gy1, gx0, gy1);
+    ctx.quadraticCurveTo(gx0 + (tip - gx0) * 0.7, gy0, tip, cy);
+    ctx.quadraticCurveTo(gx0 + (tip - gx0) * 0.7, gy1, gx0, gy1);
     ctx.quadraticCurveTo(gx0 + (gx1 - gx0) * 0.28, cy, gx0, gy0);
     if (t.op === "XOR") {                     // the second input arc
       ctx.moveTo(gx0 - 3.5, gy0);
       ctx.quadraticCurveTo(gx0 - 3.5 + (gx1 - gx0) * 0.28, cy, gx0 - 3.5, gy1);
     }
-  } else if (t.op === "NOT") {                // triangle + bubble
-    const bx = gx1 - 4;
-    ctx.moveTo(gx0, gy0); ctx.lineTo(bx, cy); ctx.lineTo(gx0, gy1);
-    ctx.closePath();
-    ctx.moveTo(gx1 - 2, cy);
-    ctx.arc(gx1 - 2, cy, 2, 0, Math.PI * 2);
+    if (t.op === "NOR") {                     // the inverting bubble
+      ctx.moveTo(tip + 4, cy);
+      ctx.arc(tip + 2, cy, 2, 0, Math.PI * 2);
+    }
   } else {                                    // SR latch: small labeled box
     ctx.rect(gx0, gy0, gx1 - gx0, gh);
   }
@@ -5749,6 +5802,16 @@ function onMidi(e) {
     if (t) t.root = e.root;
   } else if (e.kind === "ping") {
     pingFlash(e.src);   // a rising edge (clock tick / MIDI / another client)
+    // pulse stretcher: a tap from a source wired into a logic named in
+    // flashes that in-pin trace — clock ticks (level always lo, no gate
+    // events) into :a/:b/:set/:reset become visible blips
+    const base = String(e.src).split(":")[0];
+    if (((state && state.ctl_wires) || []).some(w =>
+          String(w.from).split(":")[0] === base
+          && logicIds().has(String(w.to).split(":")[0]))) {
+      pulseBin(base);
+      redrawLogicViz();
+    }
   } else if (e.kind === "gate") {
     // binary rework: ANY binary level change (logic out, button level,
     // threshold level, relay closed) — light the LED in place, keep the
@@ -5763,8 +5826,12 @@ function onMidi(e) {
     if (th) th.on = !!e.on;
     const rl = (state && state.relays || []).find(x => x.id === e.id);
     if (rl) rl.closed = !!e.on;   // the relay card's power button follows
+    // pulse stretcher: a hi guarantees ~PULSE_MS of lit LED/trace even if
+    // the lo lands within the same frame (sub-frame gate pulses); the LED
+    // shows the DISPLAY level and the decay pass restores the real one
+    if (e.on) pulseBin(e.id);
     const setter = uiParam[`${e.id}.led`];
-    if (setter) setter(0, !!e.on);
+    if (setter) setter(0, shownLevel(e.id));
     redrawLogicViz();
   } else if (e.kind === "ping_bound") {
     // server-side MIDI capture landed: update the card's chip in place

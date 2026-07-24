@@ -23,13 +23,15 @@ THE MODEL — sources own LEVELS; edges DERIVE from level changes:
   audible click and downbeat accent follow — item 9).
 
 NODES owned here: LogicGate ("logic", "logic.2", ...) — ONE card, an op
-dropdown: AND / OR / NOT / XOR / SR latch. Inputs are NAMED single-input
-endpoints — ":a"/":b" for AND/OR/XOR, ":a" only for NOT, ":set"/":reset"
-for SR latch (reset wins). Bare-id destinations are no longer valid; an
-unwired in reads lo. Adding a binary wire to an occupied single-input
-endpoint REPLACES the existing wire (steal-on-drop, mirroring the GUI).
-Changing op drops wires whose endpoint shape died and clears the latch
-when leaving SR.
+dropdown: AND / OR / NOR / XOR / SR latch. EVERY op exposes exactly TWO
+named single-input endpoints, ":a" and ":b" — the endpoint shape never
+changes across op swaps, so wires never drop. NOR replaces the old NOT:
+with one active connection NOR functions as NOT (hi,unwired → lo;
+unwired/lo → hi — an unwired in already reads lo, so NOR(a) = !a
+naturally). The SR latch reads :a as SET and :b as RESET (reset wins);
+its state starts lo entering AND leaving SR. Bare-id destinations are
+not valid. Adding a binary wire to an occupied single-input endpoint
+REPLACES the existing wire (steal-on-drop, mirroring the GUI).
 
 Levels settle eagerly on any change via a bounded fixpoint pass —
 feedback loops freeze rather than spin — then edge-diffed effects apply
@@ -42,13 +44,20 @@ GUI LEDs follow every level in the system from one event kind.
 Persistence: logics (id, op) ride the preset snapshot; binary wires ride
 ctl_wires (resume re-adds them). A legacy "switches" list in old presets
 is ignored silently (the Switch node is gone — Relay replaced it).
+Migration tolerance (saves from the shaped-endpoint day): op "NOT" maps
+to "NOR" on configure/restore, and an incoming wire dst "<logic>:set"/
+":reset" lands on ":a"/":b" (old resume files replay their wires through
+set_ctl_wire, which round-trips through this manager).
 """
 
 from __future__ import annotations
 
 from .relay import MAX_CIRCUITS
 
-GATE_OPS = ("AND", "OR", "NOT", "XOR", "SR latch")
+GATE_OPS = ("AND", "OR", "NOR", "XOR", "SR latch")
+LOGIC_INS = ("a", "b")           # EVERY op: exactly these two, always
+# migration: shaped-endpoint saves (":set"/":reset" wires, op "NOT")
+_LEGACY_INS = {"set": "a", "reset": "b"}
 DECK_ACTIONS = {"rec": "record", "play": "play", "stop": "stop",
                 "clear": "clear"}
 # item 9: the GLOBAL transport's binary ins — level-ins run/click/accent
@@ -56,15 +65,6 @@ DECK_ACTIONS = {"rec": "record", "play": "play", "stop": "stop",
 TRANSPORT_INS = ("run", "click", "accent", "tap")
 _MAX_SETTLE = 24   # fixpoint iterations before a feedback loop freezes
 _MAX_PASSES = 8    # settle+effects outer passes (relay ctl re-entry)
-
-
-def op_ins(op: str) -> tuple[str, ...]:
-    """The named input endpoints an op exposes."""
-    if op == "SR latch":
-        return ("set", "reset")
-    if op == "NOT":
-        return ("a",)
-    return ("a", "b")
 
 
 class LogicGate:
@@ -118,18 +118,12 @@ class GateManager:
         lg = self.logics.get(lid)
         if lg is None:
             raise KeyError(f"no logic gate {lid!r}")
+        if op == "NOT":
+            op = "NOR"   # migration: NOR with one wired in IS the old NOT
         if op is not None and op in GATE_OPS and op != lg.op:
-            gone = {f"{lid}:{s}" for s in op_ins(lg.op)} \
-                - {f"{lid}:{s}" for s in op_ins(op)}
+            # the endpoint shape is :a/:b for EVERY op — wires never drop
             was_sr = lg.op == "SR latch"
             lg.op = op
-            if gone:
-                # endpoint shape changed: drop wires that no longer land
-                # anywhere (visible, honest patching)
-                self.app.ctl_wires = [w for w in self.app.ctl_wires
-                                      if w.get("to") not in gone]
-                for ep in gone:
-                    self._edge.pop(ep, None)
             if was_sr != (op == "SR latch"):
                 # the latch neither survives the swap away NOR inherits the
                 # previous op's out on the way in — a fresh SR starts lo
@@ -163,7 +157,9 @@ class GateManager:
             except Exception:  # noqa: BLE001
                 return False
         if base in self.logics:
-            return sub in op_ins(self.logics[base].op)
+            # every op exposes exactly :a/:b; the legacy :set/:reset
+            # aliases are accepted and canonicalized in on_wire_change
+            return sub in LOGIC_INS or sub in _LEGACY_INS
         if base in getattr(self.app, "relays", {}):
             if sub == "ctl":
                 return True
@@ -176,9 +172,17 @@ class GateManager:
         """Endpoints that hold at most ONE binary wire: logic named ins
         and relay:ctl. Adding a wire to an occupied one steals it."""
         base, _, sub = str(dst).partition(":")
-        if base in self.logics and sub in op_ins(self.logics[base].op):
+        if base in self.logics and (sub in LOGIC_INS or sub in _LEGACY_INS):
             return True
         return base in getattr(self.app, "relays", {}) and sub == "ctl"
+
+    def _canon(self, dst):
+        """Canonicalize a legacy logic endpoint: ":set" → ":a", ":reset"
+        → ":b" (migration for wires replayed from shaped-endpoint saves)."""
+        base, _, sub = str(dst).partition(":")
+        if base in self.logics and sub in _LEGACY_INS:
+            return f"{base}:{_LEGACY_INS[sub]}"
+        return dst
 
     def steal_input(self, dst) -> None:
         """Drop any existing wire into a single-input endpoint (the GUI's
@@ -270,21 +274,19 @@ class GateManager:
         for _ in range(_MAX_SETTLE):
             dirty = False
             for lg in self.logics.values():
+                a = self._in_level(f"{lg.id}:a")
+                b = self._in_level(f"{lg.id}:b")
                 if lg.op == "SR latch":
-                    s = self._in_level(f"{lg.id}:set")
-                    r = self._in_level(f"{lg.id}:reset")
-                    new = False if r else (True if s else lg.out)
-                else:
-                    a = self._in_level(f"{lg.id}:a")
-                    b = self._in_level(f"{lg.id}:b")
-                    if lg.op == "AND":
-                        new = a and b
-                    elif lg.op == "OR":
-                        new = a or b
-                    elif lg.op == "XOR":
-                        new = a != b
-                    else:                  # NOT (single named in)
-                        new = not a
+                    # :a is SET, :b is RESET — reset wins
+                    new = False if b else (True if a else lg.out)
+                elif lg.op == "AND":
+                    new = a and b
+                elif lg.op == "OR":
+                    new = a or b
+                elif lg.op == "XOR":
+                    new = a != b
+                else:                      # NOR (one wired in acts as NOT)
+                    new = not (a or b)
                 if new != lg.out:
                     lg.out = new
                     changed_nodes.add(lg.id)
@@ -353,10 +355,22 @@ class GateManager:
     def on_wire_change(self, src=None, dst=None, removed: bool = False) -> None:
         """Hook after a binary wire edit: re-settle (and start the removed
         endpoint edge-fresh, so a later re-wire never inherits stale edge
-        state)."""
+        state). A just-added wire on a LEGACY logic endpoint (":set"/
+        ":reset" from an old resume file) is canonicalized to ":a"/":b"
+        here — stealing the canonical endpoint's occupant first, so the
+        single-input rule holds."""
         del src
         if removed and dst is not None:
             self._edge.pop(dst, None)
+        if not removed and dst is not None:
+            canon = self._canon(dst)
+            if canon != dst:
+                moved = [w for w in self.app.ctl_wires
+                         if w.get("to") == dst]
+                self.steal_input(canon)     # single-input: replace occupant
+                for w in moved:
+                    w["to"] = canon
+                self._edge.pop(dst, None)
         self.recompute()
 
     # -- events / state / persistence ------------------------------------------
@@ -380,6 +394,9 @@ class GateManager:
         for g in (data or {}).get("logics", []):
             lid = g.get("id") or "logic"
             self.spawn_logic(want_id=lid)
-            if g.get("op") in GATE_OPS:
-                self.logics[lid].op = g["op"]
+            op = g.get("op")
+            if op == "NOT":
+                op = "NOR"   # migration: NOR with one wired in IS NOT
+            if op in GATE_OPS:
+                self.logics[lid].op = op
         self.recompute()
