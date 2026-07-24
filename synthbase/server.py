@@ -51,13 +51,14 @@ Protocol (JSON messages):
          {"type": "deriver", "id", ...} for the card histogram + scale
          readout)
     {"type": "spawn_logic"} / {"type": "remove_logic", "id": "logic.2"}
-    {"type": "set_logic", "id": "logic", "op": "AND"|"OR"|"NOT"|"XOR"|"SR latch"}
+    {"type": "set_logic", "id": "logic", "op": "AND"|"OR"|"NOR"|"XOR"|"SR latch"}
         (the BINARY plane: ONE hi/lo signal kind — sources own levels,
          edges derive from level changes; trig-ins fire on RISING edges.
          Binary wires ride ctl_wires, kind inferred from the source
          (button/clock/threshold/logic, binary relay circuits). Logic ins
-         are NAMED single-input endpoints: "<id>:a"/"<id>:b" (":a" only
-         for NOT; SR latch: "<id>:set"/"<id>:reset"; occupied ins steal).
+         are ALWAYS the two single-input endpoints "<id>:a"/"<id>:b"
+         for every op (SR latch: a=set, b=reset; NOR with one wired leg
+         acts as NOT; occupied ins steal; legacy :set/:reset remapped).
          Other dsts: "<key>:pwr", "arp:pwr", "drums:pwr" (level follows),
          "deck:rec|play|stop|clear" + deriver ids (rising edge fires),
          relay circuit ins + "relay:ctl". Level changes emit

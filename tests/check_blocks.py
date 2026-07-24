@@ -92,10 +92,12 @@ Current coverage:
      yellow (--bin) for sources (momentary button/clock/threshold),
      orange (--binlatch) for latch button/logic/relay. The Logic card
      has NO title — its banner carries a clickable CIRCUIT SELECTOR
-     (cycles ops, set_logic) — and per-op NAMED single-input ins
-     (":a"/":b", ":a" only for NOT, ":set"/":reset" for SR — bare-id
-     dsts refused, no + handle) riding pin labels on the circuit-diagram
-     canvas (per-op gate glyphs; traces light from live levels —
+     (cycles AND/OR/NOR/XOR/SR, set_logic, IN PLACE — every op keeps the
+     SAME two named single-input ins ":a"/":b", so op swaps never drop
+     wires; NOR replaced NOT, one wired leg = NOT; SR reads :a as SET /
+     :b as RESET and relabels the pins S/R — bare-id dsts refused, no +
+     handle) riding pin labels on the circuit-diagram canvas (per-op
+     gate glyphs incl. the NOR bubble; traces light from live levels —
      pixel-diffed lo vs hi); its out LED sits at the card's RIGHT-HAND
      CENTER with the bin-out handle FIXED in line with it. The Button's
      banner carries a BTN tag + the MOM|LATCH segmented toggle
@@ -1972,7 +1974,7 @@ def main():
                          "modes": ["rising", "falling", "both"],
                          "source": None, "on": False}],
             logics=[{"id": "logic", "op": "AND",
-                     "ops": ["AND", "OR", "NOT", "XOR", "SR latch"],
+                     "ops": ["AND", "OR", "NOR", "XOR", "SR latch"],
                      "out": False}],
             # binary rework: relays ride the snapshot (pass B renders the
             # card — section 18); there is NO switches key any more
@@ -2144,6 +2146,88 @@ def main():
           __msg({type: 'midi', event: {kind: 'gate', id: 'threshold', on: false}});
           __msg({type: 'midi', event: {kind: 'gate', id: 'logic', on: false}});
         }""")
+        page.wait_for_timeout(400)   # let the pulse-stretcher windows lapse
+
+        # ---- pulse stretcher (GUI only): sub-frame pulses stay visible --
+        # a hi+lo pair landing back-to-back (a clock pulse through the
+        # gate settles within one pass) keeps the out LED + out trace lit
+        # for the visible minimum before the lo state shows
+        page.evaluate("""() => {
+          __msg({type: 'midi', event: {kind: 'gate', id: 'logic', on: true}});
+          __msg({type: 'midi', event: {kind: 'gate', id: 'logic', on: false}});
+        }""")
+        stretch = page.evaluate("""(() => ({
+          led: nodes.get('logic').el.querySelector('.gled')
+            .classList.contains('on'),
+          png: nodes.get('logic').el.querySelector('canvas.lvz').toDataURL(),
+        }))()""")
+        check("hi+lo back-to-back: out LED still lit (stretched)",
+              stretch["led"])
+        check("hi+lo back-to-back: out trace still lit (differs from lo)",
+              stretch["png"] != lo_png)
+        page.wait_for_timeout(400)
+        decayed = page.evaluate("""(() => ({
+          led: nodes.get('logic').el.querySelector('.gled')
+            .classList.contains('on'),
+          png: nodes.get('logic').el.querySelector('canvas.lvz').toDataURL(),
+        }))()""")
+        check("stretched pulse decays to the REAL lo state",
+              not decayed["led"] and decayed["png"] == lo_png,
+              str(decayed["led"]))
+
+        # a SUSTAINED hi is untouched by the stretcher…
+        page.evaluate("""() => __msg({type: 'midi',
+          event: {kind: 'gate', id: 'logic', on: true}})""")
+        page.wait_for_timeout(400)
+        check("sustained hi stays lit past the stretch window",
+              page.evaluate("nodes.get('logic').el.querySelector('.gled')"
+                            ".classList.contains('on')"))
+        # …and a lo AFTER the window applies immediately (no stretch)
+        page.evaluate("""() => __msg({type: 'midi',
+          event: {kind: 'gate', id: 'logic', on: false}})""")
+        page.wait_for_timeout(50)
+        check("a lo after the window unlights immediately",
+              not page.evaluate("nodes.get('logic').el"
+                                ".querySelector('.gled')"
+                                ".classList.contains('on')"))
+
+        # clock ticks: a {"kind":"ping"} tap from a source wired into a
+        # named in flashes that in-pin trace (a clock's LEVEL is always lo
+        # and it never emits gate events — ticks were invisible before)
+        st17k = json.loads(json.dumps(st17))
+        st17k["clocks"] = [{"id": "clock", "division": "1/4",
+                            "divisions": ["1/4", "1/8"]}]
+        st17k["ctl_wires"] = [{"from": "keys", "to": "voice"},
+                              {"from": "clock", "to": "logic:a"}]
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st17k)
+        page.wait_for_timeout(500)
+        tick_lo = page.evaluate(
+            "nodes.get('logic').el.querySelector('canvas.lvz').toDataURL()")
+        page.evaluate("""() => __msg({type: 'midi',
+          event: {kind: 'ping', src: 'clock'}})""")
+        tick_hi = page.evaluate(
+            "nodes.get('logic').el.querySelector('canvas.lvz').toDataURL()")
+        check("clock tick lights the :a in-pin trace (ping-tap flash)",
+              tick_hi != tick_lo)
+        page.wait_for_timeout(400)
+        tick_end = page.evaluate(
+            "nodes.get('logic').el.querySelector('canvas.lvz').toDataURL()")
+        check("the tick flash decays back to the lo render",
+              tick_end == tick_lo)
+        # NOR-as-NOT (one wired leg): same wiring, op NOR — the bubbled
+        # glyph renders with the unwired :b pin dim (pixel-differs from
+        # the AND render of the identical wiring/levels)
+        st17n = json.loads(json.dumps(st17k))
+        st17n["logics"][0]["op"] = "NOR"
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st17n)
+        page.wait_for_timeout(500)
+        nor_png = page.evaluate(
+            "nodes.get('logic').el.querySelector('canvas.lvz').toDataURL()")
+        check("NOR-as-NOT (one wired leg) renders the bubbled glyph",
+              bool(nor_png) and len(nor_png) > 100 and nor_png != tick_lo)
+        # restore the canonical st17 for the checks below
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st17)
+        page.wait_for_timeout(500)
 
         # button cards (07-24): the banner IS the mode readout — yellow
         # momentary / orange latch, MOM|LATCH segmented toggle, tiny BTN
@@ -2288,8 +2372,30 @@ def main():
               {"type": "set_logic", "id": "logic", "op": "OR"} in sent,
               str(sent))
 
-        # per-op port SHAPES (server truth resent) + per-op glyphs: the
-        # circuit renders distinctly for every op (same all-lo levels)
+        # a LOCAL op change swaps NOTHING structural: same card element,
+        # same pin elements/handles, and the wire on :b never flickers out
+        inplace = page.evaluate("""(() => {
+          const n = nodes.get('logic');
+          const elBefore = n.el;
+          const pinsBefore = [...n.el.querySelectorAll('.lpin')];
+          n.el.querySelector('.opsel').click();      // OR → NOR, in place
+          const pinsAfter = [...n.el.querySelectorAll('.lpin')];
+          return {sameCard: nodes.get('logic').el === elBefore,
+                  samePins: pinsBefore.length === 2
+                    && pinsBefore.every((p, i) => p === pinsAfter[i]),
+                  bWire: wires.some(w => w.from.node.gid === 'threshold'
+                                         && w.to.port.ep === 'logic:b')};
+        })()""")
+        check("op change is IN PLACE (same card + pin elements, wire kept)",
+              inplace == {"sameCard": True, "samePins": True, "bWire": True},
+              str(inplace))
+
+        # per-op checks: EVERY op keeps the SAME :a/:b endpoints (op swaps
+        # never drop wires — server guarantee); only the pin LABELS change
+        # (SR latch reads :a as SET / :b as RESET → S/R). Each resend also
+        # asserts the threshold→:b wire still RENDERS, so the swap
+        # sequence …→SR→XOR proves visual wire survival. Glyphs stay
+        # pairwise distinct (NOR = OR shield + output bubble; NOT is gone).
         op_pngs = {}
 
         def logic_ins(op):
@@ -2300,25 +2406,37 @@ def main():
             op_pngs[op] = page.evaluate(
                 "nodes.get('logic').el.querySelector('canvas.lvz')"
                 ".toDataURL()")
-            return page.evaluate(
-                "nodes.get('logic').ports"
-                ".filter(p => p.sig === 'bin' && p.dir === 'in')"
-                ".map(p => [p.ep, p.label])")
+            return page.evaluate("""(() => ({
+              ins: nodes.get('logic').ports
+                .filter(p => p.sig === 'bin' && p.dir === 'in')
+                .map(p => [p.ep, p.label]),
+              bWire: wires.some(w => w.from.node.gid === 'threshold'
+                                     && w.to.port.ep === 'logic:b'),
+            }))()""")
 
-        check("NOT exposes ONE named in (:a)",
-              logic_ins("NOT") == [["logic:a", "A"]], "")
-        check("XOR exposes :a/:b", logic_ins("XOR")
-              == [["logic:a", "A"], ["logic:b", "B"]], "")
-        check("OR exposes :a/:b", logic_ins("OR")
-              == [["logic:a", "A"], ["logic:b", "B"]], "")
-        check("AND exposes :a/:b", logic_ins("AND")
-              == [["logic:a", "A"], ["logic:b", "B"]], "")
-        check("SR latch exposes :set/:reset",
-              logic_ins("SR latch")
-              == [["logic:set", "set"], ["logic:reset", "reset"]], "")
+        r = logic_ins("SR latch")
+        check("SR latch keeps :a/:b, labeled S/R",
+              r["ins"] == [["logic:a", "S"], ["logic:b", "R"]], str(r))
+        check("the :b wire survives AND→SR (same pin, still drawn)",
+              r["bWire"], str(r))
+        r = logic_ins("XOR")
+        check("XOR exposes :a/:b (A/B labels)",
+              r["ins"] == [["logic:a", "A"], ["logic:b", "B"]], str(r))
+        check("the :b wire survives SR→XOR", r["bWire"], str(r))
+        r = logic_ins("NOR")
+        check("NOR (NOT's replacement) exposes :a/:b",
+              r["ins"] == [["logic:a", "A"], ["logic:b", "B"]], str(r))
+        r = logic_ins("OR")
+        check("OR exposes :a/:b",
+              r["ins"] == [["logic:a", "A"], ["logic:b", "B"]], str(r))
+        r = logic_ins("AND")
+        check("AND exposes :a/:b",
+              r["ins"] == [["logic:a", "A"], ["logic:b", "B"]], str(r))
         check("every op draws a distinct gate glyph",
               len(set(op_pngs.values())) == len(op_pngs),
               str({k: len(v) for k, v in op_pngs.items()}))
+        check("NOR glyph is pixel-distinct from OR (output bubble)",
+              op_pngs["NOR"] != op_pngs["OR"])
 
         # head power LEDs: module/arp/drums carry the LED button + a quiet
         # ":pwr" binary level-in anchored to the head; deck carries FOUR
@@ -2399,7 +2517,7 @@ def main():
             clocks=[{"id": "clock", "division": "1/4",
                      "divisions": ["1/4", "1/8"]}],
             logics=[{"id": "logic", "op": "AND",
-                     "ops": ["AND", "OR", "NOT", "XOR", "SR latch"],
+                     "ops": ["AND", "OR", "NOR", "XOR", "SR latch"],
                      "out": False}],
             relays=[{"id": "relay", "closed": False,
                      "circuits": {"2": {"kind": "notes"},
