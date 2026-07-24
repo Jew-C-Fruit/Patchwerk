@@ -2466,39 +2466,73 @@ def main():
                                 ["deck:play", True, True],
                                 ["deck:clear", True, True]], str(eps17))
 
-        # the head LED is a real button: lit = enabled; click toggles the
-        # bypass class AND still sends exactly what the checkbox sent
+        # item 26 (Cole, 07-24): the power indicator IS the card's COLOR BAR.
+        # The round head LED is gone; the stripe carries role=switch, fills
+        # when on / outlines when off, and toggling still sends exactly what
+        # the old checkbox sent.
         led17 = page.evaluate("""(() => {
           const n = nodes.get('m:echo');
-          const el = n.el.querySelector('.onoff');
-          return {tag: el.tagName, role: el.getAttribute('role'),
+          const el = n.el.querySelector('.stripe');
+          const cs = getComputedStyle(el);
+          return {gone: !n.el.querySelector('.onoff'),
+                  pwr: el.classList.contains('pwr'),
+                  role: el.getAttribute('role'),
                   on: el.classList.contains('on'),
+                  filled: cs.backgroundColor,
                   byp: n.el.classList.contains('bypassed')};
         })()""")
-        check("module head LED is a lit switch button when enabled",
-              led17 == {"tag": "BUTTON", "role": "switch", "on": True,
-                        "byp": False}, str(led17))
+        check("power indicator is the card COLOR BAR (round head LED gone)",
+              led17["gone"] and led17["pwr"] and led17["role"] == "switch",
+              str(led17))
+        check("enabled → the stripe is FILLED with the category color",
+              led17["on"] and led17["filled"] == "rgb(25, 158, 112)"
+              and not led17["byp"], str(led17))
         page.evaluate("window.__sent.length = 0")
-        page.evaluate("nodes.get('m:echo').el.querySelector('.onoff').click()")
+        page.evaluate("nodes.get('m:echo').togglePower()")
         sent = page.evaluate("window.__sent")
-        check("head LED click sends set_enabled false",
+        check("power stripe toggle sends set_enabled false",
               {"type": "set_enabled", "key": "echo", "enabled": False}
               in sent, str(sent))
         led17b = page.evaluate("""(() => {
           const n = nodes.get('m:echo');
-          return {on: n.el.querySelector('.onoff').classList.contains('on'),
+          const el = n.el.querySelector('.stripe');
+          return {on: el.classList.contains('on'),
+                  bg: getComputedStyle(el).backgroundColor,
                   byp: n.el.classList.contains('bypassed')};
         })()""")
-        check("head LED click unlights + toggles the bypassed class",
-              led17b == {"on": False, "byp": True}, str(led17b))
+        check("off → stripe unfills to an OUTLINE + card bypasses",
+              led17b["on"] is False and led17b["byp"] is True
+              and led17b["bg"] == "rgba(0, 0, 0, 0)", str(led17b))
         page.evaluate("window.__sent.length = 0")
-        page.evaluate("nodes.get('m:echo').el.querySelector('.onoff').click()")
+        page.evaluate("nodes.get('m:echo').togglePower()")
         sent = page.evaluate("window.__sent")
-        check("second click re-enables (set_enabled true, bypass off)",
+        check("second toggle re-enables (set_enabled true, bypass off)",
               {"type": "set_enabled", "key": "echo", "enabled": True}
               in sent and page.evaluate(
                   "!nodes.get('m:echo').el.classList.contains('bypassed')"),
               str(sent))
+        # REACTIVE-INDICATOR DOCTRINE (Cole, 07-24): a LOGIC input must flip
+        # the indicator live — set_enabled is applied server-side OUTSIDE the
+        # state broadcast, so the {"kind":"level"} event is the only signal.
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'echo:pwr', on: false}})")
+        page.wait_for_timeout(60)
+        lvl17 = page.evaluate("""(() => {
+          const n = nodes.get('m:echo');
+          return {on: n.el.querySelector('.stripe').classList.contains('on'),
+                  byp: n.el.classList.contains('bypassed')};
+        })()""")
+        check("logic level-in unfills the power stripe (no click, no rebuild)",
+              lvl17 == {"on": False, "byp": True}, str(lvl17))
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'echo:pwr', on: true}})")
+        page.wait_for_timeout(60)
+        check("logic level-in re-fills it on the rising edge",
+              page.evaluate(
+                  "nodes.get('m:echo').el.querySelector('.stripe')"
+                  ".classList.contains('on')"))
 
         # ================================================================
         # 18 — GUI pass B: the XS card size (4.5x4.5, quadrant slots) +
@@ -3097,6 +3131,50 @@ def main():
               and pb["cardPlaying"]
               and pb["lab"] == "playing" and pb["labColor"] == "rgb(27, 175, 122)",
               str(pb))
+
+        # REACTIVE-INDICATOR DOCTRINE (Cole, 07-24) — the headline case:
+        # "play/pause must switch visually in response to LOGIC input, not
+        # just user clicks". A wire into "transport:run" applies server-side
+        # outside the broadcast path, so the {"kind":"level"} event has to
+        # drive the card AND the top bar, exactly as a click does.
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'transport:run', on: false}})")
+        page.wait_for_timeout(60)
+        rl = page.evaluate("""(() => {
+          const n = nodes.get('tplay'), b = n.el.querySelector('.tpbtn');
+          return {txt: b.textContent,
+                  cardStopped: n.el.classList.contains('stopped'),
+                  lab: n.el.querySelector('.tplabel').textContent,
+                  bar: document.getElementById('play-btn').textContent};
+        })()""")
+        check("logic level-in STOPS the card live (⏵ + red glow + top bar)",
+              rl["cardStopped"] and "⏵" in rl["txt"]
+              and rl["lab"] == "stopped" and rl["bar"] == "▶", str(rl))
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'transport:run', on: true}})")
+        page.wait_for_timeout(60)
+        rl2 = page.evaluate("""(() => {
+          const n = nodes.get('tplay'), b = n.el.querySelector('.tpbtn');
+          return {txt: b.textContent,
+                  cardPlaying: n.el.classList.contains('playing'),
+                  lab: n.el.querySelector('.tplabel').textContent,
+                  bar: document.getElementById('play-btn').textContent};
+        })()""")
+        check("logic level-in PLAYS it again (⏹ + green glow + top bar)",
+              rl2["cardPlaying"] and "⏹" in rl2["txt"]
+              and rl2["lab"] == "playing" and rl2["bar"] == "⏹", str(rl2))
+        # click/accent LEDs follow their level-ins the same way
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'transport:click', on: true}})")
+        page.wait_for_timeout(60)
+        check("logic level-in lights the click LED live", page.evaluate(
+            "(() => { const r = [...nodes.get('ttempo').el"
+            ".querySelectorAll('.mini')].find(x =>"
+            " (x.querySelector('label')||{}).title === 'click');"
+            " return r.querySelector('.onoff').classList.contains('on'); })()"))
 
         # ---- tempo slider: the top bar's 40–220 mapping ----------------
         page.evaluate("nodes.get('ttempo').el.scrollIntoView("

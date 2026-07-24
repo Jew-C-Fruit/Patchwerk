@@ -109,6 +109,17 @@
   .mod .head { display: flex; align-items: center; gap: 7px; padding: 7px 9px 4px; cursor: grab; }
   .mod .head:active { cursor: grabbing; }
   .mod .stripe { width: 4px; align-self: stretch; border-radius: 3px; flex: none; }
+  /* item 26 (Cole, 07-24): on cards with switchable power the COLOR BAR *IS*
+     the power indicator — colored OUTLINE when off, colored FILL when on
+     (color = the card's category). The old green head circle is gone; the
+     stripe itself is the click target and the keyboard switch.
+     REACTIVE-INDICATOR DOCTRINE: the fill follows LOGIC input (a ":pwr"
+     gate event) exactly as it follows a click — see uiParam[gid+".pwr"]. */
+  .mod .stripe.pwr { cursor: pointer; background: transparent !important;
+    box-shadow: inset 0 0 0 1.5px var(--sc, #888); }
+  .mod .stripe.pwr.on { background: var(--sc, #888) !important;
+    box-shadow: 0 0 7px color-mix(in srgb, var(--sc, #888) 65%, transparent); }
+  .mod .stripe.pwr:hover { filter: brightness(1.35); }
   .mod .title { font-weight: 640; font-size: 12.5px; line-height: 1.15; }
   .mod .sub { font-size: 9.5px; color: var(--ink-2); }
   .mod .kill { margin-left: 2px; color: var(--ink-2); font-size: 11px; cursor: pointer;
@@ -711,6 +722,34 @@ const LINES = {
 const lineCount = {audio: 0, ctl: 0, mod: 0, bin: 0};
 const SIG_CSS = {audio: "var(--audio)", ctl: "var(--ctl)", mod: "var(--mod)",
                  bin: "var(--bin)", any: "#8d8b80"};  // any = unclaimed relay circuit
+// item 26 (Cole, 07-24): input handles are COLOR-CODED BY DATA TYPE in a
+// PASTEL of the data color, and declare "data type > target name" on hover.
+// The handle NEVER names its own card (you can see which card it's on); the
+// WIRE LABEL does name the card.
+const SIG_PASTEL = {audio: "#9dc4f2", ctl: "#8fdcb8", mod: "#f0a9a8",
+                    bin: "#f2dc9a", any: "#bcbbb2"};
+const SIG_NAME = {audio: "audio", ctl: "notes", mod: "mod", bin: "binary",
+                  any: "any"};
+// the TARGET a port drives, in the card's own words: a mod param-in names
+// its param ("cutoff"), a binary/level in names its endpoint role ("pwr",
+// "rec", "run"), everything else falls back to the port's label. This is the
+// single source of truth for handle titles AND wire labels — the "undefined"
+// wire label was this lookup reading .param on a quiet BINARY in, which
+// carries a label + ep but never a param.
+function portTarget(port) {
+  if (!port) return "";
+  if (port.param) return port.param;
+  if (port.ep) {
+    const sub = String(port.ep).split(":")[1];
+    if (sub) return sub;
+  }
+  return port.label || "";
+}
+function portTitle(port) {
+  const t = portTarget(port);
+  const kind = SIG_NAME[port && port.sig] || (port && port.sig) || "";
+  return t ? `${kind} > ${t}` : kind;
+}
 
 const world = document.getElementById("world");
 const wiresPerm = document.getElementById("wire-perm");
@@ -991,13 +1030,14 @@ function addCard(cfg) {
   const el = document.createElement("div");
   el.className = "mod";
   el.dataset.gid = cfg.gid;
+  let togglePower = null;   // set when the card has switchable power (item 26)
   // banner cards (binary plane, Cole 07-24): the head wears a solid color
   // band INSTEAD of the family stripe — yellow for binary sources, orange
   // for logic/relay/latch (the caller re-paints it live where mode-reactive)
   const stripe = FAMILY[cfg.fam] || "#888";
   el.innerHTML = `
     <div class="head">${cfg.banner ? "" :
-      `<div class="stripe" style="background:${stripe}"></div>`}
+      `<div class="stripe" style="background:${stripe};--sc:${stripe}"></div>`}
       <div><div class="title">${esc(cfg.name)}</div><div class="sub">${esc(cfg.sub || "")}</div></div>
     </div><div class="body"></div>`;
   const head = el.querySelector(".head");
@@ -1006,36 +1046,58 @@ function addCard(cfg) {
     head.style.background = cfg.banner;
   }
   if (cfg.headCheck) {
-    // item 8 (gate suite): the enable checkbox became a POWER LED — a round
-    // indicator light (lit = enabled) that still toggles on click and stays
-    // keyboard-reachable (a real <button> with role=switch)
-    const cb = document.createElement("button");
-    cb.type = "button"; cb.className = "onoff"; cb.title = "enabled";
-    cb.setAttribute("role", "switch");
+    // item 26 (Cole, 07-24): the power indicator IS the card's COLOR BAR —
+    // outline = off, filled = on. It replaces the round head LED (item 8),
+    // stays the click target, and stays keyboard-reachable (role=switch on
+    // the stripe itself). Banner cards (ping/logic) have no stripe and are
+    // excluded by spec — they keep their own level LEDs.
+    const cb = head.querySelector(".stripe");
     let on = !!cfg.headCheck.checked;
     const sync = () => {
-      cb.classList.toggle("on", on);
-      cb.setAttribute("aria-checked", String(on));
+      if (cb) {
+        cb.classList.toggle("on", on);
+        cb.setAttribute("aria-checked", String(on));
+      }
       el.classList.toggle("bypassed", !on);
     };
+    if (cb) {
+      cb.classList.add("pwr");
+      cb.setAttribute("role", "switch");
+      cb.setAttribute("tabindex", "0");
+      cb.title = "power";
+      // NB: the stripe deliberately does NOT swallow pointerdown. It sits in
+      // the head's top-left grab corner, so stealing the event would kill
+      // card dragging from that corner (it did — check_blocks §"blocks group
+      // drag"). Instead bindNode disambiguates: a STATIONARY press on the
+      // stripe toggles power on release; any real drag moves the card.
+      cb.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        e.preventDefault();
+        togglePower();
+      });
+    }
+    // one door for every path that flips power: click, keyboard, and the
+    // live level-in setter below (REACTIVE-INDICATOR DOCTRINE)
+    togglePower = () => { on = !on; sync(); cfg.headCheck.onChange(on); };
     sync();
-    cb.addEventListener("pointerdown", (e) => e.stopPropagation());
-    cb.addEventListener("click", (e) => {
-      on = !on; sync(); cfg.headCheck.onChange(on); e.target.blur();
-    });
-    head.appendChild(cb);
+    // REACTIVE-INDICATOR DOCTRINE (Cole, 07-24): a ":pwr" LEVEL-in must flip
+    // this indicator the instant the gate event lands — not at the next state
+    // broadcast. onMidi's {"kind":"gate"} dispatch calls this setter.
+    if (cfg.gid) uiParam[cfg.gid + ".pwr"] = (u, lvl) => { on = !!lvl; sync(); };
   }
   if (cfg.expandable) {
     const ex = document.createElement("span");
     ex.className = "expander"; ex.textContent = cfg.expanded ? "▾" : "▸";
     ex.title = "expand";
-    if (!cfg.headCheck) ex.style.marginLeft = "auto";
+    ex.style.marginLeft = "auto";
     head.appendChild(ex);
   }
   if (cfg.kill) {
     const k = document.createElement("span");
     k.className = "kill"; k.textContent = "✕"; k.title = "remove";
-    if (!cfg.headCheck && !cfg.expandable) k.style.marginLeft = "auto";
+    // the old head LED used to carry margin-left:auto; with the stripe as the
+    // power indicator (item 26) the right-most control has to claim it
+    if (!cfg.expandable) k.style.marginLeft = "auto";
     head.appendChild(k);
     k.addEventListener("pointerdown", (e) => e.stopPropagation());
     k.addEventListener("click", () => cfg.kill(node));
@@ -1056,7 +1118,8 @@ function addCard(cfg) {
   const node = {gid: cfg.gid, name: cfg.name, short: cfg.short || cfg.name.split(" ")[0],
                 fam: cfg.fam, x: 0, y: 0, el, ports: [], w: CARD_W,
                 expanded: !!cfg.expanded, persistent: !!cfg.persistent,
-                montype: cfg.montype || null, seed: !!cfg.seed, mod: cfg.mod || null};
+                montype: cfg.montype || null, seed: !!cfg.seed, mod: cfg.mod || null,
+                togglePower};   // null on cards without switchable power
   if (cfg.expandable) {
     const ex = el.querySelector(".expander"), vs = el.querySelector(".viz-sec");
     ex.addEventListener("pointerdown", (e) => e.stopPropagation());
@@ -2483,9 +2546,14 @@ function placeTags(routed) {
       }
       if (best) { r.tagPt = best; placed.push([best.x, best.y]); orient(bestSeg[0], bestSeg[1]); }
     }
-    // label text mirrors flex's labelGeom: quiet targets read "Node.param"
-    const dst = r.w.to.port && r.w.to.port.quiet
-      ? `${r.w.to.node.short}.${r.w.to.port.param}` : r.w.to.node.short;
+    // label text mirrors flex's labelGeom: quiet targets read "Node.target".
+    // item 26 BUG fix: the target comes from portTarget, so a quiet BINARY
+    // in (":pwr", "deck:rec", logic ":a" — label+ep, no param) reads
+    // "Echo.pwr" instead of the old "Echo.undefined". Wire labels DO name
+    // the card (the handle title deliberately doesn't).
+    const dstT = portTarget(r.w.to.port);
+    const dst = (r.w.to.port && r.w.to.port.quiet && dstT)
+      ? `${r.w.to.node.short}.${dstT}` : r.w.to.node.short;
     r.labelTxt = r.tagFlip ? `${dst} ← ${r.w.from.node.short}`
                            : `${r.w.from.node.short} → ${dst}`;
     r.balloon = false; r.bFlip = false;
@@ -2543,11 +2611,16 @@ function renderHandles() {
       el.style.top  = (H.y - 5.5) + "px";
       el.style.background = H.role === "wire" ? H.wire.color : "";
       el.style.borderColor = "";
-      if (H.role !== "wire") el.style.setProperty("--hc", SIG_CSS[H.sig] || "var(--mod)");
-      const pn = H.port.param ? ` · ${H.port.param}` : "";
+      // item 26: INPUT handles wear the PASTEL of their data color; outputs
+      // keep the full-strength signal color (a wired handle always shows its
+      // wire's color, so the family stays readable along the run)
+      if (H.role !== "wire")
+        el.style.setProperty("--hc", (H.side === "in"
+          ? SIG_PASTEL[H.sig] : SIG_CSS[H.sig]) || "var(--mod)");
+      // hover declares "data type > target name" and NEVER names the card
       el.title = H.port.plusSlot
-        ? `${n.name} — add a 5th circuit (expands the card)`
-        : `${n.name}${pn} (${H.sig})` +
+        ? "add a 5th circuit (expands the card)"
+        : portTitle(H.port) +
           (H.role === "wire" ? " — drag to repatch" : H.quiet ? " — single source" : "");
       el.dataset.hidx = HANDLE_LIST.length;
       H.el = el;
@@ -2631,7 +2704,13 @@ function bindNode(node) {
     drag = { node, group, offX: p.x - node.x, offY: p.y - node.y,
              starts: new Map(group.map(g => [g.gid, [g.x, g.y]])),
              gd: [0, 0], fdx: 0, fdy: 0,
-             plan: null, target: null, valid: false, prevKey: "" };
+             plan: null, target: null, valid: false, prevKey: "",
+             // item 26: the power stripe lives in the head's grab corner, so
+             // it can't swallow pointerdown without killing drags from there.
+             // A press that STARTS on the stripe and never really moves is a
+             // power click; anything that moves is an ordinary card drag.
+             pwrHit: e.target.classList.contains("pwr") ? node : null,
+             downX: e.clientX, downY: e.clientY };
     node.el.classList.add("dragging");
     $("wires").style.opacity = 0.35;
     $("wlabels").style.opacity = 0.35;
@@ -2695,8 +2774,13 @@ function bindNode(node) {
       previewMoves(plan.ok ? plan.moves : new Map());
     }
   });
-  head.addEventListener("pointerup", () => {
+  head.addEventListener("pointerup", (e) => {
     if (!drag || drag.node !== node) return;
+    // item 26: a stationary press that began on the power stripe is a CLICK
+    // on the power switch, not a drag (see the pwrHit note in pointerdown)
+    if (drag.pwrHit && drag.pwrHit.togglePower &&
+        Math.hypot(e.clientX - drag.downX, e.clientY - drag.downY) < 4)
+      drag.pwrHit.togglePower();
     node.el.classList.remove("dragging");
     setGhost(null);
     $("wires").style.opacity = 1;
@@ -4673,6 +4757,11 @@ function buildTPlayCard() {
     n.el.classList.toggle("stopped", !run);
   };
   sync(((state && state.transport) || {}).running !== false);
+  // REACTIVE-INDICATOR DOCTRINE (Cole, 07-24): "play/pause must switch
+  // visually in response to LOGIC input, not just user clicks". A wire into
+  // "transport:run" applies server-side OUTSIDE the broadcast path, so the
+  // {"kind":"level"} event drives the same sync() a click does.
+  uiParam["transport.run"] = (u, on) => sync(!!on);
   btn.addEventListener("pointerdown", (e) => e.stopPropagation());
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -4728,7 +4817,10 @@ function buildTTempoCard() {
       onPick: (v) => send({type: "set_transport", downbeat: v}),
     }),
   ];
-  // click + accent toggles as power-LEDs (the head-LED idiom, in a row)
+  // click + accent toggles as power-LEDs (the head-LED idiom, in a row).
+  // REACTIVE-INDICATOR DOCTRINE: their LEVEL-ins ("transport:click|accent")
+  // apply server-side outside the broadcast, so each LED also registers a
+  // live setter driven by the {"kind":"level"} event.
   const rowLED = (pname, on0, sendOn) => {
     const row = document.createElement("div");
     row.className = "mini";
@@ -4744,6 +4836,7 @@ function buildTTempoCard() {
     led.addEventListener("click", (e) => {
       on = !on; syncL(); sendOn(on); e.target.blur();
     });
+    uiParam[`transport.${pname}`] = (u, lvl) => { on = !!lvl; syncL(); };
     row.appendChild(led);
     return row;
   };
@@ -5713,12 +5806,18 @@ function onState() {
   $("bpm-v").textContent = Math.round(t.bpm ?? 100) + " bpm";
   $("meter").value = String(t.beats_per_bar ?? 4);
   $("click-on").checked = !!t.click;
-  $("play-btn").textContent = t.running === false ? "▶" : "⏹";
+  syncTopBarPlay(t.running !== false);
   if (sliderDrag !== "vol") $("vol").value = state.volume;
   $("midi-ind").textContent = "midi: " +
     (state.midi_enabled ? (state.midi_port || "auto") : "off");
   if (busy()) { pendingRebuild = true; return; }
   rebuildGraph();
+}
+
+// top bar ↔ Play/Stop card are two views of ONE global state — both must
+// follow LOGIC input, not just clicks (REACTIVE-INDICATOR DOCTRINE)
+function syncTopBarPlay(running) {
+  $("play-btn").textContent = running ? "⏹" : "▶";
 }
 
 // ---------- live message handlers ----------
@@ -5867,6 +5966,36 @@ function onMidi(e) {
     const setter = uiParam[`${e.id}.led`];
     if (setter) setter(0, shownLevel(e.id));
     redrawLogicViz();
+  } else if (e.kind === "level") {
+    // REACTIVE-INDICATOR DOCTRINE (Cole, 07-24): a LEVEL-IN drove its
+    // target — the indicator must switch NOW, exactly as it would on a
+    // click. The endpoint names the TARGET ("<key>:pwr", "transport:run",
+    // "transport:click|accent"); the server applies these outside the
+    // broadcast path, so this event is the only honest live signal.
+    const [base, , sub] = [String(e.ep).split(":")[0], null,
+                           String(e.ep).split(":")[1] || ""];
+    const on = !!e.on;
+    if (sub === "pwr") {
+      // keep the local state model in step so the next rebuild agrees
+      if (base === "arp" && state && state.arp) state.arp.enabled = on;
+      else if (base === "drums" && state && state.drums) state.drums.enabled = on;
+      else {
+        const mod = (state && state.chain || []).find(c => c.key === base);
+        if (mod) mod.enabled = on;
+      }
+      // cards key on the GID: chain modules are "m:<key>", players are bare
+      const setter = uiParam[`m:${base}.pwr`] || uiParam[`${base}.pwr`];
+      if (setter) setter(0, on);
+    } else if (base === "transport") {
+      if (state && state.transport) {
+        if (sub === "run") state.transport.running = on;
+        else if (sub === "click") state.transport.click = on;
+        else if (sub === "accent") state.transport.accent = on;
+      }
+      const setter = uiParam[`transport.${sub}`];
+      if (setter) setter(0, on);
+      if (sub === "run") syncTopBarPlay(on);   // card AND top bar are one state
+    }
   } else if (e.kind === "ping_bound") {
     // server-side MIDI capture landed: update the card's chip in place
     const b = (state && state.buttons || []).find(x => x.id === e.id);
