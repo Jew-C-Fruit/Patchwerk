@@ -3383,6 +3383,57 @@ def main():
               str(met19))
 
         # ================================================================
+        # 20a — item 13 (Cole, 07-24): the bottom instruction card is gone;
+        # a (?) bubble in the top bar opens a popover carrying the app
+        # shortcuts AND a LIVE list of the current trigger bindings.
+        # ================================================================
+        check("the bottom instruction card is gone",
+              page.evaluate("!document.querySelector('.hint')"))
+        h13 = page.evaluate("""(() => {
+          const btn = document.getElementById('helpbtn');
+          const pop = document.getElementById('helppop');
+          return {btn: !!btn, closed: pop.hidden,
+                  expanded: btn.getAttribute('aria-expanded')};
+        })()""")
+        check("(?) bubble sits in the top bar, popover starts closed",
+              h13 == {"btn": True, "closed": True, "expanded": "false"},
+              str(h13))
+        page.evaluate("document.getElementById('helpbtn').click()")
+        page.wait_for_timeout(80)
+        open13 = page.evaluate("""(() => {
+          const pop = document.getElementById('helppop');
+          const kbds = [...pop.querySelectorAll('kbd')].map(k => k.textContent);
+          return {shown: !pop.hidden, kbds,
+                  heads: [...pop.querySelectorAll('h4')].map(h => h.textContent),
+                  on: document.getElementById('helpbtn').classList.contains('on')};
+        })()""")
+        check("clicking (?) opens the popover with the shortcut sections",
+              open13["shown"] and open13["on"]
+              and open13["heads"] == ["keyboard", "patching",
+                                      "trigger bindings"], str(open13))
+        check("the instruction card's content moved into the popover",
+              "A – ;" in open13["kbds"] and "caps" in open13["kbds"]
+              and "space" in open13["kbds"], str(open13))
+        # the binding list covers every trigger card — including the ones
+        # still waiting to be paired (those are the ones you'd pair next)
+        check("popover lists trigger cards, unpaired ones marked",
+              "unpaired" in open13["kbds"], str(open13))
+        # ...and it is LIVE: a pairing lands without reopening the popover
+        page.evaluate(
+            "() => __msg({type: 'midi', event: {kind: 'ping_bound',"
+            " id: 'button', binding: {kind: 'cc', cc: 42}}})")
+        page.wait_for_timeout(80)
+        reb13 = page.evaluate(
+            "[...document.querySelectorAll('#helppop kbd')]"
+            ".map(k => k.textContent)")
+        check("a new pairing updates the live list in place (→ CC 42)",
+              "CC 42" in reb13 and "unpaired" not in reb13, str(reb13))
+        page.evaluate("document.getElementById('helpbtn').click()")
+        page.wait_for_timeout(60)
+        check("clicking (?) again closes the popover",
+              page.evaluate("document.getElementById('helppop').hidden"))
+
+        # ================================================================
         # 20 — item 28 (Cole, 07-24): Master Out takes handles on BOTH its
         # top and its side edge. Everything eventually lands on master, so a
         # heavy fan-in must not march its handles off the end of one edge —

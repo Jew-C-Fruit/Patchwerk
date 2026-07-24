@@ -425,11 +425,29 @@
   .legend { display: flex; gap: 12px; font-size: 10px; color: var(--ink-2); }
   .legend b { display: inline-block; width: 18px; height: 3px; border-radius: 2px;
     vertical-align: middle; margin-right: 4px; }
-  .hint { position: fixed; bottom: 8px; left: 50%; transform: translateX(-50%);
-    z-index: 40; font-size: 11px; color: var(--ink-2);
-    background: color-mix(in srgb, var(--plane) 85%, transparent);
-    border: 1px solid var(--hairline); border-radius: 8px; padding: 4px 12px;
-    backdrop-filter: blur(6px); white-space: nowrap; }
+  /* item 13 (Cole, 07-24): the bottom instruction card is GONE — its content
+     lives in the top bar's (?) bubble, whose popover also lists the CURRENT
+     button-trigger bindings and re-renders as pairings change. */
+  #helpbtn { font-weight: 700; width: 22px; padding: 0; }
+  #helpbtn.on { color: var(--ink-1); border-color: var(--ink-2); }
+  #helppop { position: fixed; top: 46px; right: 8px; z-index: 80; width: 300px;
+    max-height: min(70vh, 560px); overflow: auto; font-size: 11px;
+    color: var(--ink-2); background: color-mix(in srgb, var(--plane) 96%, transparent);
+    border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px 11px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.55); backdrop-filter: blur(8px); }
+  #helppop[hidden] { display: none; }
+  #helppop h4 { margin: 9px 0 4px; font-size: 9.5px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--ink-2); opacity: 0.75;
+    font-weight: 700; }
+  #helppop h4:first-child { margin-top: 0; }
+  #helppop dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 9px;
+    margin: 0; align-items: baseline; }
+  #helppop dt { text-align: right; white-space: nowrap; }
+  #helppop dd { margin: 0; color: var(--ink-1); }
+  #helppop kbd { font: 600 9.5px ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--hairline); color: var(--ink-1); border-radius: 3px;
+    padding: 1px 4px; white-space: nowrap; }
+  #helppop .none { color: var(--ink-2); opacity: 0.7; font-style: italic; }
   #toast { position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
     z-index: 60; font-size: 11px; color: var(--ink-1); background: #2c2c2a;
     border: 1px solid var(--border); border-radius: 8px; padding: 5px 14px;
@@ -657,6 +675,7 @@
     <b id="caps-note" style="color:var(--danger);font-size:10px"></b></div>
   <span id="midi-ind">midi: —</span>
   <button id="tidy" title="compact the layout">⇱ tidy</button>
+  <button id="helpbtn" title="shortcuts &amp; keybindings" aria-expanded="false">?</button>
   <div class="legend">
     <span><b style="background:linear-gradient(90deg,#3987e5,#22b8d4)"></b>audio</span>
     <span><b style="background:linear-gradient(90deg,#1baf7a,#e8c832)"></b>notes</span>
@@ -680,9 +699,7 @@
   <div id="fpghost"><div class="halfline"></div></div>
   <div id="lasso"></div>
 </div></div>
-<div class="hint">keys <b>A–;</b> play · <b>Z/X</b> octave · <b>caps</b> sustain · <b>space</b> loop-rec
-  · drag handles to wire · drag a wire's end to repatch (space = cut) · double-click a wire to cut
-  · drag its label onto a module to splice · hover a block edge to shove</div>
+<div id="helppop" hidden></div>
 <div id="toast"></div>
 
 <script>
@@ -3415,6 +3432,74 @@ function setMode(m) {
 $("mode-blocks").addEventListener("click", () => setMode("blocks"));
 $("mode-flex").addEventListener("click", () => setMode("flex"));
 
+// ---------- item 13: the (?) help bubble -------------------------------------
+// Replaces the bottom instruction card. The popover carries the app shortcuts
+// AND a LIVE list of the current button-trigger bindings — it re-renders on
+// every state broadcast and on every pairing change, so what it shows is what
+// the keyboard actually does right now.
+const HELP_KEYS = [
+  ["A – ;", "play notes (computer keyboard)"],
+  ["Z / X", "octave down / up"],
+  ["caps", "sustain"],
+  ["space", "loop-rec (deck)"],
+];
+const HELP_MOUSE = [
+  ["drag a handle", "wire it to another card"],
+  ["drag a wire's end", "repatch it (space = cut)"],
+  ["double-click a wire", "cut it"],
+  ["drag a wire's label", "drop on a card to splice it in"],
+  ["hover a block edge", "shove neighbours aside"],
+  ["drag from empty board", "lasso-select a group"],
+];
+function helpBindingRows() {
+  // one row per BOUND trigger card, in card order; unbound cards are listed
+  // too (they're the ones you'd want to pair next)
+  const out = [];
+  for (const b of (state && state.buttons) || []) {
+    const n = nodes.get(b.id);
+    out.push([bindingLabel(b.binding), (n && n.name) || b.id,
+              !!b.binding]);
+  }
+  return out;
+}
+function renderHelpPop() {
+  const pop = $("helppop");
+  if (pop.hidden) return;                   // closed: nothing to re-render
+  const dl = (rows) => `<dl>` + rows.map(([k, v]) =>
+    `<dt><kbd>${esc(k)}</kbd></dt><dd>${esc(v)}</dd>`).join("") + `</dl>`;
+  const binds = helpBindingRows();
+  pop.innerHTML =
+    `<h4>keyboard</h4>${dl(HELP_KEYS)}` +
+    `<h4>patching</h4>${dl(HELP_MOUSE)}` +
+    `<h4>trigger bindings</h4>` +
+    (binds.length
+      ? `<dl>` + binds.map(([k, v, bound]) =>
+          `<dt><kbd>${esc(bound ? k : "unpaired")}</kbd></dt>` +
+          `<dd${bound ? "" : ' class="none"'}>${esc(v)}</dd>`).join("") + `</dl>`
+      : `<div class="none">no trigger cards on the canvas</div>`);
+}
+function toggleHelpPop(show) {
+  const pop = $("helppop"), btn = $("helpbtn");
+  const open = show === undefined ? pop.hidden : show;
+  pop.hidden = !open;
+  btn.classList.toggle("on", open);
+  btn.setAttribute("aria-expanded", String(open));
+  if (open) renderHelpPop();
+}
+$("helpbtn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  toggleHelpPop();
+  e.target.blur();
+});
+document.addEventListener("pointerdown", (e) => {
+  if ($("helppop").hidden) return;
+  if (e.target.closest("#helppop") || e.target.closest("#helpbtn")) return;
+  toggleHelpPop(false);
+});
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("helppop").hidden) toggleHelpPop(false);
+});
+
 
 // ---------- wires ----------
 // opts.cut: the click-to-cut callback. Every cut is REAL in v3: audio cuts
@@ -4358,6 +4443,7 @@ function startPingArm(gid) {
   send({type: "set_button", id: gid, armed: true});   // MIDI capture server-side
   const setter = uiParam[gid + ".bind"];
   if (setter) setter(0, "press a key/CC…");
+  renderHelpPop();     // item 13: the help list follows pairing state LIVE
 }
 function cancelPingArm(silent) {
   if (pingArm === null) return;
@@ -4367,6 +4453,7 @@ function cancelPingArm(silent) {
   const b = ((state && state.buttons) || []).find(x => x.id === gid);
   const setter = uiParam[gid + ".bind"];
   if (setter) setter(0, bindingLabel(b && b.binding));
+  renderHelpPop();     // item 13: pairing ended — refresh the live list
 }
 function pingFlash(src) {
   // pad-less trigger cards (threshold) pulse the whole card instead;
@@ -5651,6 +5738,7 @@ function rebuildGraph() {
   // item 26 (d): paint every fresh canvas NOW — a rebuilt card must never
   // reach the screen with a blank viz (that empty frame IS the flicker)
   try { drawVizOnce(performance.now()); } catch (_) {}
+  renderHelpPop();   // item 13: the binding list is LIVE (cards just changed)
   requestAnimationFrame(() => refreshActivity());
   // SETTLE PASS: L-card bodies shift a beat after first paint (2-col flow,
   // font metrics, title shrink) — the estimator's trigger-in was rendering
@@ -6030,6 +6118,7 @@ function onMidi(e) {
     if (pingArm === e.id) pingArm = null;
     const setter = uiParam[`${e.id}.bind`];
     if (setter) setter(0, bindingLabel(e.binding));
+    renderHelpPop();   // item 13: a NEW binding — the live list must show it
   }
 }
 
