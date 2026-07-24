@@ -26,6 +26,7 @@ Chain-module toggles run against a duck-typed RecordingRack
 (test_graph's pattern) so the exact set_enabled traffic is assertable.
 """
 
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -36,6 +37,7 @@ sys.path.insert(0, str(REPO))
 from synthbase.app import SynthApp  # noqa: E402
 from synthbase.gate import GATE_OPS  # noqa: E402
 from synthbase import presets  # noqa: E402
+from synthbase.module import param  # noqa: E402
 
 FAILURES = []
 
@@ -57,7 +59,12 @@ class FakeNode:
 
 
 def fake_inst(key, kind):
-    return SimpleNamespace(key=key, module=SimpleNamespace(kind=kind),
+    # a couple of real params so the MOD plane (LFO → relay → param) has
+    # somewhere honest to land; unrelated tests simply ignore them
+    params = {"cutoff": param(20.0, 20000.0, 1200.0, curve="exp"),
+              "amp": param(0.0, 1.0, 0.5)}
+    return SimpleNamespace(key=key,
+                           module=SimpleNamespace(kind=kind, params=params),
                            settings={}, service=False, node=FakeNode(),
                            enabled=True, type=key.split(".", 1)[0])
 
@@ -91,6 +98,10 @@ class RecordingRack:
 
     def reorder_for_wires(self, wires):
         self.calls.append(("reorder", len(wires)))
+
+    def set_param(self, key, name, value):
+        self.calls.append(("set_param", key, name, value))
+        self.find(key).settings[name] = value
 
     def set_enabled(self, key, enabled):
         self.calls.append(("set_enabled", key, bool(enabled)))
@@ -671,6 +682,173 @@ def test_relay_audio_and_removal():
                       for w in app.graph_wires))
 
 
+# ---- relay: MOD circuit (LFO through a relay, Cole 07-24) --------------------
+
+def mod_app():
+    app = SynthApp(use_midi=False, use_reload=False)
+    app.rack = RecordingRack([("pluck", "source"), ("echo", "effect")])
+    return app
+
+
+def owner(app, key, pname):
+    return app.lfos._owner_of(key, pname)
+
+
+def test_relay_mod():
+    app = mod_app()
+    rid = app.spawn_relay()
+    lid = app.spawn_lfo()
+
+    app.mod_wire("add", lid, f"{rid}:1")
+    app.mod_wire("add", f"{rid}:1", "echo:cutoff")
+    check("mod endpoints accepted + stored verbatim",
+          {"from": lid, "to": f"{rid}:1"} in app.mod_wires
+          and {"from": f"{rid}:1", "to": "echo:cutoff"} in app.mod_wires)
+    check("mod circuit claims its kind",
+          app.relays[rid].kinds.get(1) == "mod")
+    check("open circuit drives nothing (param on its own knob)",
+          owner(app, "echo", "cutoff") is None)
+
+    app.set_relay(rid, closed=True)
+    check("closing maps the param onto the LFO",
+          owner(app, "echo", "cutoff") == lid
+          and ("echo", "cutoff") in app.rack.mapped)
+    app.set_relay(rid, closed=False)
+    check("opening unmaps it again (settles on the knob value)",
+          owner(app, "echo", "cutoff") is None
+          and ("echo", "cutoff") not in app.rack.mapped)
+
+    # kind mismatch, both directions
+    b = app.spawn_button()
+    try:
+        app.set_ctl_wire("add", b, f"{rid}:1")
+        check("binary wire into a mod circuit refused", False)
+    except ValueError:
+        check("binary wire into a mod circuit refused", True)
+    try:
+        app.mod_wire("add", lid, f"{rid}:9")
+        app.set_ctl_wire("add", "keys", f"{rid}:9")
+        check("notes wire into a mod circuit refused", False)
+    except ValueError:
+        check("notes wire into a mod circuit refused", True)
+
+    # grammar: a param dst must really exist; an LFO is the only bare src
+    try:
+        app.mod_wire("add", lid, "echo:nosuchparam")
+        check("mod wire onto a missing param refused", False)
+    except ValueError:
+        check("mod wire onto a missing param refused", True)
+    try:
+        app.mod_wire("add", "keys", "echo:cutoff")
+        check("a non-LFO bare source has no mod out", False)
+    except ValueError:
+        check("a non-LFO bare source has no mod out", True)
+
+
+def test_relay_mod_contacts_and_hygiene():
+    app = mod_app()
+    rid = app.spawn_relay()
+    l1, l2 = app.spawn_lfo(), app.spawn_lfo()
+    app.set_relay(rid, closed=True)
+
+    app.mod_wire("add", l1, f"{rid}:1")
+    app.mod_wire("add", f"{rid}:1", "echo:cutoff")
+    check("closed circuit passes the modulation", owner(app, "echo", "cutoff") == l1)
+
+    # 1:1 contacts (Cole): a second wire onto either side STEALS
+    app.mod_wire("add", l2, f"{rid}:1")
+    check("circuit IN is 1:1 — the second source steals",
+          [w["from"] for w in app.mod_wires if w["to"] == f"{rid}:1"] == [l2]
+          and owner(app, "echo", "cutoff") == l2)
+    app.mod_wire("add", f"{rid}:1", "echo:amp")
+    check("circuit OUT is 1:1 — the second dest steals",
+          [w["to"] for w in app.mod_wires if w["from"] == f"{rid}:1"]
+          == ["echo:amp"]
+          and owner(app, "echo", "cutoff") is None
+          and owner(app, "echo", "amp") == l2)
+    # LFO fan-out is still free (one LFO, many wires)
+    app.mod_wire("add", l2, "pluck:amp")
+    check("LFO fan-out stays free (direct dest alongside the circuit)",
+          owner(app, "pluck", "amp") == l2
+          and owner(app, "echo", "amp") == l2)
+
+    # a DIRECT lfo_wire onto a relay-driven param evicts the relay route
+    app.lfo_wire("add", l1, "echo", "amp")
+    check("a direct wire evicts the relay-routed one",
+          owner(app, "echo", "amp") == l1
+          and not any(w["to"] == "echo:amp" for w in app.mod_wires))
+    app.set_relay(rid, closed=False)
+    check("re-opening the relay leaves the direct dest alone",
+          owner(app, "echo", "amp") == l1)
+
+    # cycles + self-wires
+    r2 = app.spawn_relay()
+    app.mod_wire("add", f"{rid}:2", f"{r2}:2")
+    try:
+        app.mod_wire("add", f"{r2}:2", f"{rid}:2")
+        check("mod cycle through relays refused", False)
+    except ValueError:
+        check("mod cycle through relays refused", True)
+    try:
+        app.mod_wire("add", f"{rid}:3", f"{rid}:4")
+        check("mod self-wire refused", False)
+    except ValueError:
+        check("mod self-wire refused", True)
+
+
+def test_relay_mod_removal_and_persistence():
+    app = mod_app()
+    rid = app.spawn_relay()
+    lid = app.spawn_lfo()
+    app.set_relay(rid, closed=True)
+    app.mod_wire("add", lid, f"{rid}:1")
+    app.mod_wire("add", f"{rid}:1", "echo:cutoff")
+
+    check("the app carries the stored mod plane",
+          {"from": lid, "to": f"{rid}:1"} in app.mod_wires)
+    check("state broadcasts mod_wires",
+          "mod_wires" in SynthApp(use_midi=False, use_reload=False).state())
+
+    data = presets.snapshot(app)
+    presets.write_resume(app)          # resume carries the wiring
+    resume = json.loads(presets.RESUME_PATH.read_text())["resume"]
+    presets.RESUME_PATH.unlink(missing_ok=True)
+    check("resume carries mod_wires",
+          {"from": lid, "to": f"{rid}:1"} in resume["mod_wires"]
+          and {"from": f"{rid}:1", "to": "echo:cutoff"} in resume["mod_wires"])
+    check("the preset snapshot is unchanged in shape (relays {id, closed})",
+          data["relays"] == [{"id": rid, "closed": True}])
+
+    # cutting the wire drops the modulation and forgets the claim
+    app.mod_wire("remove", f"{rid}:1", "echo:cutoff")
+    check("cutting the out wire unmaps the param",
+          owner(app, "echo", "cutoff") is None)
+    check("an untouched circuit forgets its kind",
+          app.relays[rid].kinds.get(1) == "mod")   # in wire still holds it
+    app.mod_wire("remove", lid, f"{rid}:1")
+    check("the last wire out of a circuit clears its kind",
+          app.relays[rid].kinds.get(1) is None and app.mod_wires == [])
+
+    # removing the RELAY scrubs its mod wires and drops the modulation
+    app.mod_wire("add", lid, f"{rid}:2")
+    app.mod_wire("add", f"{rid}:2", "echo:amp")
+    check("re-wired + mapped again", owner(app, "echo", "amp") == lid)
+    app.remove_relay(rid)
+    check("removing the relay scrubs mod wires + unmaps",
+          app.mod_wires == [] and owner(app, "echo", "amp") is None)
+
+    # removing the LFO does the same from the other end
+    rid = app.spawn_relay()
+    app.set_relay(rid, closed=True)
+    app.mod_wire("add", lid, f"{rid}:1")
+    app.mod_wire("add", f"{rid}:1", "echo:amp")
+    check("wired through a fresh relay", owner(app, "echo", "amp") == lid)
+    app.remove_lfo(lid)
+    check("removing the LFO scrubs its mod wires",
+          not any(w["from"] == lid for w in app.mod_wires)
+          and owner(app, "echo", "amp") is None)
+
+
 # ---- persistence -------------------------------------------------------------
 
 def test_persistence():
@@ -812,6 +990,9 @@ def main():
     test_relay_notes()
     test_relay_binary_and_ctl()
     test_relay_audio_and_removal()
+    test_relay_mod()
+    test_relay_mod_contacts_and_hygiene()
+    test_relay_mod_removal_and_persistence()
     test_persistence()
     test_migration()
     test_events()

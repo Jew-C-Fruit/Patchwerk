@@ -67,8 +67,9 @@ Protocol (JSON messages):
     {"type": "set_relay", "id": "relay", "closed": true}
         (type-agnostic switched junction, 9 circuits: endpoints
          "relay:1".."relay:9" carry audio (graph_wire), notes or binary
-         (ctl_wire) — a circuit's kind = kind of its first wire. closed
-         gates flow per kind (opening all_offs note circuits);
+         (ctl_wire) or mod (mod_wire) — a circuit's kind = kind of its
+         first wire, and a circuit is 1:1 on BOTH sides (adding steals).
+         closed gates flow per kind (opening all_offs note circuits);
          "relay:ctl" is a binary level-in driving closed; set_relay is
          the manual click, last writer wins.)
     {"type": "spawn_literal"} / {"type": "remove_literal", "id": "literal.2"}
@@ -107,6 +108,13 @@ Protocol (JSON messages):
      "key": "lowpass.2", "name": "cutoff"}
         (modulation fan-out: one LFO drives any number of params; a param
          is single-input — wiring an already-mapped param steals it)
+    {"type": "mod_wire", "action": "add"|"remove",
+     "from": "lfo", "to": "relay:3"}
+        (the mod plane THROUGH a relay, 07-24: endpoints are an LFO id, a
+         relay circuit ("relay:3", in or out by direction) or a param
+         ("lowpass.2:cutoff"). Stored in state.mod_wires and RESOLVED
+         through the closed circuits — an open circuit leaves the param on
+         its own knob value. Circuits are 1:1 on both sides; adding steals.)
     {"type": "spawn_threshold"} / {"type": "remove_threshold", "id": "threshold.2"}
     {"type": "set_threshold", "id": "threshold", "level": 0.0,
      "hysteresis": 0.02, "mode": "rising"|"falling"|"both"}
@@ -369,6 +377,11 @@ class GuiServer:
             await loop.run_in_executor(
                 None, lambda: self.synth.lfo_wire(
                     m.get("action", "add"), m["id"], m["key"], m["name"]))
+            await self._broadcast_state()
+        elif t == "mod_wire":
+            await loop.run_in_executor(
+                None, lambda: self.synth.mod_wire(
+                    m.get("action", "add"), m.get("from"), m.get("to")))
             await self._broadcast_state()
         elif t == "lfo_set":
             self.synth.lfo_set(m["id"], rate=m.get("rate"), depth=m.get("depth"),

@@ -306,6 +306,13 @@ class SynthApp:
         # binary rework: relays (type-agnostic switched junctions),
         # keyshift-style dict of nodes
         self.relays: dict[str, RelayNode] = {}
+        # the MOD plane's stored wires (07-24): LFO out → relay circuit →
+        # "<key>:<param>". Which params an LFO really drives is RESOLVED
+        # from these through the closed circuits (relay.resolve_mod);
+        # _mod_managed is the dest set this layer owns, so a direct
+        # lfo_wire destination is never yanked out from under the user.
+        self.mod_wires: list[dict] = []
+        self._mod_managed: set[tuple[str, str]] = set()
         # item 8: thresholds (CV edge → ping; watch synths + /tr edge-notify)
         self.thresholds = ThresholdManager(self)
         self._legacy_drone = False               # set_drone compat pair active
@@ -409,6 +416,12 @@ class SynthApp:
         self.patch = patch
         self.rack.on_node_replaced = self._on_node_replaced
         self.lfos.on_rack_rebuilt()  # dests die with the old rack; LFOs stay
+        # the mod plane's PARAM ends died with the rack too (its circuits
+        # survive, like every other spawned node)
+        self.mod_wires = [w for w in self.mod_wires
+                          if relay_mod.relay_ep(self, w.get("to")) is not None]
+        self._mod_managed.clear()
+        self._relay_refresh_kinds()
         self.rack.mapped.clear()
         if self._legacy_drone:  # re-add the compat deriver+drone pair
             self._ensure_legacy_drone()
@@ -624,6 +637,10 @@ class SynthApp:
                         rk[0].claim(rk[1], "binary")
                     if self.gates.is_single_input(dst):
                         self.gates.steal_input(dst)
+                    if relay_mod.relay_ep(self, src) is not None:
+                        # a circuit OUT is 1:1 as well (Cole, 07-24)
+                        self.ctl_wires = [x for x in self.ctl_wires
+                                          if x.get("from") != src]
                     w = {"from": src, "to": dst}
                     if w not in self.ctl_wires:
                         self.ctl_wires.append(w)
@@ -650,6 +667,23 @@ class SynthApp:
                     rk = relay_mod.relay_ep(self, ep)
                     if rk is not None:
                         rk[0].claim(rk[1], "notes")
+                # relay circuits are 1:1 CONTACT SETS (Cole, 07-24): one
+                # wire per side, adding steals. A stolen note-in silences
+                # downstream first — the departing controller's held notes
+                # must not ring on under the new one.
+                out_rk = relay_mod.relay_ep(self, src)
+                if out_rk is not None:
+                    self.ctl_wires = [x for x in self.ctl_wires
+                                      if x.get("from") != src]
+                in_rk = relay_mod.relay_ep(self, dst)
+                if in_rk is not None and any(x.get("to") == dst
+                                             for x in self.ctl_wires):
+                    try:
+                        in_rk[0].circuit_in(in_rk[1]).all_off()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self.ctl_wires = [x for x in self.ctl_wires
+                                      if x.get("to") != dst]
                 w = {"from": src, "to": dst}
                 if w not in self.ctl_wires:
                     self.ctl_wires.append(w)
@@ -839,6 +873,13 @@ class SynthApp:
                     self._legacy_drone = False
                 # drop any LFO destinations on the departing module + map guards
                 self.lfos.on_module_removed(key)
+                # ... and the relay-routed mod wires that aimed at them
+                self.mod_wires = [
+                    w for w in self.mod_wires
+                    if str(w.get("to", "")).rpartition(":")[0] != key]
+                self._mod_managed = {kp for kp in self._mod_managed
+                                     if kp[0] != key}
+                self._relay_refresh_kinds()
                 self.rack.mapped = {(k, p) for (k, p) in self.rack.mapped
                                     if k != key}
                 voice_touched = (key in self._voice_targets.values()
@@ -915,6 +956,17 @@ class SynthApp:
                 for rk in (src_rk, dst_rk):
                     if rk is not None:
                         rk[0].claim(rk[1], "audio")
+                if dst_rk is not None:
+                    # a circuit IN is a 1:1 CONTACT, not a summing bus
+                    # (Cole, 07-24): the incoming wire steals it, and the
+                    # displaced source parks on the null bus
+                    for old in [w for w in wires if w.get("to") == dst]:
+                        if relay_mod.relay_ep(self, old["from"]) is None:
+                            try:
+                                self.rack.audio_disconnect(old["from"])
+                            except Exception:  # noqa: BLE001
+                                pass
+                        old["to"] = None
                 wires.append({"from": src, "to": dst})
                 self.graph_wires = wires
                 if src_rk is None and dst_rk is None:
@@ -1082,7 +1134,11 @@ class SynthApp:
             self.ctl_wires = [w for w in self.ctl_wires
                               if w.get("from") not in eps
                               and w.get("to") not in eps]
+            self.mod_wires = [w for w in self.mod_wires
+                              if w.get("from") not in eps
+                              and w.get("to") not in eps]
             del self.relays[rid]
+            relay_mod.resolve_mod(self)   # orphaned params fall back to knob
             for ep in eps:                  # edge state dies with the node
                 self.gates._edge.pop(ep, None)
             self.gates.recompute()
@@ -1393,21 +1449,99 @@ class SynthApp:
     def remove_lfo(self, lid: str) -> None:
         with self._lock:
             self.thresholds.on_lfo_removed(lid)  # CV-ins unwire first
+            self.mod_wires = [w for w in self.mod_wires
+                              if w.get("from") != lid]
             self.lfos.remove(lid)
+            self._relay_refresh_kinds()
+            relay_mod.resolve_mod(self)
 
     def lfo_set(self, lid: str, **cfg) -> None:
         with self._lock:
             self.lfos.configure(lid, **cfg)
 
     def lfo_wire(self, action: str, lid: str, key: str, name: str) -> None:
-        """Add/remove a modulation wire: LFO out → a param's quiet handle."""
+        """Add/remove a DIRECT modulation wire: LFO out → a param's quiet
+        handle. A param is single-input, so a direct wire also evicts any
+        relay-routed mod wire that was driving it (and the relay layer
+        stops managing that dest)."""
         with self._lock:
             if action == "add":
                 self.lfos.wire(lid, key, name)
+                try:
+                    ikey = self.rack.find(key).key
+                except Exception:  # noqa: BLE001
+                    ikey = key
+                self.mod_wires = [w for w in self.mod_wires
+                                  if w.get("to") != f"{ikey}:{name}"]
+                self._mod_managed.discard((ikey, name))
+                self._relay_refresh_kinds()
             elif action == "remove":
                 self.lfos.unwire(lid, key, name)
             else:
                 raise ValueError(f"unknown lfo_wire action {action!r}")
+
+    # -- the mod plane through relays (Cole, 07-24) --------------------------------
+
+    def _mod_src_ok(self, src) -> bool:
+        """Mod OUTPUTS: an LFO instance, or a relay circuit endpoint."""
+        if relay_mod.relay_ep(self, src) is not None:
+            return True
+        return src in self.lfos.instances
+
+    def _mod_dst_ok(self, dst) -> bool:
+        """Mod INPUTS: a relay circuit endpoint, or a live "<key>:<param>"."""
+        if relay_mod.relay_ep(self, dst) is not None:
+            return True
+        return relay_mod.param_ep(self, dst) is not None
+
+    def mod_wire(self, action: str, src: str, dst: str | None = None) -> None:
+        """Add/remove a mod wire through the relay plane. Endpoints: an LFO
+        id ("lfo.2"), a relay CIRCUIT ("relay:3" — in or out, direction
+        disambiguates) or a param ("lowpass.2:cutoff").
+
+        A circuit is a 1:1 CONTACT SET: adding steals whatever held that
+        side. A param in is single-input as ever (LFO fan-OUT stays free).
+        The wires are STORED; which params actually move is resolved
+        through the closed circuits by relay.resolve_mod."""
+        with self._lock:
+            if action == "add":
+                if not self._mod_src_ok(src):
+                    raise ValueError(f"{src!r} has no mod output")
+                if not self._mod_dst_ok(dst):
+                    raise ValueError(f"cannot wire mod into {dst!r}")
+                if str(src).partition(":")[0] == str(dst).partition(":")[0]:
+                    raise ValueError(f"{src} → {dst} would loop on itself")
+                # cycle guard over the STORED wires — circuits walk like
+                # nodes, so a loop through a relay is rejected whatever its
+                # closed state
+                adj = {w["from"]: w.get("to") for w in self.mod_wires
+                       if relay_mod.relay_ep(self, w.get("from")) is not None}
+                cur, hops = dst, 0
+                while cur is not None and hops < 64:
+                    if cur == src:
+                        raise ValueError(
+                            f"{src} → {dst} would create a mod cycle")
+                    cur = adj.get(cur)
+                    hops += 1
+                for ep in (src, dst):        # circuits carry ONE kind
+                    rk = relay_mod.relay_ep(self, ep)
+                    if rk is not None:
+                        rk[0].claim(rk[1], "mod")
+                src_is_circuit = relay_mod.relay_ep(self, src) is not None
+                self.mod_wires = [
+                    w for w in self.mod_wires
+                    if w.get("to") != dst
+                    and not (src_is_circuit and w.get("from") == src)]
+                self.mod_wires.append({"from": src, "to": dst})
+            elif action == "remove":
+                self.mod_wires = [
+                    w for w in self.mod_wires
+                    if not (w.get("from") == src
+                            and (dst is None or w.get("to") == dst))]
+                self._relay_refresh_kinds()
+            else:
+                raise ValueError(f"unknown mod_wire action {action!r}")
+            relay_mod.resolve_mod(self)
 
     def save_preset(self, name: str) -> str:
         return presets_mod.save_preset(self, name)
@@ -1737,6 +1871,7 @@ class SynthApp:
                 "thresholds": self.thresholds.state(),
                 **self.gates.state(),   # "logics" (binary rework: no switches)
                 "relays": [r.settings() for r in self.relays.values()],
+                "mod_wires": [dict(w) for w in self.mod_wires],
                 "presets": presets_mod.list_presets(),
                 "available": sorted(
                     ({"key": m.key, "name": m.name, "kind": m.kind,

@@ -169,12 +169,16 @@ class GateManager:
         return False
 
     def is_single_input(self, dst) -> bool:
-        """Endpoints that hold at most ONE binary wire: logic named ins
-        and relay:ctl. Adding a wire to an occupied one steals it."""
+        """Endpoints that hold at most ONE binary wire: logic named ins,
+        relay:ctl, and (Cole, 07-24) every relay CIRCUIT in — a circuit is
+        a 1:1 contact set, not a fan-in bus. Adding steals."""
         base, _, sub = str(dst).partition(":")
         if base in self.logics and (sub in LOGIC_INS or sub in _LEGACY_INS):
             return True
-        return base in getattr(self.app, "relays", {}) and sub == "ctl"
+        if base not in getattr(self.app, "relays", {}):
+            return False
+        return sub == "ctl" or (sub.isdigit()
+                                and 1 <= int(sub) <= MAX_CIRCUITS)
 
     def _canon(self, dst):
         """Canonicalize a legacy logic endpoint: ":set" → ":a", ":reset"
