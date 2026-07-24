@@ -99,7 +99,8 @@ class RelayNode:
         self.app = app
         self.id = rid
         self.closed = False                 # default OPEN
-        self.kinds: dict[int, str] = {}     # circuit -> "audio"|"notes"|"binary"
+        # circuit -> "audio"|"notes"|"binary"|"mod"
+        self.kinds: dict[int, str] = {}
         self._ins = {k: _CircuitIn(self, k)
                      for k in range(1, MAX_CIRCUITS + 1)}
 

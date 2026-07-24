@@ -10,10 +10,14 @@
 > so renumber only at a major restructure. When this doc and the code
 > disagree, the code wins and this doc has a bug: fix it here.
 >
-> **Verified against:** `main` @ `eb360ef` (v2.0 "Wavetable" pre-release
-> line), 2026-07-24. Batch B (blocks.html polish: items 14/15/18) was in
-> flight on a feature branch at verification time; engine (`synthbase/`),
-> `modules/`, and `patches/` were identical to main.
+> **Verified against:** `main` @ `71bd089` (v2.0 "Wavetable" pre-release
+> line), 2026-07-25. First written against `eb360ef` and re-verified
+> forward through PRs #37–#44: Batch B blocks polish, P4 mod-handle
+> linkage, the item-20 top-margin REVERT (#40), tidy-into-frame (#41),
+> M-default graphical cards (#42), the relay tweaks (#43) that added 1:1
+> contacts and the `mod` circuit plane, and the wire fan-nesting rule
+> (#44). #40–#44 are GUI-only and change nothing this doc specifies
+> outside §13, which defers UI geometry to `docs/BLOCKS_SPEC.md`.
 
 Sibling docs and their jobs (this doc does not duplicate them):
 `CLAUDE.md` = the module-authoring contract + house rules for LLM work;
@@ -141,7 +145,7 @@ Everything patchable is a wire; there are four distinct wire systems:
 | **Audio** | `app.graph_wires` | module instance ids, `"master"`, relay circuit endpoints `"relay:k"` | `graph_wire` |
 | **Notes** (control) | `app.ctl_wires` | ctl node ids + lane/circuit grammar (§4.1) | `ctl_wire` |
 | **Binary** (hi/lo) | `app.ctl_wires` (same list; kind inferred from the source endpoint) | binary sources → level-ins/trig-ins (§5.3) | `ctl_wire` |
-| **Modulation** (CV) | LFO dest records / threshold `source` | LFO out → param handle; LFO out → threshold CV-in | `lfo_wire`, `threshold_wire` |
+| **Modulation** (CV) | LFO dest records / threshold `source`; `app.mod_wires` for relay-routed hops | LFO out → param handle; LFO out → threshold CV-in; LFO out → `"relay:k"` → `"<key>:<param>"` | `lfo_wire`, `threshold_wire`, `mod_wire` |
 
 A **tap** (`{"kind": "tap", "src": <node id>, "note", "on"}`) is the viz
 event a control node emits when it fires — ONE per source-fire, not per
@@ -170,8 +174,16 @@ Cole's canonical words (2026-07-22): a **unit** (= grid square) is the
 fine 16 px grid cell (`U = 16` in blocks.html). A **block** is the
 10 u × 10 u snappable area (`BLK = 10`), separated by 2 u gutters. Card
 footprints: **S** = 10×4.5 u (half a block), **M** = 10×10 u (one
-block), **L** = 22×10 u (two blocks spanning their gutter). "3 units
-high" means 3 grid squares (48 px) — never 3 blocks.
+block), **L** = 22×10 u (two blocks spanning their gutter), and **XS** =
+4.5×4.5 u (a block quadrant — 2 per half-block, 4 per block, 1 u
+internal gutters; opt-in per card via `cfg.allowXS`, used by the simple
+binary cards). "3 units high" means 3 grid squares (48 px) — never 3
+blocks.
+
+NOTE (2026-07-24): an experimental +1-unit top margin (`TOPM`, item 20)
+was shipped and then REVERTED in PR #40 — it desynchronised the card
+grid from the wire router. There is no top margin; do not reintroduce
+one without re-deriving the router geometry with it.
 
 ---
 
@@ -538,6 +550,26 @@ rack rebuild → ALL dests drop, LFO nodes survive (like every spawned
 ctl node); node respawn (hot reload / bypass re-enable) → re-map.
 Restore migrates the pre-item-7 per-assignment format.
 
+**Relay-routed modulation (`mod` circuits, PR #43).** An LFO can also
+reach a param THROUGH a relay. Those hops are stored verbatim in
+`app.mod_wires` (`"lfo"` → `"relay:1"` → `"echo:mix"`) as their own
+plane and are BROADCAST in `state`, so — unlike the audio plane, which
+still leans on the client-local `relayAW` store until item 25 — this
+plane needs no client-side bookkeeping. `relay.resolve_mod(app)` walks
+every LFO through CLOSED circuits to the params it actually drives and
+diffs that against `LFOManager`'s destinations: closing a circuit maps
+the param, opening it unmaps and the param settles back on its own knob
+value (the honest "no modulation reaching you"). `app._mod_managed` is
+the destination set this layer owns, so a DIRECT `lfo_wire` dest is
+never yanked out from under the user; conversely, dropping a direct wire
+onto a relay-driven param evicts the relay route. Endpoint grammar:
+LFO id | `"<relay>:<k>"` | `"<key>:<param>"`, with the same cycle guard
+and self-wire rejection `graph_wire` uses. Circuits are 1:1 (§7); LFO
+fan-OUT stays unlimited. Hygiene: removing a relay, an LFO or a chain
+module scrubs the wires that touched it and re-resolves; a rack rebuild
+drops the PARAM ends and keeps the circuits; resume replays `mod_wires`
+after the LFOs restore.
+
 ### 6.2 Thresholds — CV in (`threshold.py`)
 
 The bridge rule: continuous stays server-side, discrete stays
@@ -572,19 +604,33 @@ rebuilds its ring. Captures are coalesced per key server-side (§11.1
 
 A type-agnostic switched junction (`relay`, `relay.2`, …; replaced the
 old SwitchGate). One node = up to **9 independent circuits** + a
-control-in. Circuit k's endpoint is `"<id>:<k>"`; wires INTO it are the
-circuit's in(s), wires FROM it its out(s). A circuit's KIND is inferred
+control-in. Circuit k's endpoint is `"<id>:<k>"`; the wire INTO it is
+the circuit's in, the wire FROM it its out. A circuit's KIND is inferred
 from its FIRST wire and then enforced (mixing kinds is rejected;
 circuits no wire touches forget their kind): `audio` (graph_wires),
 `notes` (ctl wires from note sources), `binary` (ctl wires from binary
-sources). `closed` defaults to False (open); `set_relay` is the manual
-click; a wired `:ctl` level-in makes closed follow — last writer wins.
+sources), `mod` (LFO → param, §6.1). `closed` defaults to False (open);
+`set_relay` is the manual click; a wired `:ctl` level-in makes closed
+follow — last writer wins.
+
+**Contacts are 1:1** (Cole, 2026-07-24, PR #43). A circuit port is
+single-input on BOTH sides — neither handle grows a `+`, and the only
+`+` on the card is the 5th-contact expansion that flips the card XS(4) →
+S(9). Adding a second wire to either side STEALS, on all four planes:
+`gates.is_single_input` covers every relay circuit in (not just
+`relay:ctl`), the notes path steals both sides (a stolen note-in
+`all_off`s downstream first, so the departing controller's held notes
+cannot ring on under the new one), the binary path steals the circuit
+OUT, and `graph_wire` steals a circuit IN, parking the displaced source.
+A circuit in was a summing bus before this; it is a contact now.
 
 Per kind: **notes** — a `_CircuitIn` adapter forwards
 on/off/sustain/bend downstream only while closed; `all_off` passes
 ALWAYS; opening all_offs every note circuit downstream (no stuck
 notes). **binary** — out level = OR(in levels) AND closed, computed
 lazily; pulses pass while closed; a closed change re-settles the plane.
+**mod** — see §6.1; the stored `app.mod_wires` plane is broadcast, and
+`resolve_mod` maps/unmaps LFO destinations as circuits close and open.
 **audio** — graph_wires store relay endpoints verbatim (bypassing
 `rack.find`); `resolve_audio` flattens each real source's wire through
 closed relays to a real destination — open or out-unwired circuits park
@@ -592,6 +638,17 @@ the source on the null bus; resolved edges get the same cycle-guard
 walk (a cycling source stays disconnected) and drive
 `reorder_for_wires`. Removing a relay silences its note circuits, parks
 its audio feeders, and drops all its wires.
+
+GUI: a circuit allocates ONE line colour from its own family on first
+sight and both halves draw in it (light green in, light green out), and
+wire labels name the whole hop — `"Keys → Relay → Voice"`,
+`"LFO → Relay → Echo.mix"` — with an unwired end simply left off.
+
+**Open (item 25):** the audio plane still resolves rather than stores,
+so audio relay hops render from the client-local `relayAW` store and
+misrender to a second client. The fix is to make each claimed audio
+circuit a tiny permanent gate synth and broadcast stored `graph_wires` —
+the `mod` plane above is the template.
 
 ---
 
@@ -820,6 +877,7 @@ sender (its UI already updated); structural changes broadcast to all.
 | `spawn_clock` / `remove_clock` / `set_clock` | id; division | §5.2 |
 | `spawn_lfo` / `remove_lfo` / `lfo_set` | id; rate, depth, shape | §6.1 |
 | `lfo_wire` | action, id, key, name | modulation fan-out (single-input params steal) |
+| `mod_wire` | action add/remove, from, to | relay-routed modulation (§6.1); endpoints LFO id \| `"<relay>:<k>"` \| `"<key>:<param>"`; cycle-guarded |
 | `spawn_threshold` / `remove_threshold` / `set_threshold` | id; level, hysteresis, mode | §6.2 |
 | `threshold_wire` | action, id, lfo | the CV-in (single-input) |
 | `set_looper` | action, bars, level, overdub | §9 (`position` accepted and ignored — pre/post is wiring) |
@@ -861,7 +919,8 @@ curve, options, default, lfo-mapped flag, value}), `volume`, `devices`
 `boot_note`, `voice_target` (legacy), `voices` [{id, target}], `tonics`,
 `literals`, `keyshifts`, `buttons`, `clocks`, `transpose`,
 `midi_inputs`, `midi_port`, `midi_enabled`, `wires` (audio, derived
-live), `ctl_wires`, `drums_target`, `arp`, `transport`,
+live), `ctl_wires`, `mod_wires` (relay-routed modulation hops, stored
+verbatim — §6.1), `drums_target`, `arp`, `transport`,
 `transport_cards`, `drone` (legacy shape), `drums`, `looper`, `lfos`,
 `thresholds`, `logics`, `relays`, `presets`, `available` (palette:
 key/name/kind/family, sources first), `module_errors`.
