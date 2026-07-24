@@ -3972,8 +3972,9 @@ function buildChainCard(mod) {
   const n = addCard({
     gid,
     name: isInstrument ? "Instrument" + suffix2 : mod.name,
-    sub: isPsine ? "" : (isInstrument ? `${availName(mtype).toLowerCase()} · voice`
-                                      : `${mtype} · ${mod.family}`),
+    // item 26 (e): no small-print subtitle — the type is already the card's
+    // name (or its voice dropdown), so the line only cost height
+    sub: "",
     fam: mod.family,
     seed: mod.kind === "source" && !mod.service,
     vizHTML: isScope ? `<canvas class="vz" data-viz="scope" height="44"></canvas>`
@@ -4042,7 +4043,7 @@ function buildKeysCard() {
       onPick: (v) => send({type: "set_transpose", semitones: v}),
     }),
   ];
-  return addCard({gid, name: "Keys / MIDI", short: "Keys", sub: "controller",
+  return addCard({gid, name: "Keys / MIDI", short: "Keys", sub: "",
                   fam: "ctl", rows, ports: [["out", "ctl", "notes"]]});
 }
 
@@ -4079,7 +4080,7 @@ function buildArpCard() {
       onUnit: (u) => { a.octaves = 1 + Math.round(u * 2); throttled("arp", () => cfgArp({})); },
     }),
   ];
-  const n = addCard({gid, name: "Arp", sub: "quantized", fam: "ctl", rows,
+  const n = addCard({gid, name: "Arp", sub: "", fam: "ctl", rows,
     headCheck: {checked: a.enabled, onChange: (on) => { a.enabled = on; cfgArp({}); }},
     ports: [["in", "ctl", "notes"], ["out", "ctl", "notes"]]});
   // quiet binary level-in on the enable, anchored to the head light
@@ -4111,7 +4112,7 @@ function buildVoiceCard(v) {
     }),
   ];
   return addCard({gid, name: "Mono Voice" + suffix, short: "Voice" + suffix,
-                  sub: "last-note priority", fam: "ctl", rows,
+                  sub: "", fam: "ctl", rows,
                   kill: gid === "voice" ? null
                     : () => send({type: "remove_voice", id: gid}),
                   ports: [["in", "ctl", "notes"], ["out", "ctl", "drive"]]});
@@ -4183,7 +4184,7 @@ function buildTonicCard(t) {
     rowChip({gid}, "root", {text: t.root || "listening…", static: true}),
   ];
   const n = addCard({gid, name: "Theory Wizard" + suffix, short: "Wiz" + suffix,
-                  sub: "root estimator · scale-aware", fam: "service", rows,
+                  sub: "", fam: "service", rows,
                   vizHTML: `<div class="tonicbar">`
                     + `<span class="tmode" title="raw presence / candidate scores">presence</span>`
                     + `<span class="tconf">conf —</span></div>`
@@ -4314,7 +4315,7 @@ function buildLiteralCard(t) {
     }),
   ];
   const n = addCard({gid, name: "Instant" + suffix, short: "Inst" + suffix,
-                  sub: "note extractor · zero-lag", fam: "service", rows,
+                  sub: "", fam: "service", rows,
                   kill: () => send({type: "remove_literal", id: gid}),
                   ports: [["in", "ctl", "notes"], ["out", "ctl", "note"],
                           ["in", "bin", "trigger"]]});
@@ -4518,7 +4519,7 @@ function buildClockCard(c) {
     }),
   ];
   return addCard({gid, name: "Clock" + suffix, short: "Clk" + suffix,
-    sub: "transport pulse", fam: "service", banner: BANNER_BIN,
+    sub: "", fam: "service", banner: BANNER_BIN,
     rows, allowXS: true,
     vizHTML: `<div class="pingpad">◔</div>`,
     kill: () => send({type: "remove_clock", id: gid}),
@@ -4846,7 +4847,7 @@ function buildTTempoCard() {
     t.accent = on; send({type: "set_transport", accent: on}); });
   rows.push(clickRow, accentRow);
   const n = addCard({gid, name: "Tempo/Click", short: "Tempo",
-    sub: "global transport", fam: "service", rows,
+    sub: "", fam: "service", rows,
     vizHTML: `<div class="metrostrip">`
       + beats.map(i => `<i${i === down ? ' class="db"' : ""}></i>`).join("")
       + `</div>`,
@@ -5073,7 +5074,7 @@ function buildKeyshiftCard(k) {
     }),
   ];
   const n = addCard({gid, name: "Key Shifter" + suffix, short: "Shift" + suffix,
-    sub: "key transpose · 4 lanes", fam: "ctl", rows,
+    sub: "", fam: "ctl", rows,
     vizHTML: `<div class="ksgrid"></div>`,
     kill: () => send({type: "remove_keyshift", id: gid}),
     ports: [["in", "ctl", "in.1"], ["in", "ctl", "in.2"],
@@ -5220,7 +5221,7 @@ function buildDrumsCard() {
         data-s="${s}"></button>`;
     viz += `</div>`;
   }
-  const n = addCard({gid, name: "Drums", sub: "16-step · 1/16 grid", fam: "time",
+  const n = addCard({gid, name: "Drums", sub: "", fam: "time",
     rows, expandable: true, expanded: expandMem.drums, wide: true, vizHTML: viz,
     headCheck: {checked: d.enabled, onChange: (on) => {
       d.enabled = on; send({type: "set_drums", enabled: on}); }},
@@ -5280,7 +5281,7 @@ function buildMasterCard() {
   rows.push(rowDevSelect("output", (state.devices || {}).outputs || [],
     state.current_output,
     (name) => send({type: "set_devices", output: name})));
-  return addCard({gid, name: "Master Out", short: "Master", sub: "volume · meters",
+  return addCard({gid, name: "Master Out", short: "Master", sub: "",
                   fam: "io", rows, ports: [["in", "audio", "in"]]});
 }
 // corner toast: input+output sample-rate mismatch (only matters when BOTH
@@ -5624,6 +5625,9 @@ function rebuildGraph() {
   if (uiMode === "flex") deoverlapFlex();   // fresh-seeded cards settle down
 
   rerouteAll();
+  // item 26 (d): paint every fresh canvas NOW — a rebuilt card must never
+  // reach the screen with a blank viz (that empty frame IS the flicker)
+  try { drawVizOnce(performance.now()); } catch (_) {}
   requestAnimationFrame(() => refreshActivity());
   // SETTLE PASS: L-card bodies shift a beat after first paint (2-col flow,
   // font metrics, title shrink) — the estimator's trigger-in was rendering
@@ -6414,6 +6418,15 @@ function monSources(gid) {
 }
 
 function drawVizLoop(now) {
+  drawVizOnce(now);
+  requestAnimationFrame(drawVizLoop);
+}
+// item 26 (d) — the rebuild FLICKER. rebuildGraph tears every non-persistent
+// card down and builds a new one, so each fresh <canvas class="vz"> reaches
+// the screen BLANK and only fills on the next rAF tick. That empty rectangle
+// is the "visual reload" — worst on L cards, which carry the biggest viz.
+// Painting once SYNCHRONOUSLY at the end of a rebuild closes the gap.
+function drawVizOnce(now) {
   animateLfos(now);
   const style = getComputedStyle(document.body);
   for (const n of nodes.values()) {
@@ -6437,7 +6450,6 @@ function drawVizLoop(now) {
       else if (viz === "psine" || viz === "gen") drawPsineViz(n, ctx, W, H, style);
     } catch (err) { console.warn("viz", viz, err); }
   }
-  requestAnimationFrame(drawVizLoop);
 }
 requestAnimationFrame(drawVizLoop);
 

@@ -1655,6 +1655,26 @@ def main():
               gv["bell"]["btn"] == "∿ static", str(gv))
         check("static preview computed at least once (bell)",
               gv["bell"]["drawn"], str(gv))
+        # item 26 (d) — the rebuild FLICKER: a rebuilt card must never reach
+        # the screen with a BLANK canvas. rebuildGraph paints the viz once
+        # synchronously, so the pixels are there BEFORE any rAF tick runs.
+        flick = page.evaluate("""(() => {
+          const cv = nodes.get('m:fm_bell').el
+            .querySelector('canvas[data-viz=gen]');
+          const before = cv.getContext('2d')
+            .getImageData(0, 0, cv.width, cv.height).data.some(v => v !== 0);
+          // force a full rebuild and inspect BEFORE the next animation frame
+          rebuildGraph();
+          const cv2 = nodes.get('m:fm_bell').el
+            .querySelector('canvas[data-viz=gen]');
+          const after = cv2.getContext('2d')
+            .getImageData(0, 0, cv2.width, cv2.height).data.some(v => v !== 0);
+          return {fresh: cv2 !== cv, before, after};
+        })()""")
+        check("rebuild replaces the card's canvas (the flicker's source)",
+              flick["fresh"] and flick["before"], str(flick))
+        check("rebuilt canvas is painted SYNCHRONOUSLY — no blank frame",
+              flick["after"], str(flick))
         check("effects do NOT get the gen viz", not gv["echoHasViz"], str(gv))
 
         # toggle to live: scope polls flow, and the choice survives a rebuild
