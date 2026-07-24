@@ -2570,27 +2570,38 @@ function compactLayout() {
     if (A.length !== B.length) return B.length - A.length;
     return A[0].gid < B[0].gid ? -1 : 1;
   });
-  // pour modules in cascade order down columns of the default (4-row) view:
-  // fill a column top→bottom, then the next — tight, no gaps inside a cascade,
-  // exactly ONE empty column between cascades. S halves pair up in blocks.
-  const H = 4;                             // default 6x4 viewport height
+  // pour modules in cascade order down columns: fill a column top→bottom,
+  // then the next — tight, no gaps inside a cascade, exactly ONE empty column
+  // between cascades. S halves pair up in blocks.
+  // (Cole, 07-24) THE POUR'S CANVAS IS THE VISIBLE FRAME. It used to be a
+  // hardcoded 4 rows by the whole 12-column board, so a pour filled 4 of 8
+  // rows and then marched RIGHT — off the side of the viewport — while the
+  // rows underneath sat empty. Tidy must never put a card outside the frame
+  // while there is still room inside it, so the frame's own rows and columns
+  // are the budget, and cards spill past it only once it is genuinely full.
+  // Never TIGHTER than the old 6x4, so tidy can only improve on what it did.
+  const _fb = visBlockBounds();
+  const VW = Math.max(6, Math.min(BX,
+    panLocked ? viewCols : (_fb ? _fb.c1 - _fb.c0 + 1 : 6)));
+  const H = Math.max(4, Math.min(BY,
+    panLocked ? viewRows : (_fb ? _fb.r1 - _fb.r0 + 1 : 4)));
   for (const n of all) n.bx = null;
   const rows = new Array(BX).fill(0);      // next free block row per column
   const halfAt = new Array(BX).fill(-1);   // block row with an open bottom half
   const xsAt = new Array(BX).fill(null);   // {by, free:[quadrants]} open XS block
-  let cur = 0, maxUsed = -1;
+  let cur = 0, maxUsed = -1, lim = VW;     // `lim` widens to BX only on spill
   const put = (n) => {
     const wide = n.size === "L" ? 2 : 1;
     let c = cur;
-    while (c < BX) {
-      const room = n.size === "L" ? (c + 1 < BX && Math.max(rows[c], rows[c + 1]) < H)
+    while (c < lim) {
+      const room = n.size === "L" ? (c + 1 < lim && Math.max(rows[c], rows[c + 1]) < H)
         : n.size === "S" ? (halfAt[c] >= 0 || rows[c] < H)
         : n.size === "XS" ? ((xsAt[c] && xsAt[c].free.length > 0) || rows[c] < H)
         : rows[c] < H;
       if (room) break;
       c++;
     }
-    if (c >= BX) { autoPlace(n, BX - 1); return; }   // board genuinely full
+    if (c >= lim) return false;            // no room in the frame — caller spills
     cur = c;
     if (n.size === "XS") {
       // XS packs 4-up into its own block, quadrant by quadrant (reading order)
@@ -2613,12 +2624,23 @@ function compactLayout() {
     }
     maxUsed = Math.max(maxUsed, c + wide - 1);
     place(n);
+    return true;
+  };
+  // pour into the frame; only if the frame has NO room left does the card go
+  // outside it — and then anywhere on the board rather than off the end
+  const pour = (n) => {
+    if (put(n)) return;
+    const cur0 = cur;
+    cur = 0; lim = BX;
+    const ok = put(n);
+    cur = cur0; lim = VW;                  // the frame cursor is untouched
+    if (!ok) autoPlace(n, BX - 1);         // board genuinely full
   };
   // IN at the top-left of a cascade's grid; OUT parked at the bottom of the
   // cascade's FIRST column (monitors sort before the output so it stays last)
   const sortKey = (n) => (n.gid === "keys" ? "a0" : n.montype ? "y0"
     : n.gid === "master" ? "z0" : "a5") + n.gid;
-  for (const G of groups) {
+  const pourGroup = (G, separate) => {
     const list = G.slice().sort((a, b) => {
       const ra = rank.get(a.gid), rb = rank.get(b.gid);
       if (ra !== rb) return ra - rb;
@@ -2628,9 +2650,9 @@ function compactLayout() {
     const groupBase = cur;
     const putOutBottom = (n) => {
       // OUT: the BOTTOM row of the leftmost cascade column with a free bottom
-      for (let c = Math.max(0, groupBase); c < BX; c++) {
+      for (let c = Math.max(0, groupBase); c < lim; c++) {
         if (rows[c] > H - 1) continue;
-        if (n.size === "L" && (c + 1 >= BX || rows[c + 1] > H - 1)) continue;
+        if (n.size === "L" && (c + 1 >= lim || rows[c + 1] > H - 1)) continue;
         n.bx = c; n.by = H - 1; n.half = n.size === "S" ? "top" : null;
         rows[c] = H;
         if (n.size === "L") rows[c + 1] = H;
@@ -2638,13 +2660,27 @@ function compactLayout() {
         place(n);
         return;
       }
-      put(n);                              // saturated: normal pour
+      pour(n);                             // saturated: normal pour
     };
     for (const n of list) {
       if (n.gid === "master") putOutBottom(n);
-      else put(n);
+      else pour(n);
     }
-    cur = maxUsed + 2;                     // ONE empty column between cascades
+    if (separate) cur = maxUsed + 2;       // ONE empty column between cascades
+  };
+  // real cascades first, each with its blank separator column...
+  const cascades = groups.filter(
+    G => G.length > 1 || G.some(n => n.gid === "keys"));
+  for (const G of cascades) pourGroup(G, true);
+  // ...then the LONERS, from the left again and with NO separator (Cole,
+  // 07-24). An unconnected card used to open its own cascade and cost TWO
+  // columns, so a handful of them — exactly what the relay-era XS family
+  // produces — marched the pour off the right edge of the viewport while the
+  // rows under every cascade sat empty. They now fill that slack instead.
+  const loners = groups.filter(G => !cascades.includes(G));
+  if (loners.length) {
+    cur = 0;
+    for (const G of loners) pourGroup(G, false);
   }
   rerouteAll();
   saveLayout();
