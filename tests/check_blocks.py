@@ -4114,6 +4114,57 @@ def main():
         check("item 22: moving DETUNE redraws it too (3 detuned oscillators)",
               prev22.get("detune") is True, str(prev22))
 
+        # ---- item 22b: the ENVELOPE overlay (Cole's pick: overlay, not
+        # a windowed waveform). Attack/release must repaint the card AND
+        # leave the waveform itself untouched — it stays a pure shape view
+        # at a normalised pitch, which is the whole reason 22b is an
+        # overlay rather than a window.
+        env22 = page.evaluate("""(() => {
+          const n = nodes.get('m:pulse_pad');
+          const cv = n.el.querySelector('canvas[data-viz=gen]');
+          const paint = () => {
+            cv.width = cv.clientWidth || 140; cv.height = cv.clientHeight || 44;
+            const ctx = cv.getContext('2d');
+            ctx.clearRect(0, 0, cv.width, cv.height);
+            drawPsineViz(n, ctx, cv.width, cv.height,
+                         getComputedStyle(document.body));
+            return [...ctx.getImageData(0, 0, cv.width, cv.height).data]
+              .reduce((a, v) => (a + v) % 999983, 0);
+          };
+          const P = state.chain[0].params;
+          const shape = () => Array.from(n._psWave || []).slice(0, 24)
+                                   .map(v => v.toFixed(4)).join(",");
+          P.attack.value = 0.02; P.release.value = 0.2;
+          const px0 = paint(), sh0 = shape();
+          P.attack.value = 1.6;
+          const pxA = paint(), shA = shape();
+          P.release.value = 4.0;
+          const pxR = paint(), shR = shape();
+          return {attackRepaints: px0 !== pxA, releaseRepaints: pxA !== pxR,
+                  shapeUnchanged: sh0 === shA && shA === shR && sh0.length > 0,
+                  hasEnv: typeof genEnv === 'function'
+                          && !!genEnv('pulse_pad', {attack: 0.1, release: 0.5}),
+                  bellEnv: (() => { const e = genEnv('fm_bell', {decay: 4});
+                    return e && Math.abs(e.d - 2) < 1e-9
+                             && Math.abs(e.r - 2.4) < 1e-9; })(),
+                  pluckNoSustain: (() => { const e = genEnv('pluck', {decay: 3});
+                    return e && e.s === 0 && e.r === 0; })(),
+                  psineNone: genEnv('power_sine_shaper', {}) === null};
+        })()""")
+        check("item 22b: ATTACK repaints the preview (envelope overlay)",
+              env22.get("attackRepaints") is True, str(env22))
+        check("item 22b: RELEASE repaints it too",
+              env22.get("releaseRepaints") is True, str(env22))
+        check("item 22b: the WAVEFORM is untouched — it stays a shape view",
+              env22.get("shapeUnchanged") is True, str(env22))
+        check("item 22b: fm_bell's envelope is DERIVED from its decay knob "
+              "(d=decay*0.5, r=decay*0.6), not read as a raw ADSR decay",
+              env22.get("bellEnv") is True, str(env22))
+        check("item 22b: pluck decays to silence (no sustain, no release)",
+              env22.get("pluckNoSustain") is True, str(env22))
+        check("item 22b: fixed-envelope voices (psines) get NO overlay",
+              env22.get("psineNone") is True, str(env22))
+
         # ================================================================
         # 23 — THE SQUARE-WIRE SYSTEM: geometry invariants (Cole, 07-24).
         # Batch B's item-20 top margin (TOPM=1) moved the CARD grid without
