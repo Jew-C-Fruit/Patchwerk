@@ -13,11 +13,14 @@ THE MODEL — sources own LEVELS; edges DERIVE from level changes:
   (a clock into AND:a with a latched button holding :b hi ticks the
   downstream trigger; :b lo blocks it).
 * TRIG-INS fire on RISING edges only (lo→hi): deriver ids (trigger() =
-  commit), deck buttons ("deck:rec|play|stop|clear"). Attaching a wire
-  whose source is already hi is NOT an edge — nothing fires.
+  commit), deck buttons ("deck:rec|play|stop|clear"), "transport:tap"
+  (tap tempo — item 9). Attaching a wire whose source is already hi is
+  NOT an edge — nothing fires.
 * All other binary ins FOLLOW the level, applied on change in both
   directions (including first sight): "<key>:pwr", "arp:pwr",
-  "drums:pwr", logic ins, "relay:ctl" (a relay's closed state follows).
+  "drums:pwr", logic ins, "relay:ctl" (a relay's closed state follows),
+  "transport:run|click|accent" (the GLOBAL transport's play state,
+  audible click and downbeat accent follow — item 9).
 
 NODES owned here: LogicGate ("logic", "logic.2", ...) — ONE card, an op
 dropdown: AND / OR / NOT / XOR / SR latch. Inputs are NAMED single-input
@@ -48,6 +51,9 @@ from .relay import MAX_CIRCUITS
 GATE_OPS = ("AND", "OR", "NOT", "XOR", "SR latch")
 DECK_ACTIONS = {"rec": "record", "play": "play", "stop": "stop",
                 "clear": "clear"}
+# item 9: the GLOBAL transport's binary ins — level-ins run/click/accent
+# (state follows) + the one trig-in "tap" (rising edge = tap tempo)
+TRANSPORT_INS = ("run", "click", "accent", "tap")
 _MAX_SETTLE = 24   # fixpoint iterations before a feedback loop freezes
 _MAX_PASSES = 8    # settle+effects outer passes (relay ctl re-entry)
 
@@ -138,14 +144,16 @@ class GateManager:
 
     def is_toggle_dst(self, dst) -> bool:
         """Endpoints a BINARY wire may land on: level-ins (:pwr, logic
-        named ins, relay circuit ins, relay:ctl) + trig-ins (deriver ids,
-        deck buttons)."""
+        named ins, relay circuit ins, relay:ctl, transport:run|click|
+        accent) + trig-ins (deriver ids, deck buttons, transport:tap)."""
         if dst is None:
             return False
         dst = str(dst)
         base, _, sub = dst.partition(":")
         if base == "deck" and sub in DECK_ACTIONS:
             return True
+        if base == "transport" and sub in TRANSPORT_INS:
+            return True                # the GLOBAL transport (item 9)
         if sub == "pwr":
             if base in ("arp", "drums"):
                 return True
@@ -311,6 +319,19 @@ class GateManager:
                     # whose source is already hi is not an edge
                     if lvl and prev is not None:
                         app.set_looper(action=DECK_ACTIONS[sub])
+                elif base == "transport":
+                    # item 9: the GLOBAL transport's binary ins
+                    if sub == "tap":
+                        # TRIG-IN: rising edge = one tap (TEMPO only);
+                        # attach-while-hi is not an edge
+                        if lvl and prev is not None:
+                            app._transport_tap()
+                    elif sub == "run":
+                        app.set_transport(playing=lvl)   # LEVEL-IN follows
+                    elif sub == "click":
+                        app.set_transport(click=lvl)     # LEVEL-IN follows
+                    elif sub == "accent":
+                        app.set_transport(accent=lvl)    # LEVEL-IN follows
                 elif sub == "" and app._deriver(base) is not None:
                     # TRIG-IN: rising edge commits once
                     if lvl and prev is not None:

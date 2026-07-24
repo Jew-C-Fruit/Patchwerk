@@ -231,6 +231,38 @@
   .mod[data-gid^="relay"][data-size="XS"] .viz-sec { padding: 1px 6px 3px 10px; }
   .mod[data-gid^="relay"][data-size="XS"] .relaybtn { width: 20px; height: 20px;
     font-size: 10.5px; }
+  /* transport cards (item 9): canvas views of the ONE global transport.
+     Play/Stop: ONE big BOLD button showing the CURRENT state — red ⏹ STOP
+     while stopped, green ⏵ PLAY while running (click toggles). */
+  .tpbtn { margin: auto; display: flex; align-items: center;
+    justify-content: center; gap: 3px; padding: 3px 9px; border-radius: 7px;
+    border: 1.5px solid; background: var(--card); font-weight: 800;
+    font-size: 12px; letter-spacing: 0.05em; line-height: 1; cursor: pointer;
+    white-space: nowrap; user-select: none; -webkit-user-select: none; }
+  .tpbtn:hover { filter: brightness(1.3); }
+  .tpbtn.stopped { color: var(--danger); border-color: var(--danger); }
+  .tpbtn.playing { color: var(--ctl); border-color: var(--ctl); }
+  .mod[data-gid="tplay"] .viz-sec { display: flex; align-items: center;
+    padding: 2px 10px 4px 14px; }
+  .mod[data-gid="tplay"][data-size="XS"] .viz-sec { padding: 1px 6px 3px 10px; }
+  .mod[data-gid="tplay"][data-size="XS"] .tpbtn { font-size: 10.5px;
+    padding: 2px 6px; }
+  /* "220 bpm" needs more than the stock 34px value column */
+  .mod[data-gid="ttempo"] .mini .v { width: 42px; }
+  /* live metronome strip: one dot per beat in the bar, the current beat lit
+     (pulse on the "beat" broadcast), the DOWNBEAT dot accented/bigger */
+  .metrostrip { display: flex; align-items: center; justify-content: center;
+    gap: 7px; height: 100%; }
+  .metrostrip i { width: 7px; height: 7px; border-radius: 50%; flex: none;
+    background: var(--hairline); }
+  .metrostrip i.db { width: 11px; height: 11px;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.28); }
+  .metrostrip i.lit { background: var(--ctl);
+    box-shadow: 0 0 7px color-mix(in srgb, var(--ctl) 70%, transparent); }
+  .metrostrip i.db.lit { background: var(--bin);
+    box-shadow: 0 0 9px color-mix(in srgb, var(--bin) 75%, transparent); }
+  .metrostrip i.pulse { animation: metropulse .18s ease; }
+  @keyframes metropulse { 30% { transform: scale(1.45); } }
   .pingpad:hover { filter: brightness(1.25); }
   .pingpad.pulse { animation: pingpulse .22s ease; }
   @keyframes pingpulse { 30% { text-shadow: 0 0 9px var(--bin); transform: scale(1.35); } }
@@ -3499,7 +3531,8 @@ function connectAction(out, inn) {
     const from = po.relayCirc ? po.ep : ctlId(out.node);
     if (!binSrcEp(from)) return null;
     if (pi.ep) {   // endpoint-ins carry their full wire dst (":pwr", "deck:…",
-                   // ":a", relay circuit ins, "relay:ctl")
+                   // ":a", relay circuit ins, "relay:ctl", the GLOBAL
+                   // transport's "transport:run|click|accent|tap" — item 9)
       if (String(pi.ep).split(":")[0] === splitEp(from)[0]) return null;   // self-wire
       return () => send({type: "ctl_wire", action: "add", from, to: pi.ep});
     }
@@ -4482,6 +4515,131 @@ function buildRelayCard(r) {
   return n;
 }
 
+// ---- Transport cards (item 9): canvas views of the ONE global transport ----
+// Card and TOP BAR are two views of the SAME global state: cards send the
+// exact set_transport messages the bar sends, and both follow the normal
+// state broadcast — no extra sync machinery. The binary wire endpoints
+// (transport:run/click/accent/tap) belong to the GLOBAL transport, not the
+// card: removing a card never unwires them (the wires simply stop drawing
+// until a card carrying that endpoint is back on the canvas).
+function transportEpNode(ep) {
+  // which CARD carries a "transport:*" endpoint: run → Play/Stop;
+  // click/accent/tap → Tempo/Click
+  const sub = String(ep).split(":")[1];
+  return nodes.get(sub === "run" ? "tplay" : "ttempo") || null;
+}
+function buildTPlayCard() {
+  const gid = "tplay";
+  const n = addCard({gid, name: "Play/Stop", short: "Play",
+    sub: "global transport", fam: "service", rows: [], allowXS: true,
+    vizHTML: `<div class="tpbtn" title="toggle transport"></div>`,
+    kill: () => send({type: "remove_transport_card", which: "play"}),
+    ports: []});
+  const btn = n.el.querySelector(".tpbtn");
+  const sync = (run) => {   // the button shows the CURRENT state (Cole):
+    btn.textContent = run ? "⏵ PLAY" : "⏹ STOP";   // green playing, red stopped
+    btn.classList.toggle("playing", !!run);
+    btn.classList.toggle("stopped", !run);
+  };
+  sync(((state && state.transport) || {}).running !== false);
+  btn.addEventListener("pointerdown", (e) => e.stopPropagation());
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const t = (state && state.transport) || {};
+    const running = t.running !== false;
+    t.running = !running;   // local echo; set_transport broadcasts to ALL
+    sync(!running);         // incl. the sender, which re-syncs card + bar
+    send({type: "set_transport", playing: !running});
+  });
+  // quiet bin LEVEL-in "run": the global play state FOLLOWS the wire
+  n.ports.push({dir: "in", sig: "bin", label: "run", quiet: true,
+                ep: "transport:run", rowEl: btn});
+  return n;
+}
+function buildTTempoCard() {
+  const gid = "ttempo";
+  const t = (state && state.transport) || {};
+  const bpm = t.bpm ?? 100;
+  // meter detents MIRROR the top bar's select — same values, same labels;
+  // a foreign beats_per_bar (preset from an odd meter) still gets a detent
+  const meters = [...$("meter").options]
+    .map(o => [parseInt(o.value, 10), o.textContent]);
+  const bpb = Math.max(1, t.beats_per_bar ?? 4);
+  if (!meters.some(([v]) => v === bpb)) {
+    meters.push([bpb, bpb + "/4"]);
+    meters.sort((a, b) => a[0] - b[0]);
+  }
+  const meterVals = meters.map(([v]) => v);
+  const meterLabel = (v) =>
+    (meters.find(([mv]) => mv === v) || [v, v + "/4"])[1];
+  // DOWNBEAT detents re-derive from the CURRENT meter — a meter change
+  // rebuilds the card off the broadcast, so they always match the bar
+  const beats = Array.from({length: bpb}, (_, i) => i);
+  const down = Math.min(bpb - 1, Math.max(0, t.downbeat | 0));
+  const rows = [
+    rowSlider({gid}, "tempo", {   // 40–220, the top-bar slider's mapping
+      unit: (Math.min(220, Math.max(40, bpm)) - 40) / 180,
+      text: Math.round(bpm) + " bpm",
+      valText: (u) => Math.round(40 + u * 180) + " bpm",
+      onUnit: (u) => {
+        t.bpm = Math.round(40 + u * 180);
+        throttled("ttempo", () => send({type: "set_transport", bpm: t.bpm}));
+      },
+    }),
+    rowStepSlider({gid}, "time sig", {
+      values: meterVals, index: Math.max(0, meterVals.indexOf(bpb)),
+      text: meterLabel,
+      onPick: (v) => send({type: "set_transport", beats_per_bar: v}),
+    }),
+    rowStepSlider({gid}, "downbeat", {
+      values: beats, index: down,
+      text: (v) => "beat " + (v + 1),
+      onPick: (v) => send({type: "set_transport", downbeat: v}),
+    }),
+  ];
+  // click + accent toggles as power-LEDs (the head-LED idiom, in a row)
+  const rowLED = (pname, on0, sendOn) => {
+    const row = document.createElement("div");
+    row.className = "mini";
+    row.innerHTML = `<label title="${esc(pname)}">${esc(pname)}</label>`;
+    const led = document.createElement("button");
+    led.type = "button"; led.className = "onoff"; led.title = pname;
+    led.setAttribute("role", "switch");
+    let on = !!on0;
+    const syncL = () => { led.classList.toggle("on", on);
+                          led.setAttribute("aria-checked", String(on)); };
+    syncL();
+    led.addEventListener("pointerdown", (e) => e.stopPropagation());
+    led.addEventListener("click", (e) => {
+      on = !on; syncL(); sendOn(on); e.target.blur();
+    });
+    row.appendChild(led);
+    return row;
+  };
+  const clickRow = rowLED("click", t.click, (on) => {
+    t.click = on; send({type: "set_transport", click: on}); });
+  const accentRow = rowLED("accent", t.accent !== false, (on) => {
+    t.accent = on; send({type: "set_transport", accent: on}); });
+  rows.push(clickRow, accentRow);
+  const n = addCard({gid, name: "Tempo/Click", short: "Tempo",
+    sub: "global transport", fam: "service", rows,
+    vizHTML: `<div class="metrostrip">`
+      + beats.map(i => `<i${i === down ? ' class="db"' : ""}></i>`).join("")
+      + `</div>`,
+    kill: () => send({type: "remove_transport_card", which: "tempo"}),
+    ports: []});
+  // quiet bin ins on the GLOBAL transport — FAN-IN allowed (no `single`):
+  // tap is a TRIG-in (rising edge = one tap) riding the tempo row; click/
+  // accent are LEVEL-ins riding their LED rows
+  n.ports.push({dir: "in", sig: "bin", label: "tap", quiet: true,
+                ep: "transport:tap", rowEl: rows[0]});
+  n.ports.push({dir: "in", sig: "bin", label: "click", quiet: true,
+                ep: "transport:click", rowEl: clickRow});
+  n.ports.push({dir: "in", sig: "bin", label: "accent", quiet: true,
+                ep: "transport:accent", rowEl: accentRow});
+  return n;
+}
+
 // ---- the logic circuit viz: pin traces → gate symbol → out trace -----------
 // Levels are DERIVED, never polled: the out level rides state.logics[].out
 // (kept live by gate events); an in pin lights when the SOURCE wired into
@@ -5009,6 +5167,12 @@ function rebuildGraph() {
   // logic + relay nodes — old servers have neither key (defaults empty)
   const logicNodes = (state.logics || []).map(buildLogicCard);
   const relayNodes = (state.relays || []).map(buildRelayCard);
+  // transport cards (item 9) — views of the ONE global transport; old
+  // servers have no transport_cards key (defaults to no cards, no errors)
+  const transportNodes = (state.transport_cards || [])
+    .map(w => w === "play" ? buildTPlayCard()
+            : w === "tempo" ? buildTTempoCard() : null)
+    .filter(Boolean);
   const services = [], chainNodes = [];
   for (const mod of state.chain) {
     const n = buildChainCard(mod);
@@ -5029,7 +5193,7 @@ function rebuildGraph() {
   placeGroup([keys, arp, deck, ...voiceNodes], 0);
   placeGroup([...chainNodes, master], 2);
   placeGroup([...tonicNodes, ...ksNodes, ...trigNodes, ...logicNodes,
-              ...relayNodes, ...services], 1);
+              ...relayNodes, ...transportNodes, ...services], 1);
   placeGroup([drums], 5);
   for (let i = 0; i < lfoNodes.length; i++) {
     const n = lfoNodes[i], l = state.lfos[i];
@@ -5061,7 +5225,11 @@ function rebuildGraph() {
     // lane endpoints ("keyshift.2:3") resolve to the base node's lane port
     const [fromBase, fromLane] = splitEp(cw.from);
     const [toBase, toLane] = splitEp(cw.to);
-    const a = ctlNode(fromBase), b = ctlNode(toBase);
+    // "transport:*" dsts live on whichever transport CARD carries that
+    // endpoint (run → Play/Stop; click/accent/tap → Tempo/Click)
+    const a = ctlNode(fromBase);
+    const b = toBase === "transport" ? transportEpNode(cw.to)
+                                     : ctlNode(toBase);
     if (!a || !b) continue;   // e.g. a wired node whose card isn't spawned
     const cut = () => send({type: "ctl_wire", action: "remove",
                             from: cw.from, to: cw.to});
@@ -5244,6 +5412,11 @@ function renderPalette() {
   h3("logic");   // the binary-plane op node + the type-agnostic junction
   btn("Logic", "#e6c34a", () => send({type: "spawn_logic"}));
   btn("Relay", "#e6c34a", () => send({type: "spawn_relay"}));
+  h3("transport");   // item 9: canvas views of the ONE global transport
+  btn("Play/Stop", FAMILY.service,
+      () => send({type: "spawn_transport_card", which: "play"}));
+  btn("Tempo/Click", FAMILY.service,
+      () => send({type: "spawn_transport_card", which: "tempo"}));
   // the palette NEVER removes placed modules: any entry can be spawned
   // again — every click/drag makes a fresh instance ("lowpass.2", ...)
   const avail = (state && state.available) || [];
@@ -5417,6 +5590,18 @@ function onBeat(m) {
   beatAnchor = {time: performance.now(), downbeat: m.beat === 0};
   deckAnchor = (m.loop === null || m.loop === undefined)
     ? null : {time: performance.now(), phase: m.loop};
+  // live metronome (item 9): light the current beat's dot on the Tempo/
+  // Click card; the beat message's downbeat bool marks the accent pulse
+  const tn = nodes.get("ttempo");
+  if (tn) {
+    const dots = tn.el.querySelectorAll(".metrostrip i");
+    dots.forEach((d, i) => {
+      const lit = i === m.beat;
+      d.classList.toggle("lit", lit);
+      if (lit) { d.classList.remove("pulse"); void d.offsetWidth;
+                 d.classList.add("pulse"); }
+    });
+  }
   // key shifter progression: highlight the playing step (bar % length)
   for (const n of nodes.values()) {
     if (!n.ks) continue;

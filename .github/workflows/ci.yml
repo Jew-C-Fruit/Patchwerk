@@ -44,6 +44,9 @@ jobs:
       - name: Gate suite tests
         run: python tests/test_gate.py
 
+      - name: Transport card tests
+        run: python tests/test_transport.py
+
   gui-checks:
     name: GUI checks (headless Playwright)
     runs-on: ubuntu-latest

@@ -9,6 +9,12 @@ events onto rhythmic grids.
 Everything rhythmic (arp now, sequencer next) asks the transport for grid
 times instead of free-running — which is what keeps the downbeat on the 1
 no matter what happens to the notes.
+
+Transport cards (item 9): `downbeat` is the 0-based beat-in-bar carrying
+the click ACCENT (and the accented beat-event) — grid math and bar
+boundaries stay anchored on beat 0; the downbeat moves the accent only.
+TapTempo is the "transport:tap" trig-in's helper (tempo only, testable
+via injected timestamps).
 """
 
 from __future__ import annotations
@@ -51,6 +57,7 @@ class Transport:
         self.beats_per_bar = int(beats_per_bar)
         self.click_enabled = False
         self.click_accent = True   # high tick on the downbeat
+        self.downbeat = 0          # 0-based beat-in-bar carrying the accent
         self.running = True        # transport stop/play (position freezes)
         self.on_beat: Callable[[int, int], None] | None = None  # (bar, beat_in_bar)
 
@@ -102,6 +109,19 @@ class Transport:
 
     def set_meter(self, beats_per_bar: int) -> None:
         self.beats_per_bar = min(12, max(1, int(beats_per_bar)))
+        # the accent position must survive a shrinking meter (re-clamp)
+        self.downbeat = min(self.downbeat, self.beats_per_bar - 1)
+
+    def set_downbeat(self, downbeat: int) -> None:
+        """Move the click ACCENT (and the accented beat-event) to this
+        0-based beat-in-bar. Grid math and bar boundaries stay anchored
+        on beat 0 — the downbeat moves the accent ONLY."""
+        self.downbeat = min(self.beats_per_bar - 1, max(0, int(downbeat)))
+
+    def accent_on(self, beat_in_bar: int) -> bool:
+        """Does this beat get the HIGH tick? Pure predicate — the click
+        path in app._handle_beat and the tests share it."""
+        return self.click_accent and int(beat_in_bar) == self.downbeat
 
     def next_grid(self, division_beats: float) -> tuple[float, float]:
         """(beat, wall_time) of the next grid point on the given division."""
@@ -135,6 +155,7 @@ class Transport:
             "beats_per_bar": self.beats_per_bar,
             "click": self.click_enabled,
             "accent": self.click_accent,
+            "downbeat": self.downbeat,
             "running": self.running,
             "divisions": list(DIVISIONS),
         }
@@ -168,3 +189,43 @@ class Transport:
             # If tempo jumped wildly and we're behind, resync rather than spray.
             if self.time_of_beat(nb) < time.monotonic():
                 nb = math.floor(self.beats_now()) + 1
+
+
+class TapTempo:
+    """TAP TEMPO for the "transport:tap" trig-in (transport cards, item 9).
+
+    Each tap records a monotonic time. The interval to the PREVIOUS tap
+    must land within MIN_INTERVAL..MAX_INTERVAL (≈30–240 BPM) — a lone,
+    late, or too-fast tap RESTARTS the sequence and changes nothing.
+    With ≥1 valid interval, bpm = 60 / mean(last up-to-WINDOW intervals).
+
+    TEMPO ONLY: the caller feeds the result to set_bpm (which re-anchors
+    the beat position continuously — that's fine); phase/epoch/running
+    are never touched here.
+
+    tap(now=None) takes an injectable timestamp so tests never sleep."""
+
+    MIN_INTERVAL = 0.25   # s — 240 BPM ceiling
+    MAX_INTERVAL = 2.0    # s — 30 BPM floor
+    WINDOW = 4            # mean over the last up-to-4 intervals
+
+    def __init__(self) -> None:
+        self._last: float | None = None
+        self._intervals: list[float] = []
+
+    def tap(self, now: float | None = None) -> float | None:
+        """Record one tap; return the new bpm, or None (no tempo change:
+        first tap of a sequence, or an out-of-range interval)."""
+        if now is None:
+            now = time.monotonic()
+        bpm = None
+        if self._last is not None:
+            dt = now - self._last
+            if self.MIN_INTERVAL <= dt <= self.MAX_INTERVAL:
+                self._intervals.append(dt)
+                del self._intervals[:-self.WINDOW]
+                bpm = 60.0 / (sum(self._intervals) / len(self._intervals))
+            else:
+                self._intervals.clear()   # restart — a stray tap changes nothing
+        self._last = now
+        return bpm

@@ -14,7 +14,19 @@ Protocol (JSON messages):
     {"type": "set_devices", "input": "MacBook Pro Microphone", "output": null}
     {"type": "set_midi", "port": "CP88/CP73 Port1", "enabled": true}
     {"type": "set_arp", "enabled": true, "division": "1/8", "gate": 0.6, "octaves": 2, "pattern": "updown"}
-    {"type": "set_transport", "bpm": 110, "beats_per_bar": 4, "click": true}
+    {"type": "set_transport", "bpm": 110, "beats_per_bar": 4, "click": true,
+     "accent": true, "playing": true, "downbeat": 0}
+        (downbeat = 0-based beat-in-bar carrying the click ACCENT + the
+         beat event's downbeat flag; grid math stays beat-0-anchored)
+    {"type": "spawn_transport_card", "which": "play"|"tempo"}
+    {"type": "remove_transport_card", "which": "play"|"tempo"}
+        (item 9: transport CARDS — canvas views of the ONE global
+         transport, in lockstep with the top bar via the state broadcast
+         (state carries "transport_cards"). The binary wire ins live on
+         the GLOBAL transport, not the card: "transport:run"/":click"/
+         ":accent" (levels follow) + "transport:tap" (rising edge = tap
+         tempo, 0.25–2.0 s intervals, mean of the last 4). Removing a
+         card never unwires them.)
     {"type": "set_drone", "enabled": true, "every": "1 bar", "octave": 2}
         (LEGACY: maps onto a tonic-deriver + drone-instance pair)
     {"type": "graph_wire", "action": "add"|"remove", "from": "pluck", "to": "echo"|"master"}
@@ -399,9 +411,15 @@ class GuiServer:
             self.synth.set_transport(
                 bpm=m.get("bpm"), beats_per_bar=m.get("beats_per_bar"),
                 click=m.get("click"), accent=m.get("accent"),
-                playing=m.get("playing"),
+                playing=m.get("playing"), downbeat=m.get("downbeat"),
             )
             # broadcast to ALL incl. sender: the play/stop button must flip
+            await self._broadcast_state()
+        elif t == "spawn_transport_card":
+            self.synth.spawn_transport_card(m["which"])
+            await self._broadcast_state()
+        elif t == "remove_transport_card":
+            self.synth.remove_transport_card(m["which"])
             await self._broadcast_state()
         elif t == "set_arp":
             self.synth.set_arp(
@@ -488,6 +506,10 @@ class GuiServer:
                 loop_phase = None
             asyncio.run_coroutine_threadsafe(
                 self._broadcast({"type": "beat", "bar": bar, "beat": beat,
+                                 # positional downbeat flag (item 9) —
+                                 # independent of the accent's on/off
+                                 "downbeat":
+                                     beat == self.synth.transport.downbeat,
                                  "loop": loop_phase}), self.loop
             )
 
