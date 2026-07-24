@@ -4483,6 +4483,58 @@ def main():
         page.evaluate("() => setMode('blocks')")
         page.wait_for_timeout(400)
 
+        # ================================================================
+        # 25 — CONCENTRIC NESTING (Cole, standing; re-broken 07-24 by #42).
+        # A bundle arriving at a card edge takes its slots in the order its
+        # wires COME FROM, so wires whose far ends are in the same relative
+        # order as their near ends cannot cross each other twice. Before
+        # this, wiresAt() handed the fan back in `seq` (creation) order and
+        # nesting was merely EMERGENT from the geometry — #42's M-default
+        # cards moved things far enough that it stopped holding.
+        # Measured on this 6-source fan-in: 8 crossings unsorted → 5 sorted.
+        # ================================================================
+        oscs = []
+        for i in range(6):
+            m = mod(f"osc{i}", "Osc", "source", "voice",
+                    {"freq": param(220, 20, 2000), "amp": param(0.5)})
+            oscs.append(m)
+        st25 = base_state(
+            oscs, [{"from": f"osc{i}", "to": "master"} for i in range(6)],
+            available=[{"key": f"osc{i}", "name": "Osc", "kind": "source",
+                        "family": "voice"} for i in range(6)])
+        page.evaluate("posMem = {}; relayAW = [];")
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st25)
+        page.wait_for_timeout(700)
+        page.evaluate("rerouteAll()")
+        page.wait_for_timeout(500)
+        n25 = page.evaluate("""(() => {
+          const live = (window._routedDebug || [])
+                         .filter(r => !r.noroute && !r.bez);
+          let worst = 0, total = 0, bad = 0;
+          for (let i = 0; i < live.length; i++)
+            for (let j = i + 1; j < live.length; j++) {
+              const c = _crossCount(live[i], live[j]);
+              total += c; if (c > worst) worst = c; if (c >= 2) bad++;
+            }
+          // master's in-fan must be ordered by where its wires come from
+          const m = nodes.get('master');
+          const fan = (m.lay ? m.lay.handles : [])
+            .filter(H => H.role === 'wire' && H.side === 'in' && !H.quiet);
+          const vert = fan.length && (fan[0].edge === 'L' || fan[0].edge === 'R');
+          const seq = fan.map(H => {
+            const o = H.wire.from.node;
+            const r = nodeUnitRect(o);
+            return vert ? r.y + r.h / 2 : r.x + r.w / 2;
+          });
+          const sorted = seq.every((v, i) => i === 0 || seq[i - 1] <= v + 0.01);
+          return {wires: live.length, total, worst, bad,
+                  fan: fan.length, sorted, seq};
+        })()""")
+        check("nesting: no wire pair crosses another more than ONCE",
+              n25["worst"] <= 1 and n25["bad"] == 0, str(n25))
+        check("nesting: a fan-in is ordered by where its wires come from",
+              n25["fan"] >= 2 and n25["sorted"] is True, str(n25))
+
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()
 

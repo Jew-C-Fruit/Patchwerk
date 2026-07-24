@@ -1945,6 +1945,35 @@ function computeLayout(n) {
     ? [...p.ws.map(w => ({ role: "wire", wire: w })),
        ...(portAllowsPlus(p.port) ? [{ role: "plus" }] : [])]
     : [{ role: p.port.plusSlot ? "plus" : "empty" }]);   // relay expansion +
+  // ---- CONCENTRIC NESTING (Cole, standing rule, re-broken 07-24 by #42) ----
+  // A given PAIR of wires may intersect AT MOST ONCE. That is a property of
+  // the ORDER a bundle takes its slots in, and it was never actually encoded:
+  // wiresAt() hands the fan back in `seq` order — the order the user happened
+  // to draw the wires — so nesting was only ever EMERGENT from the geometry,
+  // with reduceCrossings mopping up the rest. #42's M-default cards moved the
+  // cards far enough that the emergence stopped holding and reduceCrossings
+  // had no lever left (it can only swap LANE OFFSETS on interior segments
+  // sharing a gutter — it cannot reassign which wire gets which handle).
+  // So order each fan by where its wires COME FROM: on a vertical edge the
+  // bundle runs top→bottom, so sort by the far end's centre Y; on a
+  // horizontal edge, by its centre X. Two wires whose far ends are in the
+  // same relative order as their near ends cannot cross twice.
+  // NOT applied to mod/quiet fans (row-locked — alignment never bends) or to
+  // fixFrac ports (relay circuits pair in k above out k by spec).
+  for (const p of ports) {
+    if (p.isMod || p.port.fixFrac != null || p.ws.length < 2) continue;
+    const vert = p.edge === "L" || p.edge === "R";
+    const farOf = (w) => {
+      const other = (w.from.port === p.port && w.from.node === n)
+        ? w.to.node : w.from.node;
+      if (!other) return 0;
+      const o = nodeUnitRect(other);
+      return vert ? o.y + o.h / 2 : o.x + o.w / 2;
+    };
+    const far = new Map(p.ws.map(w => [w, farOf(w)]));
+    p.ws = p.ws.slice().sort(
+      (a, b) => (far.get(a) - far.get(b)) || (a.seq - b.seq));
+  }
   // item 28 (Cole, 07-24): a DUAL-EDGE input (Master Out) may use BOTH its
   // top and its side edge, so heavy fan-in keeps every handle reachable.
   // The second edge is used only on OVERFLOW — a small patch looks exactly
