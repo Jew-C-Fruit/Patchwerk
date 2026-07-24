@@ -516,10 +516,20 @@
   .mod[data-size="XS"] .mini { margin: 1px 0; gap: 4px; }
   .mod[data-size="XS"] .mini label { width: 26px; font-size: 8px; }
   .mod[data-size="XS"] .mini .chip { font-size: 8px; padding: 1px 3px; }
-  /* L cards flow their param rows into two columns (tall modules size UP
-     into width instead of scrolling) */
-  .mod[data-size="L"] .body { column-count: 2; column-gap: 18px; }
+  /* item 21 (Cole, 07-22): controllable params list in ONE COLUMN against
+     the LEFT side, so every param row lines up with its own mod handle.
+     L cards only fall back to TWO columns when the rows genuinely don't fit
+     (applySize measures it and adds .twocol) — and the rows that then can't
+     align grow an on-card LINK WIRE to their handle instead. */
+  .mod[data-size="L"] .body { column-count: 1; }
+  .mod[data-size="L"] .body.twocol { column-count: 2; column-gap: 18px; }
   .mod[data-size="L"] .body .mini { break-inside: avoid; }
+  /* on-card link wires: faint by default, lit when their handle/wire is */
+  .modlink { position: absolute; pointer-events: none; z-index: 3;
+    overflow: visible; }
+  .modlink path { fill: none; stroke-width: 1; opacity: 0.34;
+    stroke-dasharray: 2 2; }
+  .modlink path.lit { opacity: 0.95; stroke-dasharray: none; stroke-width: 1.4; }
   /* graphical modules: the viz section flexes into whatever room the card has
      left, so canvases/grids can NEVER overflow the card at any size */
   .mod { display: flex; flex-direction: column; }
@@ -1934,7 +1944,15 @@ function computeLayout(n) {
       // L cards flow rows into TWO columns, so different params can share a
       // row Y — order by visual position (column, then top) and enforce a
       // minimum separation so quiet handles never pile on each other.
+      // item 21 (Cole, 07-22): ALIGNMENT NEVER BENDS. QUIET_SEP exists for
+      // the 2-column L body, where two DIFFERENT params share one row Y and
+      // their handles would otherwise pile up. It must not fire merely
+      // because rows are CLOSE — on a packed M card the rows sit ~0.69u
+      // apart, just under the old separation, so every handle was being
+      // shoved a little further off its row (measured drift: 0.47u).
+      // Separate only handles whose rows are effectively the SAME line.
       const QUIET_SEP = 0.72;                       // units between quiet handles
+      const SAME_ROW = 0.25;                        // rows closer than this collide
       const rowPos = (p) => (p.port.rowEl && p.port.rowEl.isConnected)
         ? [p.port.rowEl.offsetLeft, offsetWithin(p.port.rowEl, n.el)]
         : [1e9, 1e9];
@@ -1943,18 +1961,33 @@ function computeLayout(n) {
         return A[0] - B[0] || A[1] - B[1];
       });
       let mt = Math.max(prim.length ? t + PRIM_MOD_GAP : t, edgeLen * 0.35);
-      let lastT = -QUIET_SEP;
+      let lastT = -QUIET_SEP, lastRowT = -99;
       for (const p of ordered) {
-        let tt = null;
+        let tt = null, rowT = null;
         if (p.port.rowEl && p.port.rowEl.isConnected) {
           const py = (offsetWithin(p.port.rowEl, n.el)
                       + p.port.rowEl.offsetHeight / 2) / U;
+          rowT = py;                            // the row's TRUE centre
           tt = Math.max(T_LEAD, py);            // EXACTLY in line with the row
-          if (tt < lastT + QUIET_SEP) tt = lastT + QUIET_SEP;   // 2-col collision only
+          // only a genuine collision (two params on the SAME row line, i.e.
+          // the 2-column L body) may push a handle off its row
+          if (Math.abs(rowT - lastRowT) < SAME_ROW && tt < lastT + QUIET_SEP)
+            tt = lastT + QUIET_SEP;
           tt = Math.min(edgeLen - END_MARGIN, tt);
+          lastRowT = rowT;
         }
         for (const s of slotsOf(p)) {
-          handles.push(mkHandle(n, r, p, s, edge, tt !== null ? tt : mt));
+          const H = mkHandle(n, r, p, s, edge, tt !== null ? tt : mt);
+          // item 21: remember the row this handle belongs to and whether it
+          // had to be nudged off that row's centre. A nudged handle grows an
+          // on-card LINK WIRE so the eye can still follow it to its param
+          // (the 2-column L body is the case that forces this).
+          if (rowT !== null) {
+            H.rowT = rowT;
+            H.rowEl = p.port.rowEl;
+            H.offRow = Math.abs((tt !== null ? tt : mt) - rowT) > 0.15;
+          }
+          handles.push(H);
           if (tt !== null) { lastT = tt; tt += FAN_PITCH; } else mt += FAN_PITCH;
         }
         if (tt === null) mt += PORT_GAP - FAN_PITCH;
@@ -2246,6 +2279,15 @@ function applySize(n) {
     for (let fs = 11.5; fs >= 9 && ttl.scrollWidth > ttl.clientWidth; fs -= 0.5)
       ttl.style.fontSize = fs + "px";
   }
+  // item 21: an L card prefers ONE column of params (so each row lines up
+  // with its own handle) and only splits into two when they truly overflow.
+  // MEASURED, not guessed — the card is overflow:hidden, so a body that
+  // doesn't fit shows up as scrollHeight > clientHeight.
+  const body = n.el.querySelector(".body");
+  if (body && n.size === "L") {
+    body.classList.remove("twocol");
+    if (n.el.scrollHeight > n.el.clientHeight + 1) body.classList.add("twocol");
+  } else if (body) body.classList.remove("twocol");
 }
 function place(n) {
   if (uiMode === "flex") { placeFlex(n); return; }
@@ -2673,8 +2715,66 @@ function relayoutNow() {
   }
   renderHandles();
   renderTags(routed);
+  renderParamLinks();   // item 21: name recolour + on-card link wires
   redrawLogicViz();   // circuit diagrams: canvas sizes track the layout
   window._routedDebug = routed;
+}
+// ---- item 21: mod-handle <-> parameter linkage -----------------------------
+// (a) A param driven by a mod control wears its WIRE'S COLOUR on the param
+//     NAME, and reverts the moment the wire is cut.
+// (b) Where a handle could not be placed exactly on its row's centre — the
+//     two-column L body is the case that forces it — a faint ON-CARD LINK
+//     WIRE runs from the handle to that row, so the eye can still follow it.
+//     It lights up when the handle is wired, and never overlaps a control:
+//     it hugs the card's left inset and turns once, into the row's centre.
+function renderParamLinks() {
+  for (const n of nodes.values()) {
+    // reset every label this pass may have coloured
+    for (const lbl of n.el.querySelectorAll("label[data-modlink]")) {
+      lbl.style.color = "";
+      lbl.removeAttribute("data-modlink");
+    }
+    const old = n.el.querySelector("svg.modlink");
+    if (old) old.remove();
+    if (!n.lay) continue;
+    // colour the NAME of every param a mod wire lands on
+    const wireFor = new Map();          // rowEl -> wire
+    for (const w of wires) {
+      const p = w.to.port;
+      if (!p || !p.quiet || p.sig !== "mod" || !p.rowEl) continue;
+      if (w.to.node !== n) continue;
+      wireFor.set(p.rowEl, w);
+      const lbl = p.rowEl.querySelector("label");
+      if (lbl) { lbl.style.color = w.color; lbl.dataset.modlink = "1"; }
+    }
+    // link wires for handles that had to leave their row
+    const strays = n.lay.handles.filter(H => H.offRow && H.rowEl
+                                             && H.rowEl.isConnected);
+    if (!strays.length) continue;
+    const NS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("class", "modlink");
+    const cw = n.el.clientWidth, ch = n.el.clientHeight;
+    svg.setAttribute("width", cw); svg.setAttribute("height", ch);
+    svg.style.left = "0"; svg.style.top = "0";
+    for (const H of strays) {
+      const rowMidY = offsetWithin(H.rowEl, n.el) + H.rowEl.offsetHeight / 2;
+      const rowX = H.rowEl.offsetLeft + 3;         // just inside the row
+      // handle position RELATIVE to the card (H.x/H.y are world px)
+      const hx = H.x - (nodeUnitRect(n).x * U);
+      const hy = H.y - (nodeUnitRect(n).y * U);
+      const inset = Math.max(3, Math.min(rowX, 10));
+      const d = `M ${hx} ${hy} L ${inset} ${hy} L ${inset} ${rowMidY} `
+              + `L ${rowX} ${rowMidY}`;
+      const path = document.createElementNS(NS, "path");
+      path.setAttribute("d", d);
+      const w = wireFor.get(H.rowEl);
+      path.setAttribute("stroke", w ? w.color : "var(--ink-2)");
+      if (w) path.classList.add("lit");
+      svg.appendChild(path);
+    }
+    n.el.appendChild(svg);
+  }
 }
 // ---- tag placement: clear of corners, crossings, other tags -----------------
 function placeTags(routed) {
@@ -6477,14 +6577,27 @@ function genWave(mtype, pv, N) {
     return psineWave(mtype, pv.p ?? 2, pv.freq ?? 220, N);
   const out = new Float32Array(N);
   if (mtype === "pulse_pad") {
-    // two cycles of the selected wave; pulse drawn at its widest PWM excursion
-    const w = Math.round(pv.wave ?? 0), duty = 0.5 + (pv.pwm ?? 0.2);
+    // two cycles of the selected wave; pulse drawn at its widest PWM
+    // excursion. item 22 (Cole, 07-22 eve): DETUNE now shows too — the DSP
+    // is three oscillators at f, f*ratio and f/ratio, so the preview sums
+    // the same three. At detune 0 they collapse onto one another (the old
+    // picture exactly); winding it up visibly thickens and phases the shape,
+    // which is what the ear hears.
+    const w = Math.round(pv.wave ?? 0);
+    // the DSP's width is 0.5 + SinOsc*pwm, so it never reaches the rails;
+    // clamp here too or an out-of-range pwm would flatten the preview
+    const duty = Math.min(0.95, Math.max(0.05, 0.5 + (pv.pwm ?? 0.2)));
+    const ratio = Math.pow(2, (pv.detune ?? 0) / 1200);   // cents -> ratio
+    const shape = (ph) => {
+      const q = ph - Math.floor(ph);
+      return w === 0 ? (q < duty ? 1 : -1)
+        : w === 1 ? 2 * q - 1
+        : w === 2 ? 1 - 4 * Math.abs(q - 0.5)
+        : Math.sin(2 * Math.PI * q);
+    };
     for (let i = 0; i < N; i++) {
-      const ph = (2 * i / N) % 1;
-      out[i] = w === 0 ? (ph < duty ? 1 : -1)
-        : w === 1 ? 2 * ph - 1
-        : w === 2 ? 1 - 4 * Math.abs(ph - 0.5)
-        : Math.sin(2 * Math.PI * ph);
+      const ph = 2 * i / N;
+      out[i] = (shape(ph) + shape(ph * ratio) + shape(ph / ratio)) / 3;
     }
     return out;
   }
