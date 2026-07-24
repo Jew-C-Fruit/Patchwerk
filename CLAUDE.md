@@ -68,9 +68,38 @@ when unwired (master feed / all taps). Source-fires emit ONE tagged tap
 specs and asks).** A **unit** (= grid square) is the fine 16px grid cell
 (`U = 16` in blocks.html). A **block** is the 10u×10u snappable area
 (`BLK = 10`), separated by 2u gutters. Card sizes in those terms:
+XS = 4.5×4.5u (a block quadrant, opt-in via `cfg.allowXS`),
 S = 10×4.5u (half a block), M = 10×10u (one block), L = 22×10u (two
 blocks spanning their gutter). So "3 units high" means 3 grid squares
 (48px) — never 3 blocks.
+
+**Cards are designed BLOCKS-FIRST (Cole, standing).** A card that
+conforms to blocks — fits its size class, measured, no overflow —
+renders correctly in flex, where height is automatic. The reverse is NOT
+true. Never design a card flex-first.
+
+**Card sizing: measured by default, DECLARED when a graphic is at stake
+(Cole, 2026-07-24).** `sizeFor` normally picks the smallest class that
+fits every row, which is right for a card that is only params. It is
+wrong for a card whose graphic is the point: the params win the
+measurement, the card lands at L, and the graphic takes whatever height
+is left over — PW Pulse Pad's waveform measured FOURTEEN pixels. Those
+cards set `n.defaultSize` and `addSizeChips(n, [...])` instead, and
+define an explicit face per size in CSS; `n.ownFaces` then turns off the
+generic 2-column fallback. At the bigger size the extra room goes to the
+GRAPHIC, never to more param columns. Where a body genuinely needs two
+columns, split it with `splitColumns(n)`: the LEFT column keeps every row
+that owns a handle and the RIGHT column is 100% handle-free params, so
+the 1:1 row↔handle line is structural rather than lucky.
+
+**REACTIVE-INDICATOR DOCTRINE (Cole, 2026-07-24 — standing).** Every
+indicator must react to LOGIC input, not just to clicks. State applied
+inside the gate settle pass does NOT broadcast, so the backend emits its
+own `{"kind": "level", "ep", "on"}` tap and the GUI routes it (the power
+stripe, the Play/Stop card + top bar, and the click/accent LEDs were the
+first three). Any new indicator is wired the same way — and a headless
+mock can only prove it reacts to a message we invented, so verify it on
+the rig with `tests/probe_live_gui.py`.
 
 ## Writing a new module (the main vibecoding activity)
 

@@ -150,6 +150,19 @@ Current coverage:
      broadcast; the endpoints are fan-in; wires cut via ctl_wire
      remove; old servers (no transport_cards/downbeat) render no cards
      and no errors.
+  23. M-default graphical cards (Cole, 07-24): PW Pulse Pad, Instrument
+     and Theory Wizard DEFAULT to M (measured sizing had pushed them to
+     L, which then starved their graphics — the pad's waveform measured
+     14px) and expand to L off their own M|L chips. The extra L width
+     goes to the GRAPHIC, never to more param columns: the pad DROPS its
+     waveform at M and takes it back on the RIGHT half at L; the Theory
+     Wizard drops its presence graphic at M and at L flows the params
+     into two EXPLICIT .bcol columns — LEFT owns every row with a handle,
+     RIGHT is 100% handle-free — with the graphic full width below;
+     Instrument keeps one layout at both sizes. Neither face clips, every
+     param handle stays on its row, flex still shows everything, a size
+     the user CHOSE survives a rebuild, and a stale pre-07-24 layout
+     entry (no chosen flag) never outranks the default.
 """
 
 import glob
@@ -2688,8 +2701,10 @@ def main():
 
         # ---- XS persistence: a quadrant position round-trips ----------
         mem18 = page.evaluate("memOf(nodes.get('logic'))")
-        check("memOf records the quadrant (5-tuple ending in hh)",
-              len(mem18) == 5 and mem18[3] == "XS"
+        # 07-24: memOf grew a 6th slot (sizeChosen — see section 20); hh keeps
+        # index 4 and is simply null on every non-XS card
+        check("memOf records the quadrant (hh at index 4)",
+              len(mem18) == 6 and mem18[3] == "XS"
               and mem18[4] in ("left", "right"), str(mem18))
         # move logic to the bottom-right quadrant of an EMPTY block (found
         # from the far corner — layout variants never reach it), rebuild
@@ -2719,7 +2734,7 @@ def main():
         })()""")
         want = [spot[0], spot[1], "bottom", "XS", "right"]
         check("a moved quadrant position survives the rebuild verbatim",
-              back[:5] == want and back[5] == want, str([back, want]))
+              back[:5] == want and back[5][:5] == want, str([back, want]))
         # a point 2u into that block = its top-left quadrant; 8u in = its
         # bottom-right (occupied by logic → the OTHER half's quadrant)
         px2 = page.evaluate(
@@ -3965,13 +3980,15 @@ def main():
         # that did survive ran along the card EDGES instead of down the
         # middle of the gutter. These checks are that regression net —
         # they fail on TOPM=1 and pass on the reverted geometry.
+        # =========================================================
+
         # ================================================================
-        st23 = base_state(
+        st25 = base_state(
             [sg, echo],
             [{"from": "signal_gen", "to": "echo"},
              {"from": "echo", "to": "master"}])
         page.evaluate("posMem = {}; relayAW = [];")
-        page.evaluate("(s) => __msg({type: 'state', ...s})", st23)
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st25)
         page.wait_for_timeout(600)
         g23 = page.evaluate("""(() => {
           const ctx = buildRouteCtx(currentPos(null));
@@ -4113,6 +4130,214 @@ def main():
                   not t24["out"], str(t24))
             check(f"tidy: a {cols}x{rows} pour stays compact (no column march)",
                   t24["maxCol"] <= max(6, cols) - 1, str(t24))
+
+        # ================================================================
+        # 25 — M-DEFAULT GRAPHICAL CARDS (Cole, 07-24): PW Pulse Pad,
+        # Instrument and Theory Wizard default to M and expand to L off
+        # their own M|L chips, and the L width goes to the GRAPHIC.
+        # ================================================================
+        pad25 = mod("pulse_pad", "PW Pulse Pad", "source", "voice", {
+            "freq": param(220, 20, 2000),
+            "wave": {"min": 0, "max": 3, "curve": "select",
+                     "options": ["pulse", "saw", "tri", "sine"],
+                     "default": 0, "lfo": False, "value": 0},
+            "detune": param(12, 0, 50), "porta": param(0, 0, 1),
+            "glide": param(0.15, 0.01, 2), "pwm": param(0.2, 0, 0.45),
+            "attack": param(0.15, 0.005, 2), "release": param(0.8, 0.05, 5),
+            "amp": param(0.22, 0, 1),
+        })
+        bell25 = mod("fm_bell", "FM Bell", "source", "voice", {
+            "freq": param(440, 20, 2000), "ratio": param(3.51, 0.5, 8),
+            "index": param(4, 0, 12), "decay": param(2.5, 0.1, 8),
+            "amp": param(0.25, 0, 1),
+        })
+        st25 = base_state(
+            [pad25, bell25],
+            [{"from": "pulse_pad", "to": "master"},
+             {"from": "fm_bell", "to": "master"}],
+            tonics=[{"id": "tonic", "every": "1 bar",
+                     "everies": ["1 bar", "deck"], "octave": 2, "root": "C",
+                     "listening": "triadic",
+                     "listenings": ["triadic", "root+fifth", "chromatic"],
+                     "memory": 6.0, "bass": 0.06, "deck_feed": False,
+                     "scale": "C ionian"}],
+            available=[{"key": k, "name": nm, "kind": "source",
+                        "family": "voice"} for k, nm in
+                       [("pulse_pad", "PW Pulse Pad"), ("fm_bell", "FM Bell"),
+                        ("pluck", "Pluck"), ("wind", "Wind"),
+                        ("wobble_saw", "Wobble Saw")]])
+        # a clean slate: stale positions from earlier sections would place
+        # these cards (and their sizes) before the default ever applies
+        page.evaluate("() => { posMem = {}; }")
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st25)
+        page.wait_for_timeout(700)
+
+        THREE = ["m:pulse_pad", "m:fm_bell", "tonic"]
+        face = """(gid) => {
+          const n = nodes.get(gid);
+          if (!n) return {missing: true};
+          const b = n.el.querySelector('.body');
+          const vs = n.el.querySelector('.viz-sec');
+          const cr = n.el.getBoundingClientRect();
+          const vr = vs ? vs.getBoundingClientRect() : null;
+          const rel = (r) => r && {x: (r.left - cr.left) / cr.width,
+                                   y: (r.top - cr.top) / cr.height,
+                                   w: r.width / cr.width,
+                                   h: r.height / cr.height};
+          const cols = [...b.querySelectorAll('.bcol')].map(c => ({
+            x: (c.getBoundingClientRect().left - cr.left) / cr.width,
+            rows: [...c.children],
+          }));
+          const anchored = new Set(n.ports.filter(p => p.rowEl)
+                                          .map(p => p.rowEl));
+          return {
+            size: n.size,
+            chips: [...n.el.querySelectorAll('.szchips button')]
+              .map(x => x.dataset.sz),
+            // a hidden viz has NO box at all (display:none), not a squeezed one
+            vizShown: !!(vs && vs.offsetHeight > 0),
+            vizPx: vs ? vs.offsetHeight : 0,
+            viz: rel(vr),
+            body: rel(b.getBoundingClientRect()),
+            overflow: n.el.scrollHeight - n.el.clientHeight,
+            bodyOverflow: b.scrollHeight - b.clientHeight,
+            cols: cols.map(c => c.x),
+            colAnchored: cols.map(c => c.rows.filter(r => anchored.has(r)).length),
+            colRows: cols.map(c => c.rows.length),
+            // ALIGNMENT NEVER BENDS: every param handle on its own row
+            strayMods: (n.lay && n.lay.handles || [])
+              .filter(H => H.port && H.port.sig === 'mod' && H.offRow).length,
+          };
+        }"""
+        m25 = {g: page.evaluate(face, g) for g in THREE}
+        for g in THREE:
+            check(f"defaults to M: {g}", m25[g].get("size") == "M", str(m25[g]))
+            check(f"offers M|L size chips (no S face): {g}",
+                  m25[g].get("chips") == ["M", "L"], str(m25[g]))
+            check(f"M fits its footprint — nothing clipped: {g}",
+                  m25[g]["overflow"] <= 0 and m25[g]["bodyOverflow"] <= 0,
+                  str(m25[g]))
+            check(f"M keeps every param handle on its row: {g}",
+                  m25[g]["strayMods"] == 0, str(m25[g]))
+        # the graphic each card DROPS at M, and the one it keeps
+        check("M drops the Pulse Pad waveform entirely",
+              m25["m:pulse_pad"]["vizShown"] is False, str(m25["m:pulse_pad"]))
+        check("M drops the Theory Wizard presence graphic entirely",
+              m25["tonic"]["vizShown"] is False, str(m25["tonic"]))
+        check("Instrument KEEPS its preview at M (same layout, shrunk)",
+              m25["m:fm_bell"]["vizShown"] and m25["m:fm_bell"]["vizPx"] >= 30,
+              str(m25["m:fm_bell"]))
+        # Theory Wizard's params are ONE reading column at M (the two
+        # explicit .bcol wrappers stack) — same face as before the split
+        stack25 = page.evaluate("""(() => {
+          const b = nodes.get('tonic').el.querySelector('.body');
+          const cs = [...b.querySelectorAll('.bcol')]
+            .map(c => c.getBoundingClientRect());
+          return {n: cs.length, sameX: cs.every(c => Math.abs(c.left - cs[0].left) < 1),
+                  stacked: cs.length < 2 || cs[1].top >= cs[0].bottom - 1};
+        })()""")
+        check("M stacks the Theory Wizard columns into one reading column",
+              stack25["n"] == 2 and stack25["sameX"] and stack25["stacked"],
+              str(stack25))
+
+        # ---- expand: the chips take every card to L ---------------------
+        page.evaluate("""(gids) => { for (const g of gids)
+          nodes.get(g).el.querySelector('.szchips button[data-sz=L]').click(); }""",
+          THREE)
+        page.wait_for_timeout(500)
+        l25 = {g: page.evaluate(face, g) for g in THREE}
+        for g in THREE:
+            check(f"the L chip expands the card: {g}",
+                  l25[g].get("size") == "L", str(l25[g]))
+            check(f"L fits its footprint — nothing clipped: {g}",
+                  l25[g]["overflow"] <= 0 and l25[g]["bodyOverflow"] <= 0,
+                  str(l25[g]))
+            check(f"L keeps every param handle on its row: {g}",
+                  l25[g]["strayMods"] == 0, str(l25[g]))
+        # PW Pulse Pad: waveform back, on the RIGHT-HAND HALF beside the params
+        pv = l25["m:pulse_pad"]
+        check("L brings the Pulse Pad waveform back on the RIGHT",
+              pv["vizShown"] and pv["viz"]["x"] >= 0.45
+              and pv["viz"]["w"] > 0.35, str(pv))
+        check("L keeps the Pulse Pad params on the left, beside it",
+              pv["body"]["w"] <= 0.6 and pv["body"]["x"] < 0.1
+              and pv["viz"]["y"] < 0.5, str(pv))
+        check("the Pulse Pad body stays ONE column (row <-> handle is 1:1)",
+              page.evaluate("""(() => {
+                const b = nodes.get('m:pulse_pad').el.querySelector('.body');
+                return !b.classList.contains('twocol')
+                       && b.querySelectorAll('.bcol').length === 0;
+              })()"""))
+        # Theory Wizard: 2 explicit columns, RIGHT one 100% handle-free,
+        # presence graphic full width BELOW them
+        tv = l25["tonic"]
+        check("L splits Theory Wizard into two side-by-side columns",
+              len(tv["cols"]) == 2 and tv["cols"][0] < 0.1
+              and tv["cols"][1] > 0.4, str(tv))
+        check("the RIGHT column is 100% params WITHOUT handles",
+              tv["colAnchored"] == [1, 0] and min(tv["colRows"]) >= 3, str(tv))
+        check("L puts the presence graphic FULL WIDTH under both columns",
+              tv["vizShown"] and tv["viz"]["w"] > 0.9
+              and tv["viz"]["y"] > tv["body"]["y"] + tv["body"]["h"] - 0.02,
+              str(tv))
+        check("the presence graphic gains real height at L (was squeezed)",
+              tv["vizPx"] >= 60, str(tv))
+        # Instrument: same layout at L, just wider
+        iv = l25["m:fm_bell"]
+        check("Instrument keeps ONE layout at both sizes (viz below the rows)",
+              iv["vizShown"] and iv["viz"]["w"] > 0.9
+              and iv["viz"]["y"] > iv["body"]["y"] + iv["body"]["h"] - 0.02,
+              str(iv))
+
+        # ---- persistence: a CHOSEN size sticks, a stale one does not ----
+        page.evaluate("() => saveLayout()")
+        page.wait_for_timeout(500)
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st25)
+        page.wait_for_timeout(600)
+        kept = {g: page.evaluate("(g) => nodes.get(g).size", g) for g in THREE}
+        check("a size CHOSEN off the chips survives the rebuild",
+              all(v == "L" for v in kept.values()), str(kept))
+        # A pre-07-24 layout entry (4-tuple, no chosen flag) holds the
+        # auto-measured L these cards are moving AWAY from — the DEFAULT has
+        # to win, or the new face never reaches anyone with a saved layout.
+        # Driven through applyMem itself: rebuildGraph re-saves posMem from
+        # the LIVE nodes before it tears them down, so a legacy entry can only
+        # be reproduced the way a page load produces one.
+        legacy = page.evaluate("""(gids) => {
+          const r = {};
+          for (const g of gids) {
+            const n = nodes.get(g), m = posMem[g];
+            const reset = () => { n.size = null; n.sizeLocked = false; };
+            reset(); posMem[g] = [m[0], m[1], m[2], 'L'];        // legacy
+            applyMem(n); const stale = n.size;
+            reset(); posMem[g] = [m[0], m[1], m[2], 'L', null, 1];  // chosen
+            applyMem(n); r[g] = [stale, n.size];
+          }
+          return r;
+        }""", THREE)
+        check("a STALE stored size never outranks the M default",
+              all(v[0] == "M" for v in legacy.values()), str(legacy))
+        check("a size the user CHOSE is still restored from the layout",
+              all(v[1] == "L" for v in legacy.values()), str(legacy))
+
+        # ---- flex still shows everything (blocks-first doctrine) --------
+        page.evaluate("() => setMode('flex')")
+        page.wait_for_timeout(600)
+        flex25 = page.evaluate("""(gids) => {
+          const r = {};
+          for (const g of gids) {
+            const n = nodes.get(g), vs = n.el.querySelector('.viz-sec');
+            r[g] = {size: n.el.dataset.size, viz: vs ? vs.offsetHeight : 0,
+                    overflow: n.el.scrollHeight - n.el.clientHeight};
+          }
+          return r;
+        }""", THREE)
+        for g in THREE:
+            check(f"flex shows the graphic and clips nothing: {g}",
+                  flex25[g]["size"] == "F" and flex25[g]["viz"] > 0
+                  and flex25[g]["overflow"] <= 1, str(flex25[g]))
+        page.evaluate("() => setMode('blocks')")
+        page.wait_for_timeout(400)
 
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()

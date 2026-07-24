@@ -524,6 +524,37 @@
   .mod[data-size="L"] .body { column-count: 1; }
   .mod[data-size="L"] .body.twocol { column-count: 2; column-gap: 18px; }
   .mod[data-size="L"] .body .mini { break-inside: avoid; }
+  /* ===== M-DEFAULT GRAPHICAL CARDS (Cole, 2026-07-24) ====================
+     "Match handles to params" (item 21) pushed the big param cards to L and
+     then the graphic took whatever height was left over — PW Pulse Pad's
+     waveform measured FOURTEEN pixels, the Theory Wizard's histogram 27.
+     These three now DEFAULT to M and expand to L off their size chips, and
+     the extra width at L goes to the GRAPHIC, never to more param columns:
+       PW Pulse Pad  — M drops the waveform; L puts it on the RIGHT half.
+       Theory Wizard — M drops the presence graphic; L flows the params into
+                       two EXPLICIT columns with the graphic full width below.
+       Instrument    — same layout at both sizes, just shrunk at M.
+     Blocks-first as ever: each face fits its footprint with no overflow, so
+     flex (auto height, no data-size match) still shows everything. */
+  /* explicit 2-column body — .bcol wrappers, so nothing can flow across the
+     boundary and the RIGHT column stays 100% handle-free (see splitColumns).
+     Below L the columns just STACK: identical to the old single column. */
+  .mod[data-size="L"] .body.cols { display: flex; column-count: auto;
+    align-items: flex-start; gap: 16px; }
+  .mod[data-size="L"] .body.cols > .bcol { flex: 1 1 0; min-width: 0; }
+  /* PW Pulse Pad: the waveform is GONE at M and owns the right half at L
+     (head spans both columns so the title/chips/kill stay put) */
+  .mod.padcard[data-size="M"] .viz-sec { display: none; }
+  .mod.padcard[data-size="L"] { display: grid; grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto 1fr; }
+  .mod.padcard[data-size="L"] .head { grid-column: 1 / -1; }
+  .mod.padcard[data-size="L"] .body { grid-column: 1; grid-row: 2;
+    max-height: none; }   /* % max-height would clip inside the grid area */
+  .mod.padcard[data-size="L"] .viz-sec { grid-column: 2; grid-row: 2;
+    padding: 3px 12px 8px 2px; }
+  /* Theory Wizard: presence graphic GONE at M, full width UNDER both param
+     columns at L (~80px of bars instead of the squeezed 27) */
+  .mod[data-gid^="tonic"][data-size="M"] .viz-sec { display: none; }
   /* on-card link wires: faint by default, lit when their handle/wire is */
   .modlink { position: absolute; pointer-events: none; z-index: 3;
     overflow: visible; }
@@ -566,6 +597,9 @@
   .szchips button { background: var(--hairline); border: 0; color: var(--ink-2);
     font-size: 8px; font-family: inherit; border-radius: 3px; padding: 1px 4px;
     cursor: pointer; line-height: 1.2; }
+  /* an M head is only 160px wide: the chips give the title back what they can */
+  .mod[data-size="M"] .szchips { gap: 1px; }
+  .mod[data-size="M"] .szchips button { font-size: 7.5px; padding: 1px 3px; }
   .szchips button.on { background: var(--ink-2); color: #111; font-weight: 700; }
   .szchips + .kill { margin-left: 4px; }
   .flash { animation: flashbad .35s ease 2; }
@@ -2237,6 +2271,11 @@ let HANDLE_LIST = [];
 // a card that can't fit S is sized up; L bodies flow params into 2 columns) ----
 function sizeFor(n) {
   if (n.size && n.sizeLocked) return n.size;
+  // DEFAULT-SIZE cards (Cole, 07-24): a card whose graphic deserves the room
+  // measurement would never give it declares its own size and expands from
+  // the chips. Measuring is what pushed PW Pulse Pad / Theory Wizard /
+  // Instrument to L and then squeezed their graphics to nothing.
+  if (n.defaultSize) return n.defaultSize;
   if (n.montype) return n.size || "S";                    // monitors: chip-adjustable
   if (n.wideCfg && n.expanded) return "L";                // drums expanded: full seq
   // deck & every other card: measured — no special cases, no overflow
@@ -2272,24 +2311,49 @@ function applySize(n) {
   n.el.style.height = h + "px";
   n.el.dataset.size = n.size;
   // titles occupy ONE line and show WHOLE: XS swaps in the card's SHORT
-  // name (a 4.5u head can't carry "Threshold 2"), then shrink-to-fit
+  // name (a 4.5u head can't carry "Threshold 2"), then shrink-to-fit — and
+  // if even the floor font can't hold the long name, the SHORT name wins
+  // over an ellipsis (an M head carrying size chips + kill is genuinely
+  // narrow: "Theory Wizard 2" does not fit beside M|L|✕). Never truncate.
   const ttl = n.el.querySelector(".title");
   if (ttl) {
-    const want = n.size === "XS" ? (n.short || n.name) : n.name;
+    if (n._ttlFor !== n.size) {          // a size change re-opens both choices
+      n._ttlFor = n.size; n._ttlShort = false; n._ttlSized = null;
+    }
+    const short = n.short || n.name;
+    const want = (n.size === "XS" || n._ttlShort) ? short : n.name;
     if (ttl.textContent !== want) { ttl.textContent = want; n._ttlSized = null; }
   }
+  const fitTitle = () => {
+    ttl.style.fontSize = "";
+    let fs = 12, shrank = false;
+    while (fs > 8.5 && ttl.scrollWidth > ttl.clientWidth) {
+      fs -= 0.5; ttl.style.fontSize = fs + "px"; shrank = true;
+    }
+    // COMFORT fit, like sizeFor's: once the title has been squeezed AT ALL,
+    // take one more notch. The title box shrink-wraps its text, so an exact
+    // fit reads as "fits" here and still renders an ellipsis on screen at
+    // fractional zoom (sub-pixel rounding). Untouched titles keep 12px.
+    if (shrank && fs > 8.5) { fs -= 0.5; ttl.style.fontSize = fs + "px"; }
+  };
   if (ttl && n._ttlSized !== n.size && ttl.clientWidth > 0) {
     n._ttlSized = n.size;
-    ttl.style.fontSize = "";
-    for (let fs = 11.5; fs >= 9 && ttl.scrollWidth > ttl.clientWidth; fs -= 0.5)
-      ttl.style.fontSize = fs + "px";
+    fitTitle();
+    const short = n.short || n.name;
+    if (!n._ttlShort && short !== n.name && ttl.scrollWidth > ttl.clientWidth + 1) {
+      n._ttlShort = true;
+      ttl.textContent = short;
+      fitTitle();
+    }
   }
   // item 21: an L card prefers ONE column of params (so each row lines up
   // with its own handle) and only splits into two when they truly overflow.
   // MEASURED, not guessed — the card is overflow:hidden, so a body that
   // doesn't fit shows up as scrollHeight > clientHeight.
+  // ownFaces cards define an EXPLICIT face per size (their own columns and
+  // graphic placement) — the generic column-count fallback would fight it.
   const body = n.el.querySelector(".body");
-  if (body && n.size === "L") {
+  if (body && n.size === "L" && !n.ownFaces) {
     body.classList.remove("twocol");
     if (n.el.scrollHeight > n.el.clientHeight + 1) body.classList.add("twocol");
   } else if (body) body.classList.remove("twocol");
@@ -2376,9 +2440,13 @@ function applyMem(n) {
   if (!validMem(m)) return false;
   // remembered size binds CHIP-ADJUSTABLE cards only (monitors + any card
   // with size chips); every other card re-measures — a stale saved size must
-  // never clip newly-added content
+  // never clip newly-added content. A card with a DEFAULT size additionally
+  // wants proof the size was CHOSEN (memOf's trailing flag): its old entries
+  // hold the auto-measured L it is being moved away from, and a default the
+  // user never sees is no default at all.
   if ((n.montype || n.sizeChips) &&
-      (m[3] === "S" || m[3] === "M" || m[3] === "L")) { n.size = m[3]; n.sizeLocked = true; }
+      (m[3] === "S" || m[3] === "M" || m[3] === "L") &&
+      (m[5] === 1 || !n.defaultSize)) { n.size = m[3]; n.sizeLocked = true; }
   applySize(n);
   const pl = { size: n.size, bx: m[0], by: m[1],
                half: halfHeight(n.size) ? (m[2] || "top") : null,
@@ -2422,12 +2490,16 @@ function autoPlace(n, prefCol, prefRow = 0) {
   n.bx = slot.bx; n.by = slot.by; n.half = slot.half; n.hh = slot.hh || null;
   place(n);
 }
-// layout memory: [bx, by, half, size] (+ hh for XS — appended so monitor
-// tuples and every pre-XS stored layout keep their shape)
+// layout memory: [bx, by, half, size, hh, sizeChosen] — the trailing PAIR is
+// tolerated missing on every layout saved before 2026-07-24 (and hh is still
+// only meaningful for XS). sizeChosen records that the user actually PICKED
+// the size off the chips: without it a stale auto-measured size outranks a
+// card's DEFAULT size forever, and the three M-default cards all used to
+// measure L — so every existing layout has an "L" sitting in it. See applyMem.
 function memOf(n) {
-  const m = [n.bx | 0, n.by | 0, n.half || null, n.size || "S"];
-  if (n.size === "XS") m.push(n.hh || "left");
-  return m;
+  return [n.bx | 0, n.by | 0, n.half || null, n.size || "S",
+          n.size === "XS" ? (n.hh || "left") : null,
+          n.sizeLocked ? 1 : 0];
 }
 function enforceSeparation(n) {
   // valid, non-overlapping placement or find one
@@ -2488,12 +2560,16 @@ function resizeNode(n, size) {
   saveLayout();
   return true;
 }
-function addSizeChips(n) {
+// sizes defaults to the full S/M/L ladder; a card passes a SHORTER list when
+// only some sizes have an honest face (the M-default cards offer M/L — a 4.5u
+// S cannot hold five-to-nine param rows without clipping them)
+function addSizeChips(n, sizes) {
   n.sizeChips = true;                    // chip-set size persists + locks (like monitors)
+  n.sizes = sizes || ["S", "M", "L"];
   const head = n.el.querySelector(".head");
   const box = document.createElement("div");
   box.className = "szchips";
-  for (const s of ["S", "M", "L"]) {
+  for (const s of n.sizes) {
     const b = document.createElement("button");
     b.textContent = s; b.dataset.sz = s;
     b.addEventListener("pointerdown", (e) => e.stopPropagation());
@@ -2505,6 +2581,39 @@ function addSizeChips(n) {
   head.insertBefore(box, head.querySelector(".kill"));
   n.syncChips = syncChips;
   requestAnimationFrame(syncChips);
+}
+// ---- explicit 2-column body (Cole, 07-24) ----------------------------------
+// The CSS column-count fallback (item 21) decides the split by height, so a
+// row that owns a handle can land in the RIGHT column and lose its 1:1 line.
+// This splits the body STRUCTURALLY instead: every row anchoring a quiet
+// handle stays in the LEFT column and the RIGHT column is 100% handle-free
+// params (Cole: "not all params need handles"). Call it AFTER the card's
+// ports are populated — the anchor set is read off n.ports.
+//
+// The wrappers are UNPOSITIONED divs, so offsetWithin/offsetLeft (which the
+// handle placer walks through offsetParent) read exactly as before. Below L
+// the two columns simply stack and the body reads as the single column it
+// has always been, so only the L face changes.
+function splitColumns(n) {
+  const body = n.el.querySelector(".body");
+  if (!body || body.querySelector(".bcol")) return;
+  const rows = [...body.children];
+  if (rows.length < 4) return;                    // nothing worth splitting
+  const anchored = new Set(n.ports.filter(p => p.rowEl).map(p => p.rowEl));
+  let lastAnchored = -1;
+  rows.forEach((r, i) => { if (anchored.has(r)) lastAnchored = i; });
+  // DOCUMENT ORDER is preserved (reading order must survive the split), so
+  // the boundary sits after the last handle-owning row — or at the midpoint,
+  // whichever is later. An all-anchored body (PW Pulse Pad) never splits.
+  const split = Math.max(lastAnchored + 1, Math.ceil(rows.length / 2));
+  if (split >= rows.length) return;
+  const mk = () => { const c = document.createElement("div");
+                     c.className = "bcol"; return c; };
+  const left = mk(), right = mk();
+  rows.slice(0, split).forEach(r => left.appendChild(r));
+  rows.slice(split).forEach(r => right.appendChild(r));
+  body.classList.add("cols");
+  body.appendChild(left); body.appendChild(right);
 }
 // tidy: compact into a tight ordered grid — columns follow the signal-chain
 // cascade (rank = distance from sources), each cascade packs left→right with
@@ -4450,6 +4559,15 @@ function buildChainCard(mod) {
   // rides the HEAD row, right at the power light
   n.ports.push({dir: "in", sig: "bin", label: "pwr", quiet: true,
                 rowEl: n.el.querySelector(".head"), ep: mod.key + ":pwr"});
+  // M-DEFAULT GRAPHICAL CARDS (Cole, 07-24) — these two carry a graphic that
+  // measured sizing starved: they declare M, expand to L from the chips, and
+  // define their own face at each size (see the CSS block).
+  if (mtype === "pulse_pad" || isInstrument) {
+    n.el.classList.add(isInstrument ? "instrcard" : "padcard");
+    n.defaultSize = "M";
+    n.ownFaces = true;          // no generic twocol fallback: the L face is explicit
+    addSizeChips(n, ["M", "L"]);
+  }
   return n;
 }
 
@@ -4630,6 +4748,15 @@ function buildTonicCard(t) {
   // wired binary source overrides that internal timer, so they share a row.
   const trig = n.ports.find(p => p.sig === "bin");
   if (trig) { trig.quiet = true; trig.rowEl = rows[0]; }
+  // M-DEFAULT (Cole, 07-24): M is the params, no histogram; L flows them into
+  // two explicit columns — LEFT owns the trigger row (the only row here with a
+  // handle), RIGHT is 100% handle-free — and gives the histogram the full
+  // width of the lower section. splitColumns runs AFTER the trigger-in claims
+  // its rowEl, so that row is anchored when the boundary is chosen.
+  n.defaultSize = "M";
+  n.ownFaces = true;
+  splitColumns(n);
+  addSizeChips(n, ["M", "L"]);
   return n;
 }
 
