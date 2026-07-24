@@ -12,6 +12,12 @@
     --bin: #e6c34a;    /* the ONE binary signal kind (binary rework, 07-23):
                           yellow base of the yellow→pink wire family — the
                           old ping (peach) and gate (red) kinds merged */
+    --binlatch: #ee9338;  /* the family's ORANGE — latch-mode button banner +
+                             logic/relay banners (Cole, 07-24: binary cards
+                             wear colored title banners: yellow = sources/
+                             momentary, orange = latch/logic/relay). Warmer
+                             than LINES.bin[1] so the two banner states read
+                             apart at a glance. */
     --danger: #e34948; --meter: #1baf7a; --grid: rgba(255,255,255,0.045);
   }
   * { box-sizing: border-box; }
@@ -203,19 +209,56 @@
      measures them into S (a fire dot needs no M-card real estate) */
   .mod[data-gid^="button"] .viz-sec, .mod[data-gid^="clock"] .viz-sec {
     padding: 2px 10px 5px 14px; }
-  /* button: the mode row + keycap + bindline must fit S (until the XS card
-     size lands in GUI pass B) — tighter metrics than the generic rows */
-  .mod[data-gid^="button"] .body { padding: 0 8px 1px 12px; }
-  .mod[data-gid^="button"] .mini { margin: 1px 0; }
-  .mod[data-gid^="button"] .keycap { height: 18px; font-size: 11.5px; }
-  .mod[data-gid^="button"] .bindline { margin-top: 1px; font-size: 8px; }
-  .mod[data-gid^="button"] .viz-sec { padding: 1px 10px 2px 14px; }
-  /* binary LEVEL LEDs (head, next to kill): logic out / button level —
-     lit = hi, following live {"kind":"gate"} events */
+  /* button (Cole, 07-24): NO rows, NO subtitle — the banner carries the
+     mode toggle, the viz-sec centers the square keycap; the rebind ↻ and
+     the right-center level LED are absolutely placed on the card */
+  .mod[data-gid^="button"] .viz-sec { display: flex; align-items: center;
+    justify-content: center; padding: 2px 8px 4px; position: relative; }
+  /* binary-plane cards wear a COLORED TITLE BANNER instead of the family
+     stripe (Cole, 07-24): yellow = binary sources (button momentary /
+     clock / threshold), orange = latch button + logic + relay. Dark ink
+     for contrast; the banner background is set inline (mode-reactive). */
+  .mod .head.banner { border-radius: 8px 8px 0 0; }
+  .mod .head.banner .title { color: #16150f; }
+  .mod .head.banner .sub { color: rgba(22,21,15,0.6); }
+  .mod .head.banner .kill { color: rgba(22,21,15,0.55); }
+  .mod .head.banner .kill:hover { color: var(--danger); }
+  /* the button banner: [MOM|LATCH toggle] … [✕]. The 72px XS head has no
+     honest room for a BTN tag beside the toggle (Cole: "small print IF
+     there's room") — BTN rides the card face's bottom-right instead.
+     Double .head.banner selector outranks the generic XS head rule. */
+  .mod[data-gid^="button"] .head.banner { padding: 2px 4px 1px; gap: 2px; }
+  .mod[data-gid^="button"] .kill { font-size: 9px; padding: 0; }
+  .btntag { position: absolute; right: 3px; bottom: 2px; font-size: 6px;
+    font-weight: 800; letter-spacing: 0.3px; color: var(--ink-2);
+    pointer-events: none; z-index: 6; }
+  .modeseg { display: flex; border-radius: 4px; overflow: hidden;
+    cursor: pointer; flex: none; background: rgba(22,21,15,0.16); }
+  .modeseg span { font-size: 6px; font-weight: 700; letter-spacing: 0;
+    padding: 1.5px 2.5px; line-height: 1.2; color: rgba(22,21,15,0.55); }
+  .modeseg span.on { background: rgba(22,21,15,0.82); color: var(--ink-1); }
+  .modeseg:hover { box-shadow: 0 0 0 1px rgba(22,21,15,0.5); }
+  /* the logic banner's circuit selector (replaces the title + op row):
+     click cycles AND → OR → NOT → XOR → SR latch */
+  .opsel { font-size: 8.5px; font-weight: 800; letter-spacing: 0.2px;
+    padding: 1px 5px; border-radius: 4px; background: rgba(22,21,15,0.22);
+    color: #16150f; cursor: pointer; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; min-width: 0; }
+  .opsel:hover { background: rgba(22,21,15,0.4); }
+  /* an EMPTY body (button/logic carry no param rows now) spends no height */
+  .mod .body:empty { display: none; }
+  /* binary LEVEL LEDs: logic out / button level — lit = hi, following live
+     {"kind":"gate"} events. Cole, 07-24: the LED sits at the card's RIGHT-
+     HAND CENTER (.side), and the bin-out handle is fixed in line with it. */
   .gled { width: 9px; height: 9px; border-radius: 50%; flex: none;
     border: 1.5px solid var(--ink-2); background: var(--card); opacity: 0.7; }
   .gled.on { background: var(--bin); border-color: var(--bin); opacity: 1;
     box-shadow: 0 0 7px color-mix(in srgb, var(--bin) 70%, transparent); }
+  .gled.side { position: absolute; right: 3px; top: 50%;
+    transform: translateY(-50%); z-index: 6; }
+  .gled.pulse { animation: gledpulse .22s ease; }
+  @keyframes gledpulse { 30% { box-shadow: 0 0 10px var(--bin);
+    transform: translateY(-50%) scale(1.35); } }
   /* relay (GUI pass B): the center power button IS the manual switch —
      lit while closed, following {"kind":"gate"} events */
   .relaybtn { width: 24px; height: 24px; margin: auto; border-radius: 50%;
@@ -241,39 +284,40 @@
   canvas.lvz { width: 100%; height: 100%; display: block;
     background: var(--plane); border: 1px solid var(--hairline);
     border-radius: 6px; }
-  .mod[data-gid^="logic"] .viz-sec { padding: 1px 8px 4px 10px; }
+  .mod[data-gid^="logic"] .viz-sec { padding: 1px 14px 4px 10px; }
   .mod.measuring[data-gid^="logic"] .viz-sec canvas.lvz {
     height: 12px !important; }
   .lpin { position: absolute; left: 11px; width: 18px; height: 10px;
     font-size: 6.5px; font-weight: 700; line-height: 10px;
     color: var(--ink-2); pointer-events: none; z-index: 2; }
-  /* item 6: Button binding shown LARGE as a computer-key KEYCAP; clicking
-     it FIRES. The binding label underneath is the rebind affordance. */
-  .keycap { width: 32px; height: 22px; margin: 0 auto; border-radius: 5px;
+  /* item 6 → 07-24: Button binding shown LARGE as a SQUARE computer-key
+     KEYCAP; clicking it FIRES. Whole-word bindings ("L SHIFT", "SPACE")
+     wrap at word breaks in smaller print (.word). The ↻ rebind icon is
+     the re-pair affordance (the old bindline is gone). */
+  .keycap { width: 34px; height: 34px; margin: 0 auto; border-radius: 6px;
     background: var(--hairline); border: 1px solid var(--ink-2);
     box-shadow: inset 0 -2px 0 rgba(0,0,0,0.45), 0 1px 2px rgba(0,0,0,0.35);
     display: flex; align-items: center; justify-content: center; gap: 1px;
-    font-size: 13px; font-weight: 700; line-height: 1; color: var(--ink-1);
+    font-size: 14px; font-weight: 700; line-height: 1; color: var(--ink-1);
     cursor: pointer; user-select: none; -webkit-user-select: none; }
   .keycap:hover { filter: brightness(1.25); }
   .keycap.unbound { color: var(--ink-2); font-weight: 400; }
   .keycap small { font-size: 6.5px; font-weight: 700; color: var(--ink-2);
     align-self: flex-start; margin-top: 3px; letter-spacing: 0.3px; }
+  .keycap .kglyph { text-align: center; }
+  .keycap.word { font-size: 7.5px; line-height: 1.2; padding: 2px; }
+  .keycap.word .kglyph { white-space: normal; word-break: keep-all; }
   .keycap.pulse { animation: keycappulse .22s ease; }
   @keyframes keycappulse { 30% { box-shadow: 0 0 10px var(--bin),
     inset 0 -2px 0 rgba(0,0,0,0.45); border-color: var(--bin);
     transform: scale(1.12); } }
-  .bindline { text-align: center; font-size: 8.5px; line-height: 1.15;
-    color: var(--ink-2); cursor: pointer; margin-top: 2px;
-    user-select: none; -webkit-user-select: none; }
-  .bindline:hover { color: var(--ink-1); }
-  /* item 6: the heartbeat/fire icon rides next to the OUT handle — placed
-     by renderHandles against the rendered bin-out handle each relayout */
-  .fireicon { position: absolute; width: 12px; height: 12px; display: flex;
-    align-items: center; justify-content: center; font-size: 10px;
-    line-height: 1; color: var(--bin); opacity: 0.85; pointer-events: none;
-    z-index: 6; }
-  .fireicon.pulse { animation: pingpulse .22s ease; }
+  .rebind { position: absolute; left: 3px; bottom: 2px; width: 12px;
+    height: 12px; display: flex; align-items: center; justify-content:
+    center; font-size: 9.5px; line-height: 1; color: var(--ink-2);
+    cursor: pointer; z-index: 6; user-select: none;
+    -webkit-user-select: none; }
+  .rebind:hover { color: var(--ink-1); }
+  .rebind.arming { color: var(--bin); }
   /* pad-less trigger cards (threshold) pulse their whole card on fire */
   .mod.pulse { animation: cardping .25s ease; }
   @keyframes cardping { 30% { box-shadow: 0 0 12px var(--bin); } }
@@ -890,12 +934,20 @@ function addCard(cfg) {
   const el = document.createElement("div");
   el.className = "mod";
   el.dataset.gid = cfg.gid;
+  // banner cards (binary plane, Cole 07-24): the head wears a solid color
+  // band INSTEAD of the family stripe — yellow for binary sources, orange
+  // for logic/relay/latch (the caller re-paints it live where mode-reactive)
   const stripe = FAMILY[cfg.fam] || "#888";
   el.innerHTML = `
-    <div class="head"><div class="stripe" style="background:${stripe}"></div>
+    <div class="head">${cfg.banner ? "" :
+      `<div class="stripe" style="background:${stripe}"></div>`}
       <div><div class="title">${esc(cfg.name)}</div><div class="sub">${esc(cfg.sub || "")}</div></div>
     </div><div class="body"></div>`;
   const head = el.querySelector(".head");
+  if (cfg.banner) {
+    head.classList.add("banner");
+    head.style.background = cfg.banner;
+  }
   if (cfg.headCheck) {
     // item 8 (gate suite): the enable checkbox became a POWER LED — a round
     // indicator light (lit = enabled) that still toggles on click and stays
@@ -2444,24 +2496,6 @@ function renderHandles() {
       H.el = el;
       HANDLE_LIST.push(H);
       layer.appendChild(el);
-    }
-    // item 6: the button's ◉ heartbeat icon rides just INSIDE the card,
-    // next to the rendered bin-out handle (whichever edge it picked)
-    if (n.fireIcon) {
-      const H = n.lay.handles.find(h => h.sig === "bin" && h.side === "out");
-      if (H) {
-        const cx = n.el.offsetLeft, cy = n.el.offsetTop;
-        if (H.edge === "B") {
-          n.fireIcon.style.left = (H.x - cx - 6) + "px";
-          n.fireIcon.style.top = (H.y - cy - 17) + "px";
-        } else if (H.edge === "T") {
-          n.fireIcon.style.left = (H.x - cx - 6) + "px";
-          n.fireIcon.style.top = (H.y - cy + 5) + "px";
-        } else {   // R (default) / L
-          n.fireIcon.style.left = (H.x - cx + (H.edge === "L" ? 5 : -17)) + "px";
-          n.fireIcon.style.top = (H.y - cy - 6) + "px";
-        }
-      }
     }
   }
 }
@@ -4175,12 +4209,13 @@ function cancelPingArm(silent) {
 }
 function pingFlash(src) {
   // pad-less trigger cards (threshold) pulse the whole card instead;
-  // buttons pulse their keycap AND the fire icon by the out handle (item 6)
+  // buttons pulse their keycap AND the right-center level LED (which sits
+  // in line with the out handle — Cole, 07-24; the ◉ fire icon is gone)
   const n = nodes.get(src);
   if (!n) return;
   const els = [n.el.querySelector(".keycap") ||
                n.el.querySelector(".pingpad") || n.el];
-  if (n.fireIcon) els.push(n.fireIcon);
+  if (n.sideLed) els.push(n.sideLed);
   for (const el of els) {
     el.classList.remove("pulse");
     void el.offsetWidth;
@@ -4198,59 +4233,97 @@ function keycapGlyph(b) {
       Quote: "'", BracketLeft: "[", BracketRight: "]", Backslash: "\\",
       Minus: "-", Equal: "=", Backquote: "`", Enter: "⏎", Tab: "⇥",
       ArrowUp: "↑", ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→"};
+    // whole-word keys render as words on the (square) keycap — the .word
+    // class shrinks + wraps them (Cole, 07-24: "L SHIFT" must fit whole)
+    const WORDS = {ShiftLeft: "L SHIFT", ShiftRight: "R SHIFT",
+      ControlLeft: "L CTRL", ControlRight: "R CTRL", AltLeft: "L ALT",
+      AltRight: "R ALT", MetaLeft: "L CMD", MetaRight: "R CMD",
+      Space: "SPACE", CapsLock: "CAPS", Escape: "ESC", Backspace: "⌫",
+      Delete: "DEL", Home: "HOME", End: "END",
+      PageUp: "PG UP", PageDown: "PG DN"};
     if (code in PUNCT) return {big: PUNCT[code], cc: false};
+    if (code in WORDS) return {big: WORDS[code], cc: false};
     return {big: code.replace(/^(Key|Digit|Numpad)/, ""), cc: false};
   }
   return {big: "?", cc: false};
 }
+// banner colors for the binary plane (Cole, 07-24): sources default YELLOW
+// (the bin base); latch-mode buttons + logic + relay wear ORANGE.
+const BANNER_BIN = "var(--bin)", BANNER_LATCH = "var(--binlatch)";
 function buildButtonCard(b) {
-  // item 6: the binding IS the card face — a big KEYCAP over a small
-  // binding label (click = re-pair). Binary rework: the button is a
-  // momentary switch — the keycap sends button_down while pressed and
-  // button_up on release; in latch (persistent) mode a click sends
-  // fire_button and the server toggles. The head LED shows the level.
+  // Cole, 07-24: XS card, NO subtitle, NO param rows. The banner carries a
+  // tiny BTN tag + the MOM|LATCH segmented toggle and is COLOR-REACTIVE
+  // (yellow momentary / orange latch). The binding IS the card face — a
+  // SQUARE keycap that fits whole words ("L SHIFT"); the ↻ icon re-pairs.
+  // Momentary: keycap sends button_down while pressed, button_up on
+  // release; latch: a click sends fire_button and the server toggles.
+  // The level LED sits at the card's right-hand center, in line with the
+  // fixed bin-out handle.
   const gid = b.id;
   const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
-  const modeText = () => b.latch ? "persistent" : "momentary";
-  const rows = [
-    rowChip({gid}, "mode", {
-      text: modeText(),
-      onClick: (chip) => {
-        b.latch = !b.latch;   // local truth (broadcast excludes the sender)
-        chip.textContent = modeText();
-        send({type: "set_button", id: gid, latch: !!b.latch});
-      },
-    }),
-  ];
   const n = addCard({gid, name: "Button" + suffix, short: "Btn" + suffix,
-    sub: "binary · bindable", fam: "service", rows, allowXS: true,
+    fam: "service", banner: b.latch ? BANNER_LATCH : BANNER_BIN,
+    rows: [], allowXS: true,
     vizHTML: `<div class="keycap" title="press"></div>
-      <div class="bindline" title="click to rebind"></div>`,
+      <div class="rebind" title="rebind">↻</div>`,
     kill: () => send({type: "remove_button", id: gid}),
-    ports: [["out", "bin", "out"]]});
+    ports: []});
+  // out handle FIXED at the right edge's center — in line with the LED
+  n.ports.push({dir: "out", sig: "bin", label: "out",
+                fixEdge: "R", fixFrac: 0.5});
+  // banner: [MOM|LATCH] … [✕] — the title/sub div is gone. The BTN tag
+  // is small print on the card face (bottom-right): the 72px banner has
+  // no honest room for it beside the toggle.
+  const head = n.el.querySelector(".head");
+  head.querySelector(".title").parentElement.remove();
+  const tag = document.createElement("span");
+  tag.className = "btntag";
+  tag.textContent = "BTN" + suffix;
+  n.el.appendChild(tag);
+  const seg = document.createElement("span");
+  seg.className = "modeseg";
+  seg.title = "momentary / latch";
+  seg.innerHTML = `<span class="mom">MOM</span><span class="lat">LATCH</span>`;
+  const kill = head.querySelector(".kill");
+  head.insertBefore(seg, kill);
+  const syncMode = () => {
+    head.style.background = b.latch ? BANNER_LATCH : BANNER_BIN;
+    seg.querySelector(".mom").classList.toggle("on", !b.latch);
+    seg.querySelector(".lat").classList.toggle("on", !!b.latch);
+  };
+  syncMode();
+  seg.addEventListener("pointerdown", (e) => e.stopPropagation());
+  seg.addEventListener("click", (e) => {
+    e.stopPropagation();
+    b.latch = !b.latch;   // local truth (broadcast excludes the sender)
+    syncMode();
+    send({type: "set_button", id: gid, latch: !!b.latch});
+  });
   const cap = n.el.querySelector(".keycap"),
-        line = n.el.querySelector(".bindline");
+        rb = n.el.querySelector(".rebind");
   const syncCap = () => {
     const bb = ((state && state.buttons) || []).find(x => x.id === gid) || b;
     const arm = bb.armed || pingArm === gid;
     const g = arm ? {big: "…", cc: false} : keycapGlyph(bb.binding);
-    cap.innerHTML = (g.cc ? `<small>CC</small>` : "") + esc(g.big);
+    cap.innerHTML = (g.cc ? `<small>CC</small>` : "")
+      + `<span class="kglyph">${esc(g.big)}</span>`;
+    cap.classList.toggle("word", String(g.big).length > 2);
     cap.classList.toggle("unbound", !arm && !bb.binding);
-    line.textContent = arm ? "press a key/CC…" : bindingLabel(bb.binding);
+    cap.title = arm ? "press a key/CC…" : bindingLabel(bb.binding);
+    rb.classList.toggle("arming", arm);
+    rb.title = arm ? "press a key/CC… (Esc cancels)" : "rebind";
   };
   syncCap();
   // pairing flows (startPingArm/cancelPingArm/handlePingKey) talk through
   // this setter; the text is re-derived, so the args are ignored
   uiParam[gid + ".bind"] = () => syncCap();
-  // level LED in the head (lit = hi): settings.on seeds it, live
+  // level LED at right-center (lit = hi): settings.on seeds it, live
   // {"kind":"gate"} events keep it honest; presses echo locally
   const led = document.createElement("span");
-  led.className = "gled" + (b.on ? " on" : "");
+  led.className = "gled side" + (b.on ? " on" : "");
   led.title = "level";
-  led.style.marginLeft = "auto";
-  const kill = n.el.querySelector(".kill");
-  if (kill) kill.style.marginLeft = "2px";
-  n.el.querySelector(".head").insertBefore(led, kill);
+  n.el.appendChild(led);
+  n.sideLed = led;
   uiParam[gid + ".led"] = (u, on) => led.classList.toggle("on", !!on);
   const setLocal = (on) => { b.on = on; led.classList.toggle("on", on); };
   let held = false;
@@ -4277,17 +4350,12 @@ function buildButtonCard(b) {
     send({type: "fire_button", id: gid});   // latch: server toggles
     pingFlash(gid);
   });
-  line.addEventListener("pointerdown", (e) => e.stopPropagation());
-  line.addEventListener("click", (e) => {
+  rb.addEventListener("pointerdown", (e) => e.stopPropagation());
+  rb.addEventListener("click", (e) => {
     e.stopPropagation();
     if (pingArm === gid) cancelPingArm();
     else startPingArm(gid);
   });
-  const fi = document.createElement("div");
-  fi.className = "fireicon";
-  fi.textContent = "◉";
-  n.el.appendChild(fi);
-  n.fireIcon = fi;
   return n;
 }
 function buildClockCard(c) {
@@ -4308,7 +4376,8 @@ function buildClockCard(c) {
     }),
   ];
   return addCard({gid, name: "Clock" + suffix, short: "Clk" + suffix,
-    sub: "transport pulse", fam: "service", rows, allowXS: true,
+    sub: "transport pulse", fam: "service", banner: BANNER_BIN,
+    rows, allowXS: true,
     vizHTML: `<div class="pingpad">◔</div>`,
     kill: () => send({type: "remove_clock", id: gid}),
     ports: [["out", "bin", "out"]]});
@@ -4354,7 +4423,7 @@ function buildThresholdCard(t) {
   ];
   const n = addCard({gid, name: "Threshold" + suffix, short: "Thr" + suffix,
     sub: t.source ? "◁ " + t.source : "cv edge → binary",
-    fam: "service", rows,
+    fam: "service", banner: BANNER_BIN, rows,
     kill: () => send({type: "remove_threshold", id: gid}),
     ports: [["in", "mod", "cv"], ["out", "bin", "out"]]});
   // the cv-in is a QUIET single-input handle riding the level row's line —
@@ -4375,37 +4444,52 @@ function logicInsOf(op) {
   return [["a", "A"], ["b", "B"]];   // AND / OR / XOR
 }
 function buildLogicCard(t) {
+  // Cole, 07-24: NO title, NO subtitle, NO op row — the orange banner
+  // carries a clickable CIRCUIT SELECTOR (cycles the op). The out LED
+  // sits at the card's right-hand center, in line with the fixed bin-out
+  // handle.
   const gid = t.id;
   const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
   const ops = t.ops || ["AND", "OR", "NOT", "XOR", "SR latch"];
-  const rows = [
-    rowChip({gid}, "op", {
-      text: t.op,
-      onClick: (chip) => {
-        const v = ops[(ops.indexOf(chip.textContent) + 1) % ops.length];
-        chip.textContent = v;
-        t.op = v;
-        send({type: "set_logic", id: gid, op: v});
-        // the port SHAPE follows the op (per-op named ins; the server
-        // drops wires whose endpoint died) — rebuild locally (state-
-        // driven); other clients follow the broadcast
-        rebuildGraph();
-      },
-    }),
-  ];
   // circuit-diagram viz: pin labels ride the canvas at the trace heights —
   // the quiet in-handles anchor to them (offsetWithin handles the nesting)
   const ins = logicInsOf(t.op);
   const pinTop = (i) => ins.length === 1 ? 50 : (i === 0 ? 28 : 72);
   const n = addCard({gid, name: "Logic" + suffix, short: "Log" + suffix,
-    sub: `${t.op} · binary logic`, fam: "service", rows, allowXS: true,
+    fam: "service", banner: BANNER_LATCH, rows: [], allowXS: true,
     vizHTML: `<canvas class="lvz" height="20"></canvas>`
       + ins.map(([sub, label], i) =>
           `<span class="lpin" data-pin="${esc(sub)}"
              style="top: calc(${pinTop(i)}% - 5px)">${esc(label)}</span>`)
         .join(""),
     kill: () => send({type: "remove_logic", id: gid}),
-    ports: [["out", "bin", "out"]]});
+    ports: []});
+  // out handle FIXED at the right edge's center — in line with the LED
+  n.ports.push({dir: "out", sig: "bin", label: "out",
+                fixEdge: "R", fixFrac: 0.5});
+  // banner: [circuit selector] [✕] — the title/sub div is gone
+  const head = n.el.querySelector(".head");
+  head.querySelector(".title").parentElement.remove();
+  const opsel = document.createElement("span");
+  opsel.className = "opsel";
+  // "SR latch" won't share an XS head with the ✕ — show its short form
+  const opText = (op) => (op === "SR latch" ? "SR" : op)
+    + (suffix ? " ·" + suffix : "");
+  opsel.textContent = opText(t.op);
+  opsel.title = "circuit — click to change";
+  head.insertBefore(opsel, head.querySelector(".kill"));
+  opsel.addEventListener("pointerdown", (e) => e.stopPropagation());
+  opsel.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const v = ops[(ops.indexOf(t.op) + 1) % ops.length];
+    t.op = v;
+    opsel.textContent = opText(v);
+    send({type: "set_logic", id: gid, op: v});
+    // the port SHAPE follows the op (per-op named ins; the server drops
+    // wires whose endpoint died) — rebuild locally (state-driven); other
+    // clients follow the broadcast
+    rebuildGraph();
+  });
   // named ins: quiet, SINGLE-INPUT (no +; a drop onto an occupied pin cuts
   // the old wire first — the server steals anyway), each riding its pin
   const pinEls = [...n.el.querySelectorAll(".lpin")];
@@ -4413,14 +4497,12 @@ function buildLogicCard(t) {
     dir: "in", sig: "bin", label, quiet: true, single: true,
     ep: `${gid}:${sub}`, rowEl: pinEls[i]}));
   n.logicViz = true;   // redrawLogicViz targets
-  // small output LED in the head (lit = out hi; follows gate events live)
+  // output LED at right-center (lit = out hi; follows gate events live)
   const led = document.createElement("span");
-  led.className = "gled" + (t.out ? " on" : "");
+  led.className = "gled side" + (t.out ? " on" : "");
   led.title = "out level";
-  led.style.marginLeft = "auto";
-  const kill = n.el.querySelector(".kill");
-  if (kill) kill.style.marginLeft = "2px";
-  n.el.querySelector(".head").insertBefore(led, kill);
+  n.el.appendChild(led);
+  n.sideLed = led;
   uiParam[gid + ".led"] = (u, on) => led.classList.toggle("on", !!on);
   return n;
 }
@@ -4441,7 +4523,8 @@ function buildRelayCard(r) {
   const nine = used.length > 4 || used.some(k => k > 4);
   const nCirc = nine ? RELAY_MAX : 4;
   const n = addCard({gid, name: "Relay" + suffix, short: "Rly" + suffix,
-    sub: `signal relay · ${nCirc} circuits`, fam: "service", allowXS: true,
+    sub: `signal relay · ${nCirc} circuits`, fam: "service",
+    banner: BANNER_LATCH, allowXS: true,
     vizHTML: `<div class="relaybtn${r.closed ? " on" : ""}" title="relay: click to toggle">⏻</div>`,
     kill: () => send({type: "remove_relay", id: gid}),
     ports: []});
