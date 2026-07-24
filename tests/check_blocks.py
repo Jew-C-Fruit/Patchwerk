@@ -3803,6 +3803,158 @@ def main():
         page.evaluate("() => setMode('blocks')")
         page.wait_for_timeout(500)
 
+        # ================================================================
+        # 22 — P4: mod-handle <-> parameter linkage (item 21) and the
+        # generator preview following param changes (item 22).
+        # ================================================================
+        pad = mod("pulse_pad", "PW Pulse Pad", "source", "voice", {
+            "freq": param(220, 20, 2000),
+            "wave": {"min": 0, "max": 3, "curve": "select",
+                     "options": ["pulse", "saw", "tri", "sine"],
+                     "default": 0, "lfo": False, "value": 0},
+            "detune": param(12, 0, 50),
+            "pwm": param(0.2, 0, 0.45),
+            "attack": param(0.15, 0.005, 2),
+            "release": param(0.8, 0.05, 5),
+            "amp": param(0.22, 0, 1),
+        })
+        st22 = base_state([pad], [{"from": "pulse_pad", "to": "master"}],
+                          lfos=[{"id": "lfo", "rate": 1.0, "depth": 0.4,
+                                 "shape": 0, "shapes": ["sine", "tri"],
+                                 "dests": [{"key": "pulse_pad",
+                                            "param": "pwm", "center": 0.4}]}])
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st22)
+        page.wait_for_timeout(700)
+
+        # ---- item 21 (a): the param NAME wears its mod wire's colour ----
+        col22 = page.evaluate("""(() => {
+          const n = nodes.get('m:pulse_pad');
+          const row = [...n.el.querySelectorAll('.mini')].find(
+            x => (x.querySelector('label') || {}).title === 'pwm');
+          const other = [...n.el.querySelectorAll('.mini')].find(
+            x => (x.querySelector('label') || {}).title === 'detune');
+          const lbl = row && row.querySelector('label');
+          const w = wires.find(x => x.sig === 'mod'
+                                    && x.to.port && x.to.port.param === 'pwm');
+          return {colour: lbl && getComputedStyle(lbl).color,
+                  marked: !!(lbl && lbl.dataset.modlink),
+                  wireColour: w ? w.color : null,
+                  plainColour: other
+                    && getComputedStyle(other.querySelector('label')).color};
+        })()""")
+        check("item 21: a mod-driven param NAME takes the wire's colour",
+              col22["marked"] and col22["wireColour"]
+              and col22["colour"] != col22["plainColour"], str(col22))
+        # ...and reverts the moment the wire is cut
+        st22b = json.loads(json.dumps(st22))
+        st22b["lfos"] = []
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st22b)
+        page.wait_for_timeout(600)
+        rev22 = page.evaluate("""(() => {
+          const n = nodes.get('m:pulse_pad');
+          const lbl = [...n.el.querySelectorAll('.mini')].find(
+            x => (x.querySelector('label') || {}).title === 'pwm')
+            .querySelector('label');
+          const other = [...n.el.querySelectorAll('.mini')].find(
+            x => (x.querySelector('label') || {}).title === 'detune')
+            .querySelector('label');
+          return {colour: getComputedStyle(lbl).color,
+                  marked: !!lbl.dataset.modlink,
+                  plainColour: getComputedStyle(other).color};
+        })()""")
+        check("item 21: the colour REVERTS when the mod wire is cut",
+              not rev22["marked"]
+              and rev22["colour"] == rev22["plainColour"], str(rev22))
+
+        # ---- item 21 (b): handles line up with their param rows ---------
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st22)
+        page.wait_for_timeout(600)
+        align22 = page.evaluate("""(() => {
+          const n = nodes.get('m:pulse_pad');
+          n.size = 'M'; n.bx = 0; n.by = 0; n.half = null; place(n);
+          computeLayout(n);
+          let worst = 0, checked = 0;
+          for (const H of n.lay.handles) {
+            if (!H.quiet || !H.rowEl || !H.rowEl.isConnected) continue;
+            // PARAM handles only: the ":pwr" level-in deliberately rides the
+            // HEAD, whose centre is above T_LEAD (a handle cannot sit on the
+            // card's top corner), so it is not a param-row alignment case
+            if (!H.port || !H.port.param) continue;
+            checked++;
+            const rowMid = (offsetWithin(H.rowEl, n.el)
+                            + H.rowEl.offsetHeight / 2) / U;
+            const handleT = H.y / U - nodeUnitRect(n).y;
+            worst = Math.max(worst, Math.abs(handleT - rowMid));
+          }
+          return {checked, worst};
+        })()""")
+        check("item 21: every param handle sits on its row's centre (M card)",
+              align22["checked"] > 0 and align22["worst"] < 0.16,
+              str(align22))
+        # an L card prefers ONE column so the rows keep that 1:1 alignment
+        col1 = page.evaluate("""(() => {
+          const n = nodes.get('m:pulse_pad');
+          n.size = 'L'; place(n);
+          const body = n.el.querySelector('.body');
+          return {twocol: body.classList.contains('twocol'),
+                  cols: getComputedStyle(body).columnCount};
+        })()""")
+        check("item 21: an L card lists its params in ONE column when they fit",
+              col1["twocol"] is False and col1["cols"] in ("1", "auto"),
+              str(col1))
+        # if they DON'T fit, it splits and the strays grow link wires
+        link22 = page.evaluate("""(() => {
+          const n = nodes.get('m:pulse_pad');
+          const body = n.el.querySelector('.body');
+          body.classList.add('twocol');       // force the crowded case
+          computeLayout(n); rerouteAll(); renderParamLinks();
+          const svg = n.el.querySelector('svg.modlink');
+          const strays = n.lay.handles.filter(H => H.offRow).length;
+          return {strays, paths: svg ? svg.querySelectorAll('path').length : 0};
+        })()""")
+        check("item 21: handles knocked off their row grow on-card link wires",
+              link22["strays"] == 0 or link22["paths"] >= link22["strays"],
+              str(link22))
+        page.evaluate("""() => {
+          const n = nodes.get('m:pulse_pad');
+          n.el.querySelector('.body').classList.remove('twocol');
+          n.size = 'M'; place(n); computeLayout(n); rerouteAll();
+        }""")
+
+        # ---- item 22: the static preview follows param changes ----------
+        # use the LFO-FREE state: an LFO-ridden param deliberately shows its
+        # MODULATED value (n._lfoU wins over the slider), so probing the LFO's
+        # own destination would measure the wrong thing.
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st22b)
+        page.wait_for_timeout(600)
+        prev22 = page.evaluate("""(() => {
+          const n = nodes.get('m:pulse_pad');
+          const cv = n.el.querySelector('canvas[data-viz=gen]');
+          if (!cv) return {noCanvas: true};
+          const paint = () => {
+            cv.width = cv.clientWidth || 140; cv.height = cv.clientHeight || 44;
+            const ctx = cv.getContext('2d');
+            ctx.clearRect(0, 0, cv.width, cv.height);
+            drawPsineViz(n, ctx, cv.width, cv.height,
+                         getComputedStyle(document.body));
+            return [...ctx.getImageData(0, 0, cv.width, cv.height).data]
+              .reduce((a, v) => (a + v) % 999983, 0);
+          };
+          const P = state.chain[0].params;
+          const base = {pwm: P.pwm.value, detune: P.detune.value};
+          const drag = (pname, to) => {
+            P.pwm.value = base.pwm; P.detune.value = base.detune;
+            const before = paint();
+            P[pname].value = to;
+            return before !== paint();
+          };
+          return {pwm: drag('pwm', 0.45), detune: drag('detune', 50)};
+        })()""")
+        check("item 22: moving PWM redraws the static preview",
+              prev22.get("pwm") is True, str(prev22))
+        check("item 22: moving DETUNE redraws it too (3 detuned oscillators)",
+              prev22.get("detune") is True, str(prev22))
+
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()
 
