@@ -1655,6 +1655,26 @@ def main():
               gv["bell"]["btn"] == "∿ static", str(gv))
         check("static preview computed at least once (bell)",
               gv["bell"]["drawn"], str(gv))
+        # item 26 (d) — the rebuild FLICKER: a rebuilt card must never reach
+        # the screen with a BLANK canvas. rebuildGraph paints the viz once
+        # synchronously, so the pixels are there BEFORE any rAF tick runs.
+        flick = page.evaluate("""(() => {
+          const cv = nodes.get('m:fm_bell').el
+            .querySelector('canvas[data-viz=gen]');
+          const before = cv.getContext('2d')
+            .getImageData(0, 0, cv.width, cv.height).data.some(v => v !== 0);
+          // force a full rebuild and inspect BEFORE the next animation frame
+          rebuildGraph();
+          const cv2 = nodes.get('m:fm_bell').el
+            .querySelector('canvas[data-viz=gen]');
+          const after = cv2.getContext('2d')
+            .getImageData(0, 0, cv2.width, cv2.height).data.some(v => v !== 0);
+          return {fresh: cv2 !== cv, before, after};
+        })()""")
+        check("rebuild replaces the card's canvas (the flicker's source)",
+              flick["fresh"] and flick["before"], str(flick))
+        check("rebuilt canvas is painted SYNCHRONOUSLY — no blank frame",
+              flick["after"], str(flick))
         check("effects do NOT get the gen viz", not gv["echoHasViz"], str(gv))
 
         # toggle to live: scope polls flow, and the choice survives a rebuild
@@ -2466,39 +2486,73 @@ def main():
                                 ["deck:play", True, True],
                                 ["deck:clear", True, True]], str(eps17))
 
-        # the head LED is a real button: lit = enabled; click toggles the
-        # bypass class AND still sends exactly what the checkbox sent
+        # item 26 (Cole, 07-24): the power indicator IS the card's COLOR BAR.
+        # The round head LED is gone; the stripe carries role=switch, fills
+        # when on / outlines when off, and toggling still sends exactly what
+        # the old checkbox sent.
         led17 = page.evaluate("""(() => {
           const n = nodes.get('m:echo');
-          const el = n.el.querySelector('.onoff');
-          return {tag: el.tagName, role: el.getAttribute('role'),
+          const el = n.el.querySelector('.stripe');
+          const cs = getComputedStyle(el);
+          return {gone: !n.el.querySelector('.onoff'),
+                  pwr: el.classList.contains('pwr'),
+                  role: el.getAttribute('role'),
                   on: el.classList.contains('on'),
+                  filled: cs.backgroundColor,
                   byp: n.el.classList.contains('bypassed')};
         })()""")
-        check("module head LED is a lit switch button when enabled",
-              led17 == {"tag": "BUTTON", "role": "switch", "on": True,
-                        "byp": False}, str(led17))
+        check("power indicator is the card COLOR BAR (round head LED gone)",
+              led17["gone"] and led17["pwr"] and led17["role"] == "switch",
+              str(led17))
+        check("enabled → the stripe is FILLED with the category color",
+              led17["on"] and led17["filled"] == "rgb(25, 158, 112)"
+              and not led17["byp"], str(led17))
         page.evaluate("window.__sent.length = 0")
-        page.evaluate("nodes.get('m:echo').el.querySelector('.onoff').click()")
+        page.evaluate("nodes.get('m:echo').togglePower()")
         sent = page.evaluate("window.__sent")
-        check("head LED click sends set_enabled false",
+        check("power stripe toggle sends set_enabled false",
               {"type": "set_enabled", "key": "echo", "enabled": False}
               in sent, str(sent))
         led17b = page.evaluate("""(() => {
           const n = nodes.get('m:echo');
-          return {on: n.el.querySelector('.onoff').classList.contains('on'),
+          const el = n.el.querySelector('.stripe');
+          return {on: el.classList.contains('on'),
+                  bg: getComputedStyle(el).backgroundColor,
                   byp: n.el.classList.contains('bypassed')};
         })()""")
-        check("head LED click unlights + toggles the bypassed class",
-              led17b == {"on": False, "byp": True}, str(led17b))
+        check("off → stripe unfills to an OUTLINE + card bypasses",
+              led17b["on"] is False and led17b["byp"] is True
+              and led17b["bg"] == "rgba(0, 0, 0, 0)", str(led17b))
         page.evaluate("window.__sent.length = 0")
-        page.evaluate("nodes.get('m:echo').el.querySelector('.onoff').click()")
+        page.evaluate("nodes.get('m:echo').togglePower()")
         sent = page.evaluate("window.__sent")
-        check("second click re-enables (set_enabled true, bypass off)",
+        check("second toggle re-enables (set_enabled true, bypass off)",
               {"type": "set_enabled", "key": "echo", "enabled": True}
               in sent and page.evaluate(
                   "!nodes.get('m:echo').el.classList.contains('bypassed')"),
               str(sent))
+        # REACTIVE-INDICATOR DOCTRINE (Cole, 07-24): a LOGIC input must flip
+        # the indicator live — set_enabled is applied server-side OUTSIDE the
+        # state broadcast, so the {"kind":"level"} event is the only signal.
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'echo:pwr', on: false}})")
+        page.wait_for_timeout(60)
+        lvl17 = page.evaluate("""(() => {
+          const n = nodes.get('m:echo');
+          return {on: n.el.querySelector('.stripe').classList.contains('on'),
+                  byp: n.el.classList.contains('bypassed')};
+        })()""")
+        check("logic level-in unfills the power stripe (no click, no rebuild)",
+              lvl17 == {"on": False, "byp": True}, str(lvl17))
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'echo:pwr', on: true}})")
+        page.wait_for_timeout(60)
+        check("logic level-in re-fills it on the rising edge",
+              page.evaluate(
+                  "nodes.get('m:echo').el.querySelector('.stripe')"
+                  ".classList.contains('on')"))
 
         # ================================================================
         # 18 — GUI pass B: the XS card size (4.5x4.5, quadrant slots) +
@@ -3098,6 +3152,50 @@ def main():
               and pb["lab"] == "playing" and pb["labColor"] == "rgb(27, 175, 122)",
               str(pb))
 
+        # REACTIVE-INDICATOR DOCTRINE (Cole, 07-24) — the headline case:
+        # "play/pause must switch visually in response to LOGIC input, not
+        # just user clicks". A wire into "transport:run" applies server-side
+        # outside the broadcast path, so the {"kind":"level"} event has to
+        # drive the card AND the top bar, exactly as a click does.
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'transport:run', on: false}})")
+        page.wait_for_timeout(60)
+        rl = page.evaluate("""(() => {
+          const n = nodes.get('tplay'), b = n.el.querySelector('.tpbtn');
+          return {txt: b.textContent,
+                  cardStopped: n.el.classList.contains('stopped'),
+                  lab: n.el.querySelector('.tplabel').textContent,
+                  bar: document.getElementById('play-btn').textContent};
+        })()""")
+        check("logic level-in STOPS the card live (⏵ + red glow + top bar)",
+              rl["cardStopped"] and "⏵" in rl["txt"]
+              and rl["lab"] == "stopped" and rl["bar"] == "▶", str(rl))
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'transport:run', on: true}})")
+        page.wait_for_timeout(60)
+        rl2 = page.evaluate("""(() => {
+          const n = nodes.get('tplay'), b = n.el.querySelector('.tpbtn');
+          return {txt: b.textContent,
+                  cardPlaying: n.el.classList.contains('playing'),
+                  lab: n.el.querySelector('.tplabel').textContent,
+                  bar: document.getElementById('play-btn').textContent};
+        })()""")
+        check("logic level-in PLAYS it again (⏹ + green glow + top bar)",
+              rl2["cardPlaying"] and "⏹" in rl2["txt"]
+              and rl2["lab"] == "playing" and rl2["bar"] == "⏹", str(rl2))
+        # click/accent LEDs follow their level-ins the same way
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'transport:click', on: true}})")
+        page.wait_for_timeout(60)
+        check("logic level-in lights the click LED live", page.evaluate(
+            "(() => { const r = [...nodes.get('ttempo').el"
+            ".querySelectorAll('.mini')].find(x =>"
+            " (x.querySelector('label')||{}).title === 'click');"
+            " return r.querySelector('.onoff').classList.contains('on'); })()"))
+
         # ---- tempo slider: the top bar's 40–220 mapping ----------------
         page.evaluate("nodes.get('ttempo').el.scrollIntoView("
                       "{block: 'center', inline: 'center'})")
@@ -3283,6 +3381,104 @@ def main():
               [d[0] for d in met19["b1"]] == [False, True, False]
               and met19["b1"][1][1] and met19["b1"][1][2] > met19["b1"][0][2],
               str(met19))
+
+        # ================================================================
+        # 20a — item 13 (Cole, 07-24): the bottom instruction card is gone;
+        # a (?) bubble in the top bar opens a popover carrying the app
+        # shortcuts AND a LIVE list of the current trigger bindings.
+        # ================================================================
+        check("the bottom instruction card is gone",
+              page.evaluate("!document.querySelector('.hint')"))
+        h13 = page.evaluate("""(() => {
+          const btn = document.getElementById('helpbtn');
+          const pop = document.getElementById('helppop');
+          return {btn: !!btn, closed: pop.hidden,
+                  expanded: btn.getAttribute('aria-expanded')};
+        })()""")
+        check("(?) bubble sits in the top bar, popover starts closed",
+              h13 == {"btn": True, "closed": True, "expanded": "false"},
+              str(h13))
+        page.evaluate("document.getElementById('helpbtn').click()")
+        page.wait_for_timeout(80)
+        open13 = page.evaluate("""(() => {
+          const pop = document.getElementById('helppop');
+          const kbds = [...pop.querySelectorAll('kbd')].map(k => k.textContent);
+          return {shown: !pop.hidden, kbds,
+                  heads: [...pop.querySelectorAll('h4')].map(h => h.textContent),
+                  on: document.getElementById('helpbtn').classList.contains('on')};
+        })()""")
+        check("clicking (?) opens the popover with the shortcut sections",
+              open13["shown"] and open13["on"]
+              and open13["heads"] == ["keyboard", "patching",
+                                      "trigger bindings"], str(open13))
+        check("the instruction card's content moved into the popover",
+              "A – ;" in open13["kbds"] and "caps" in open13["kbds"]
+              and "space" in open13["kbds"], str(open13))
+        # the binding list covers every trigger card — including the ones
+        # still waiting to be paired (those are the ones you'd pair next)
+        check("popover lists trigger cards, unpaired ones marked",
+              "unpaired" in open13["kbds"], str(open13))
+        # ...and it is LIVE: a pairing lands without reopening the popover
+        page.evaluate(
+            "() => __msg({type: 'midi', event: {kind: 'ping_bound',"
+            " id: 'button', binding: {kind: 'cc', cc: 42}}})")
+        page.wait_for_timeout(80)
+        reb13 = page.evaluate(
+            "[...document.querySelectorAll('#helppop kbd')]"
+            ".map(k => k.textContent)")
+        check("a new pairing updates the live list in place (→ CC 42)",
+              "CC 42" in reb13 and "unpaired" not in reb13, str(reb13))
+        page.evaluate("document.getElementById('helpbtn').click()")
+        page.wait_for_timeout(60)
+        check("clicking (?) again closes the popover",
+              page.evaluate("document.getElementById('helppop').hidden"))
+
+        # ================================================================
+        # 20 — item 28 (Cole, 07-24): Master Out takes handles on BOTH its
+        # top and its side edge. Everything eventually lands on master, so a
+        # heavy fan-in must not march its handles off the end of one edge —
+        # the second edge is used on OVERFLOW ONLY (a small patch is
+        # unchanged).
+        # ================================================================
+        many = [mod(f"src{i}", f"Src {i}", "source", "voice")
+                for i in range(1, 9)]
+        st20 = base_state(many, [{"from": f"src{i}", "to": "master"}
+                                 for i in range(1, 9)])
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st20)
+        page.wait_for_timeout(600)
+        m20 = page.evaluate("""(() => {
+          const n = nodes.get('master');
+          const hs = n.lay.handles.filter(h => h.side === 'in');
+          const edges = {};
+          for (const h of hs) edges[h.edge] = (edges[h.edge] || 0) + 1;
+          const r = nodeUnitRect(n);
+          const off = hs.filter(h => h.edge === 'L' || h.edge === 'R'
+            ? (h.y / U) > r.y + r.h + 0.01 : (h.x / U) > r.x + r.w + 0.01);
+          return {edges, total: hs.length, off: off.length,
+                  dual: !!n.ports[0].dualEdge};
+        })()""")
+        check("Master Out declares itself dual-edge", m20["dual"], str(m20))
+        check("heavy fan-in spreads master's handles over TWO edges",
+              len(m20["edges"]) == 2 and min(m20["edges"].values()) >= 1,
+              str(m20))
+        check("no master handle runs off the end of its edge",
+              m20["off"] == 0, str(m20))
+        # every wire still gets exactly one handle (nothing dropped/doubled)
+        check("all 8 fan-in wires keep a handle (+ the fan-in plus slot)",
+              m20["total"] == 9, str(m20))
+        # a SMALL patch stays single-edged — the spill is overflow-only
+        st20b = base_state([mod("src1", "Src 1", "source", "voice")],
+                           [{"from": "src1", "to": "master"}])
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st20b)
+        page.wait_for_timeout(500)
+        m20b = page.evaluate("""(() => {
+          const hs = nodes.get('master').lay.handles.filter(h => h.side === 'in');
+          return [...new Set(hs.map(h => h.edge))].length;
+        })()""")
+        check("a light patch keeps master on ONE edge (no gratuitous split)",
+              m20b == 1, str(m20b))
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st19)
+        page.wait_for_timeout(500)
 
         # ---- screenshots for Cole --------------------------------------
         # fresh broadcast first: the LED test-clicks left local echoes

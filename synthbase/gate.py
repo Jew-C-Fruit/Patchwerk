@@ -330,10 +330,13 @@ class GateManager:
                             app._transport_tap()
                     elif sub == "run":
                         app.set_transport(playing=lvl)   # LEVEL-IN follows
+                        self._emit_level("transport:run", lvl)
                     elif sub == "click":
                         app.set_transport(click=lvl)     # LEVEL-IN follows
+                        self._emit_level("transport:click", lvl)
                     elif sub == "accent":
                         app.set_transport(accent=lvl)    # LEVEL-IN follows
+                        self._emit_level("transport:accent", lvl)
                 elif sub == "" and app._deriver(base) is not None:
                     # TRIG-IN: rising edge commits once
                     if lvl and prev is not None:
@@ -346,6 +349,7 @@ class GateManager:
                         app.set_drums(enabled=lvl)
                     else:
                         app.set_enabled(base, lvl)
+                    self._emit_level(f"{base}:pwr", lvl)
                 elif r is not None and sub == "ctl":
                     # LEVEL-IN: the relay's closed state follows
                     r.set_closed(lvl)
@@ -378,6 +382,20 @@ class GateManager:
     def _emit(self, nid: str, on: bool) -> None:
         try:
             self.app._emit_midi_event({"kind": "gate", "id": nid,
+                                       "on": bool(on)})
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _emit_level(self, endpoint: str, on: bool) -> None:
+        """Announce that a LEVEL-IN drove its target (REACTIVE-INDICATOR
+        DOCTRINE, Cole 07-24): the GUI's power stripes, transport play/stop
+        and click/accent lights must react to LOGIC input exactly as they
+        react to a click. These applications happen deep in the settle pass
+        (app.set_enabled / set_transport), which deliberately do NOT
+        broadcast state — so without this event the indicator would stay
+        stale until the next unrelated broadcast."""
+        try:
+            self.app._emit_midi_event({"kind": "level", "ep": str(endpoint),
                                        "on": bool(on)})
         except Exception:  # noqa: BLE001
             pass
