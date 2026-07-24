@@ -34,7 +34,15 @@ which is also what CI runs on every PR:
 python tests/smoke.py        # every module loads, synthdefs compile, params sane, patches parse
 python tests/test_graph.py   # graph/wiring logic, control plane, instance ids
 python tests/test_looper.py  # loop deck logic
-python tests/gui_check8.py   # GUI checks via headless Playwright (pip install playwright; playwright install chromium)
+python tests/gui_check8.py   # GUI checks via headless Playwright (see dev dependencies below)
+```
+
+`gui_check8.py` (and the blocks suites) need Playwright, a dev-only
+dependency:
+
+```bash
+pip install -r requirements-dev.txt
+playwright install chromium      # one-time headless-browser download
 ```
 
 Run whichever are relevant to what you touched; `smoke.py` is the fast
@@ -92,3 +100,16 @@ that becomes a real problem, not something to preempt now.
 See the README's Setup section. You'll need SuperCollider installed (and
 realistically a Mac, though nothing is deliberately macOS-only besides the
 setup instructions) to hear anything; the headless tests don't need it.
+
+For development, also install the dev-only dependencies (currently just
+Playwright, for the headless GUI/blocks checks):
+
+```bash
+pip install -r requirements-dev.txt
+playwright install chromium
+```
+
+One macOS note: the first time scsynth boots from your terminal, macOS
+shows a one-time microphone permission prompt (scsynth opens input
+channels by default). Allow it, or audio input — `audio_in`, the mic_fx
+patch — stays silent and the boot can stall waiting on the device.

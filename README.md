@@ -36,6 +36,7 @@ brew install --cask supercollider
 /opt/homebrew/bin/python3.14 -m venv .venv     # any Python 3.10+
 source .venv/bin/activate
 pip install -r requirements.txt
+pip install -r requirements-dev.txt && playwright install chromium  # optional: dev/test tooling
 ```
 
 ## Setup (Windows)
