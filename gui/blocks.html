@@ -28,6 +28,18 @@
     -webkit-user-select: none; user-select: none; }
   input, textarea { -webkit-user-select: auto; user-select: auto; }
 
+  /* item 19 (Cole, 07-22): scrollbars in the Apple Music dark-mode idiom —
+     no track chrome at all, a thin translucent thumb that only asserts
+     itself on hover. Applies to the board, the palette and the popovers. */
+  * { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.18) transparent; }
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-track { background: transparent; border: 0; }
+  ::-webkit-scrollbar-corner { background: transparent; }
+  ::-webkit-scrollbar-thumb { background-color: rgba(255,255,255,0.18);
+    border-radius: 6px; border: 2px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-thumb:hover { background-color: rgba(255,255,255,0.34); }
+  ::-webkit-scrollbar-thumb:active { background-color: rgba(255,255,255,0.45); }
+
   header { position: fixed; inset: 0 0 auto 0; z-index: 40; display: flex; gap: 10px;
     align-items: center; flex-wrap: wrap; padding: 7px 14px;
     background: color-mix(in srgb, var(--plane) 85%, transparent);
@@ -77,6 +89,14 @@
   /* overflow-anchor OFF: the smooth-zoom animator writes scrollLeft/Top every
      frame — Chrome's scroll anchoring would fight those writes and make the
      whole canvas float around during zoom */
+  /* item 20, second half (Cole re-reported live 07-24): the top bar was
+     OCCLUDING wires in the top gutter. The board's offset was hardcoded to
+     54px while the header is `flex-wrap: wrap` — at a narrow window (or with
+     more controls in the bar) the header grows to two rows and covers the
+     board's top strip, gutter wires included. The offset now tracks the
+     header's MEASURED height (--hdrh, kept in sync on resize). */
+  /* NB: fitHeader() writes the REAL offset inline from the header's measured
+     height (item 20) — this 54px is only the pre-boot fallback. */
   #board { position: absolute; inset: 54px 0 0 0; overflow: auto;
     overflow-anchor: none; }
   #world { position: relative; width: 2600px; height: 1800px;
@@ -642,6 +662,15 @@
   body:not([data-mode="flex"]) #wirestyle { display: none; }
   /* flex cards: fixed width (inline), AUTO height — every row visible */
   .mod[data-size="F"] { height: auto !important; }
+  /* item 17 (Cole, 07-22): in FLEX a wire passing BEHIND a card shows through
+     faintly. The card body goes slightly translucent (blocks mode keeps its
+     opaque cards — wires route around them there, so there is nothing to
+     reveal). A dragged card returns to opaque so it reads as "picked up". */
+  body[data-mode="flex"] .mod {
+    background: color-mix(in srgb, var(--card) 88%, transparent);
+    backdrop-filter: blur(1.5px); }
+  body[data-mode="flex"] .mod.dragging {
+    background: var(--card); backdrop-filter: none; }
   .mod.sel { outline: 1.6px solid rgba(255,255,255,0.8); outline-offset: 1.5px; }
   #lasso { position: absolute; display: none; z-index: 60; pointer-events: none;
     border: 1px dashed rgba(255,255,255,0.7); background: rgba(255,255,255,0.06);
@@ -1185,7 +1214,13 @@ const BLK = 10, GUT = 2, PITCH = BLK + GUT;
 const SH = 4.5, MIDG = BLK - 2 * SH;      // S = 10x4.5; mid-block gutter = 1u
                                           // (4.5 + 1 + 4.5 = a block — Cole 2026-07-18)
 const BX = 12, BY = 8;                    // board, in blocks
-const UW = BX * PITCH + GUT, UH = BY * PITCH + GUT;
+// item 20 (Cole, 07-22, re-reported live 07-24): ONE EXTRA UNIT of margin
+// above the topmost card slots, so wires routed through the top gutter have
+// room to be seen instead of hugging the board's edge. Every block<->unit
+// conversion goes through TOPM (unitRect, blockAt, the grid backdrop and the
+// drop ghost), so the whole geometry shifts together.
+const TOPM = 1;
+const UW = BX * PITCH + GUT, UH = BY * PITCH + GUT + TOPM;
 const SIZE_PX = {                          // module footprints in px
   XS: [SH * U, SH * U],                    // 4.5x4.5 — really simple modules
   S: [BLK * U, SH * U], M: [BLK * U, BLK * U], L: [(BLK * 2 + GUT) * U, BLK * U],
@@ -1213,7 +1248,7 @@ function inBoundsPl(pl) {
   return pl.bx >= 0 && pl.by >= 0 && pl.bx + w <= BX && pl.by < BY;
 }
 function unitRect(pl) {
-  const x = pl.bx * PITCH + GUT, yB = pl.by * PITCH + GUT;
+  const x = pl.bx * PITCH + GUT, yB = pl.by * PITCH + GUT + TOPM;
   const yHalf = (pl.half || "top") === "top" ? yB : yB + SH + MIDG;
   if (pl.size === "XS")   // XS = 4.5x4.5: S's half-block logic, halved again
     return { x: x + ((pl.hh || "left") === "left" ? 0 : SH + MIDG),
@@ -1341,9 +1376,11 @@ function quadrantOf(fx, fy) {
 }
 function blockAt(x, y) {
   const ux = x / U, uy = y / U;
-  let bx = Math.floor((ux - GUT) / PITCH), by = Math.floor((uy - GUT) / PITCH);
+  let bx = Math.floor((ux - GUT) / PITCH),
+      by = Math.floor((uy - GUT - TOPM) / PITCH);
   bx = Math.max(0, Math.min(BX - 1, bx)); by = Math.max(0, Math.min(BY - 1, by));
-  const fx = (ux - GUT - bx * PITCH) / BLK, fy = (uy - GUT - by * PITCH) / BLK;
+  const fx = (ux - GUT - bx * PITCH) / BLK,
+        fy = (uy - GUT - TOPM - by * PITCH) / BLK;
   return { bx, by, fx: Math.max(0, Math.min(1, fx)), fy: Math.max(0, Math.min(1, fy)) };
 }
 // first free slot that fits `size`, scanning column-major from a preferred col
@@ -1725,6 +1762,68 @@ function offsetWithin(el, root) {
   while (e && e !== root) { y += e.offsetTop; e = e.offsetParent; }
   return y;
 }
+function offsetLeftWithin(el, root) {
+  let x = 0, e = el;
+  while (e && e !== root) { x += e.offsetLeft; e = e.offsetParent; }
+  return x;
+}
+// ---- item 16 (Cole, 07-22), FLEX ONLY: re-centre wire handles toward the
+// edge midpoint, then nudge each into the nearest DEAD ZONE so a handle never
+// sits on top of something you need to click (slider track, chip, kill, the
+// power stripe, another handle). Blocks geometry is deliberately untouched:
+// there the handles answer to the gutter router and the block grid.
+// QUIET handles are exempt — a param handle must stay exactly in line with
+// the row it modulates (standing rule), so only PRIMARY handles move.
+const FLEX_CLEAR = 0.42;      // units of clearance either side of a control
+const FLEX_SEP = 0.78;        // units between two handles on the same edge
+function flexBusySpans(n, vertEdge) {
+  const SEL = ".mini .track, .mini .chip, .kill, .expander, .onoff, .stripe.pwr,"
+            + " .deckbtns, .pslive, .keycap, .rebind, .modeseg, .opsel,"
+            + " .relaybtn, .tpbtn, .devname, select, button, input";
+  const out = [];
+  for (const el of n.el.querySelectorAll(SEL)) {
+    const w = el.offsetWidth, h = el.offsetHeight;
+    if (!w && !h) continue;                       // hidden: nothing to dodge
+    const a = vertEdge ? offsetWithin(el, n.el) : offsetLeftWithin(el, n.el);
+    const b = a + (vertEdge ? h : w);
+    out.push([a / U - FLEX_CLEAR, b / U + FLEX_CLEAR]);
+  }
+  return out.sort((p, q) => p[0] - q[0]);
+}
+function flexFreeSpot(t, busy, taken, lo, hi) {
+  const clash = (v) => busy.some(([a, b]) => v > a && v < b)
+                    || taken.some(o => Math.abs(o - v) < FLEX_SEP);
+  const inRange = (v) => v >= lo && v <= hi;
+  if (inRange(t) && !clash(t)) return t;
+  for (let d = 0.25; d <= (hi - lo) + 0.25; d += 0.25) {
+    for (const v of [t - d, t + d]) if (inRange(v) && !clash(v)) return v;
+  }
+  return Math.max(lo, Math.min(hi, t));
+}
+function flexTidyHandles(n, r, handles) {
+  const byEdge = { L: [], R: [], T: [], B: [] };
+  for (const H of handles) if (!H.quiet) byEdge[H.edge].push(H);
+  for (const edge of ["L", "R", "T", "B"]) {
+    const hs = byEdge[edge];
+    if (!hs.length) continue;
+    const vertEdge = edge === "L" || edge === "R";
+    const len = vertEdge ? r.h : r.w;
+    const lo = T_LEAD, hi = Math.max(T_LEAD, len - END_MARGIN);
+    const busy = flexBusySpans(n, vertEdge);
+    const span = FLEX_SEP * (hs.length - 1);
+    let t = Math.max(lo, Math.min(hi - span, len / 2 - span / 2));
+    const taken = [];
+    for (const H of hs) {
+      const at = flexFreeSpot(t, busy, taken, lo, hi);
+      taken.push(at);
+      if (edge === "L")      { H.x = r.x * U;           H.y = (r.y + at) * U; }
+      else if (edge === "R") { H.x = (r.x + r.w) * U;   H.y = (r.y + at) * U; }
+      else if (edge === "T") { H.x = (r.x + at) * U;    H.y = r.y * U; }
+      else                   { H.x = (r.x + at) * U;    H.y = (r.y + r.h) * U; }
+      t = at + FLEX_SEP;
+    }
+  }
+}
 function wiresAt(node, port) {
   const end = port.dir === "out" ? "from" : "to";
   return wires.filter(w => w[end].node === node && w[end].port === port)
@@ -1862,6 +1961,9 @@ function computeLayout(n) {
       }
     }
   }
+  // item 16: flex re-centres its primary handles into dead zones (blocks
+  // keeps the gutter-router geometry exactly as it was)
+  if (uiMode === "flex") flexTidyHandles(n, r, handles);
   const byOut = new Map(), byIn = new Map();
   for (const H of handles) if (H.role === "wire") (H.side === "out" ? byOut : byIn).set(H.wire, H);
   n.lay = { handles, byOut, byIn };
@@ -1935,6 +2037,59 @@ function assignLanes(routed) {
   }
   for (const r of routed) rebuildLaned(r);
   reduceCrossings(routed, lines);
+  separateOverlaps(routed);
+}
+// item 15 (Cole, 07-22): one wire could COMPLETELY OBSCURE another along the
+// same gutter. Root cause: the lane pass above only lanes INTERIOR segments
+// (k from 1 to poly.length-3), so a SHORT route — whose only segments are the
+// first and last — never receives an offset at all. Two such routes sharing a
+// gutter render at identical coordinates and one vanishes under the other.
+// (reduceCrossings can also swap two segments onto the same offset.)
+// This is the backstop: after lanes AND crossing repair, any two RENDERED
+// collinear segments that genuinely overlap get pushed apart by one lane.
+// It is a no-op whenever the lane pass already did its job.
+function separateOverlaps(routed) {
+  const MIN_RUN = 8;        // px — shorter runs are stubs/corners, not runs
+  const EPS = 1.0;          // px — closer than this counts as the same line
+  const MAX_OFF = (LANE_MAX + 1) * LANE_W;
+  const segs = [];
+  for (const r of routed) {
+    if (r.noroute || r.bez || !r.laned || r.laned.length < 2) continue;
+    const Q = r.laned;
+    for (let k = 0; k < Q.length - 1 && k < r.offs.length; k++) {
+      const a = Q[k], b = Q[k + 1];
+      const vert = Math.abs(a[0] - b[0]) < 0.01;
+      const horiz = Math.abs(a[1] - b[1]) < 0.01;
+      if (vert === horiz) continue;            // diagonal or degenerate
+      const p0 = vert ? a[1] : a[0], p1 = vert ? b[1] : b[0];
+      const lo = Math.min(p0, p1), hi = Math.max(p0, p1);
+      if (hi - lo < MIN_RUN) continue;
+      segs.push({ r, k, vert, coord: vert ? a[0] : a[1], lo, hi });
+    }
+  }
+  let moved = false;
+  for (const dir of [true, false]) {
+    const list = segs.filter(s => s.vert === dir)
+                     .sort((a, b) => a.coord - b.coord || a.lo - b.lo);
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const A = list[i], B = list[j];
+        if (B.coord - A.coord > EPS) break;    // sorted: nothing else is near
+        if (A.r === B.r) continue;
+        const ov = Math.min(A.hi, B.hi) - Math.max(A.lo, B.lo);
+        if (ov < MIN_RUN) continue;            // a mere touch hides nothing
+        const cur = B.r.offs[B.k] || 0;
+        const push = cur >= (A.r.offs[A.k] || 0) ? LANE_W : -LANE_W;
+        const next = cur + push;
+        if (Math.abs(next) > MAX_OFF) continue;   // never fling a wire away
+        B.r.offs[B.k] = next;
+        B.coord += push;
+        moved = true;
+      }
+    }
+  }
+  if (moved) for (const r of routed) rebuildLaned(r);
+  return moved;
 }
 const _nrm = (x, y) => { const m = Math.hypot(x, y) || 1; return [x / m, y / m]; };
 function rebuildLaned(r) {
@@ -2796,7 +2951,17 @@ function bindNode(node) {
     } else if (node.size === "M") {
       target = { size: "M", bx: blk.bx, by: blk.by, half: null };
     } else {
-      let bx = blk.fx < 0.5 ? blk.bx : blk.bx - 1;
+      // item 18 (Cole, 07-22): L cards refused half their snap positions.
+      // The old rule read the block under the POINTER and stepped back one
+      // column in its right half (fx < 0.5 ? bx : bx - 1), which is NOT
+      // monotonic: dragging steadily right produced bx = b, b-1, b+1, b, ...
+      // so the card appeared to jump by TWO columns and skip the one in
+      // between. An L is two blocks wide, so quantize its OWN left edge —
+      // which tracks the pointer continuously — to the nearest column.
+      // Moving the pointer one PITCH now moves the card exactly one column,
+      // and every column is reachable.
+      const leftU = (p.x - drag.offX) / U;
+      let bx = Math.round((leftU - GUT) / PITCH);
       bx = Math.max(0, Math.min(BX - 2, bx));
       target = { size: "L", bx, by: blk.by, half: null };
     }
@@ -3161,7 +3326,7 @@ document.addEventListener("pointerup", () => {
     const d = document.createElement("div");
     d.className = "blockbg";
     d.style.left = ((x * PITCH + GUT) * U) + "px";
-    d.style.top  = ((y * PITCH + GUT) * U) + "px";
+    d.style.top  = ((y * PITCH + GUT + TOPM) * U) + "px";   // item 20 margin
     d.style.width = (BLK * U) + "px";
     d.style.height = (BLK * U) + "px";
     holder.appendChild(d);
@@ -3182,7 +3347,7 @@ const boardEl = $("board");
 function scaleFor(cols, rows) {
   const bw = boardEl.clientWidth || 1, bh = boardEl.clientHeight || 1;
   return Math.min(bw / ((cols * PITCH + GUT) * U),
-                  bh / ((rows * PITCH + GUT) * U));
+                  bh / ((rows * PITCH + GUT + TOPM) * U));
 }
 function viewScale() {
   if (uiMode === "flex") return flexZoom;
@@ -3209,9 +3374,10 @@ function visBlockBounds() {
   // block-grid range whose blocks are FULLY inside the current viewport
   const v = visibleWorldRect();
   const c0 = Math.max(0, Math.ceil((v.x - GUT) / PITCH));
-  const r0 = Math.max(0, Math.ceil((v.y - GUT) / PITCH));
+  const r0 = Math.max(0, Math.ceil((v.y - GUT - TOPM) / PITCH));
   const c1 = Math.min(BX - 1, Math.floor((v.x + v.w - GUT - BLK) / PITCH));
-  const r1 = Math.min(BY - 1, Math.floor((v.y + v.h - GUT - BLK) / PITCH));
+  const r1 = Math.min(BY - 1,
+                      Math.floor((v.y + v.h - GUT - TOPM - BLK) / PITCH));
   return (c1 >= c0 && r1 >= r0) ? { c0, c1, r0, r1 } : null;
 }
 function modulesHidden() {
@@ -6548,10 +6714,14 @@ function drawVizOnce(now) {
     if (n.montype && n.expanded === false && n.el.querySelector(".expander"))
       continue;   // collapsed monitor → hidden canvas (deck now draws its
                   // mini strip when collapsed — item 4)
-    if (!cv.clientWidth) continue;
+    // item 14: never draw against STALE canvas dimensions. A zero
+    // clientHeight (collapsing card, mid-resize) used to skip the height
+    // sync but draw anyway, mapping the viz into the PREVIOUS geometry —
+    // squashed bars and merged grid lines. No measurable box, no paint.
+    if (!cv.clientWidth || !cv.clientHeight) continue;
     if (cv.width !== cv.clientWidth) cv.width = cv.clientWidth;
     const _ch = cv.clientHeight;
-    if (_ch && cv.height !== _ch) cv.height = _ch;
+    if (cv.height !== _ch) cv.height = _ch;
     const ctx = cv.getContext("2d"), W = cv.width, H = cv.height;
     ctx.clearRect(0, 0, W, H);
     try {   // one bad card must never kill the shared rAF loop (all viz dies)
@@ -6575,12 +6745,26 @@ function drawDeckViz(ctx, W, H, now, style) {
   if (deckAnchor && l && !["empty", "stopped", "armed"].includes(l.state))
     livePhase = (deckAnchor.phase + (now - deckAnchor.time) / 1000 * bpm / 60) % loopBeats;
   const hairline = style.getPropertyValue("--hairline");
-  for (let b = 0; b <= loopBeats; b++) {
-    const x = (b / loopBeats) * W;
-    ctx.strokeStyle = hairline;
-    ctx.lineWidth = b % bpb === 0 ? 2 : 1;
-    ctx.globalAlpha = b % bpb === 0 ? 1 : 0.45;
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  // item 14 (Cole, 07-22, recurring): SOLID LINES across the track. The grid
+  // drew one line PER BEAT no matter how long the loop or how narrow the
+  // canvas — a long take (or the collapsed 20px mini strip) packed the lines
+  // sub-pixel until they merged into a solid wash. Draw beat lines only when
+  // they can be told apart, and fall back to bar lines (then nothing) rather
+  // than filling the canvas with ink.
+  const MIN_GRID_PX = 3;
+  const beatPx = W / Math.max(1, loopBeats);
+  const showBeats = beatPx >= MIN_GRID_PX;
+  const showBars = beatPx * bpb >= MIN_GRID_PX;
+  if (showBars) {
+    for (let b = 0; b <= loopBeats; b++) {
+      const bar = b % bpb === 0;
+      if (!bar && !showBeats) continue;
+      const x = (b / loopBeats) * W;
+      ctx.strokeStyle = hairline;
+      ctx.lineWidth = bar ? 2 : 1;
+      ctx.globalAlpha = bar ? 1 : 0.45;
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    }
   }
   ctx.globalAlpha = 1;
   if (l && Array.isArray(l.notes) && l.notes.length) {
@@ -6616,8 +6800,15 @@ function drawDeckViz(ctx, W, H, now, style) {
     }
     for (const [note, b0, b1] of segs) {
       const y = H - ((Math.min(hi, Math.max(lo, note)) - lo) / (hi - lo)) * (H - 8) - 4;
-      const x0 = (b0 / loopBeats) * W;
-      const x1 = (Math.max(b1, b0 + 0.05) / loopBeats) * W;
+      // item 14: clamp to the DRAWN loop window. A take carried over from a
+      // longer loop (loop_beats shrank under it) had beats past loopBeats,
+      // and the unclamped width painted a full-track bar — one of the
+      // "solid lines". Off-window segments now clip instead of smearing.
+      const s0 = Math.max(0, Math.min(loopBeats, b0));
+      const s1 = Math.max(s0, Math.min(loopBeats, Math.max(b1, b0 + 0.05)));
+      if (s1 <= s0 && b0 > loopBeats) continue;   // wholly outside: drop it
+      const x0 = (s0 / loopBeats) * W;
+      const x1 = (s1 / loopBeats) * W;
       ctx.fillRect(x0, y - 2, Math.max(2, x1 - x0), 4);
     }
   }
@@ -6706,7 +6897,14 @@ function drawNotesViz(n, ctx, W, H, now, style) {
     if (x1 <= 0) continue;
     const y = H - ((Math.min(hi, Math.max(lo, ev.note)) - lo) / (hi - lo)) * (H - 6) - 3;
     ctx.fillStyle = tapColor(ev.src, style);
-    ctx.fillRect(Math.max(0, x0), y - 2, Math.max(2, x1 - x0), 4);
+    // item 14 (Cole, 07-22, recurring): bars STACKED UP on the LEFT edge.
+    // The x START was clamped to 0 but the WIDTH stayed (x1 - x0), so a bar
+    // scrolling off the left kept growing rightward — every departing note
+    // smeared back across the live ones at x=0. Clamp BOTH ends and derive
+    // the width from the clamped span: a leaving bar shrinks into the edge.
+    const xa = Math.max(0, x0), xb = Math.min(W, x1);
+    if (xb <= xa) continue;
+    ctx.fillRect(xa, y - 2, Math.max(1, xb - xa), 4);
   }
 }
 
@@ -6903,14 +7101,24 @@ document.addEventListener("change", (e) => {
 });
 
 // ---------- header height → board/palette offset ----------
+// item 20, second half (Cole re-reported live 07-24): the TOP BAR was
+// occluding wires in the top gutter. The offset was only re-measured on a
+// WINDOW RESIZE — but the header is `flex-wrap: wrap`, so it also changes
+// height when its CONTENT does (a longer patch/preset name, another control,
+// a late web font), and nothing re-ran fitHeader for those. The board then
+// kept the old, too-small offset and the header sat over the board's top
+// strip. A ResizeObserver on the header covers every cause at once.
 function fitHeader() {
   const h = $("hdr").offsetHeight;
+  if (!h) return;
   $("palette").style.top = h + "px";
   $("board").style.top = h + "px";
 }
 window.addEventListener("resize", fitHeader);
 fitHeader();
 setTimeout(fitHeader, 50);
+if (typeof ResizeObserver === "function")
+  new ResizeObserver(fitHeader).observe($("hdr"));
 
 // circumscribe audit: web fonts land after first paint and can change card
 // heights → the obstacle map would be stale and wires could slip under cards
