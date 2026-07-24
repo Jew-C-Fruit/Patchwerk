@@ -20,9 +20,10 @@ Protocol (JSON messages):
     {"type": "graph_wire", "action": "add"|"remove", "from": "pluck", "to": "echo"|"master"}
     {"type": "ctl_wire", "action": "add"|"remove", "from": "keys", "to": "arp"}
         (control-plane wiring among keys/arp/deck/voice ids/tonic ids/drone
-         instance ids — the graph IS the note router; drones are MONO ctl
-         note-sinks since the drone rework; set_looper's old "position" is
-         accepted and ignored)
+         instance ids/keyshift lanes/relay circuits — the graph IS the note
+         router; drones are MONO ctl note-sinks since the drone rework;
+         binary wires ride the same message, kind inferred from the source;
+         set_looper's old "position" is accepted and ignored)
     {"type": "spawn_module", "key": "reverb"}      (key = module TYPE; adds a
          fresh instance — duplicates allowed — audio out unconnected)
     {"type": "swap_synth", "id": "fm_bell.2", "key": "pluck"}   (Instrument
@@ -37,17 +38,26 @@ Protocol (JSON messages):
          weights/scores/leading/confidence/scale — broadcasts ~5 Hz as
          {"type": "deriver", "id", ...} for the card histogram + scale
          readout)
-    {"type": "spawn_switch"} / {"type": "remove_switch", "id": "switch.2"}
-    {"type": "set_switch", "id": "switch", "on": true}
     {"type": "spawn_logic"} / {"type": "remove_logic", "id": "logic.2"}
     {"type": "set_logic", "id": "logic", "op": "AND"|"OR"|"NOT"|"XOR"|"SR latch"}
-        (item 8 GATE suite: hi/lo LEVELS, Python-side. Gate wires ride
-         ctl_wires, kind inferred from the switch/logic source; dsts are
-         toggle targets — "<key>:pwr", "arp:pwr", "drums:pwr",
-         "deck:rec|play|stop|clear" (rising edge = press), logic ins
-         (SR latch: "<id>:set"/"<id>:reset"). Pings may land on the same
-         targets: alternator semantics; deck buttons just press. Node
-         output changes emit {"kind": "gate", "id", "on"} taps.)
+        (the BINARY plane: ONE hi/lo signal kind — sources own levels,
+         edges derive from level changes; trig-ins fire on RISING edges.
+         Binary wires ride ctl_wires, kind inferred from the source
+         (button/clock/threshold/logic, binary relay circuits). Logic ins
+         are NAMED single-input endpoints: "<id>:a"/"<id>:b" (":a" only
+         for NOT; SR latch: "<id>:set"/"<id>:reset"; occupied ins steal).
+         Other dsts: "<key>:pwr", "arp:pwr", "drums:pwr" (level follows),
+         "deck:rec|play|stop|clear" + deriver ids (rising edge fires),
+         relay circuit ins + "relay:ctl". Level changes emit
+         {"kind": "gate", "id", "on"} taps for the GUI LEDs.)
+    {"type": "spawn_relay"} / {"type": "remove_relay", "id": "relay.2"}
+    {"type": "set_relay", "id": "relay", "closed": true}
+        (type-agnostic switched junction, 9 circuits: endpoints
+         "relay:1".."relay:9" carry audio (graph_wire), notes or binary
+         (ctl_wire) — a circuit's kind = kind of its first wire. closed
+         gates flow per kind (opening all_offs note circuits);
+         "relay:ctl" is a binary level-in driving closed; set_relay is
+         the manual click, last writer wins.)
     {"type": "spawn_literal"} / {"type": "remove_literal", "id": "literal.2"}
     {"type": "set_literal", "id": "literal", "every": "immediate",
      "extract": "lowest-held", "place": "absolute", "fold_octave": 3,
@@ -55,16 +65,20 @@ Protocol (JSON messages):
         (the LITERAL deriver: deterministic, zero-lag extract×place)
     {"type": "spawn_button"} / {"type": "remove_button", "id": "button.2"}
     {"type": "set_button", "id": "button", "binding": {"kind": "key",
-     "code": "KeyN"} | {"kind": "cc", "cc": 20} | null, "armed": true}
-        (armed = pairing mode: the next NON-TONAL input — a MIDI CC server-
-         side, an unassigned computer key client-side — becomes the binding;
-         MIDI note messages can never bind or fire)
+     "code": "KeyN"} | {"kind": "cc", "cc": 20} | null, "armed": true,
+     "latch": false}
+        (a binary LEVEL source: momentary (default) = hi while held,
+         latch = press toggles. armed = pairing mode: the next NON-TONAL
+         input — a MIDI CC server-side, an unassigned computer key
+         client-side — becomes the binding; a bound CC follows the level
+         (momentary) or toggles on rising crossings (latch))
+    {"type": "button_down", "id": "button"} / {"type": "button_up", ...}
+        (hold gestures; fire_button stays as click compat: press+release)
     {"type": "fire_button", "id": "button"}   (manual click / bound key)
     {"type": "spawn_clock"} / {"type": "remove_clock", "id": "clock.2"}
     {"type": "set_clock", "id": "clock", "division": "1/4"}
-        (transport-locked ping every division; ping wires ride ctl_wire
-         with the kind inferred from the button/clock source endpoint —
-         ping-outs land ONLY on trigger-ins, e.g. a deriver)
+        (transport-locked PULSE (hi-then-lo) every division; wires ride
+         ctl_wire with the kind inferred from the source endpoint)
     {"type": "spawn_keyshift"} / {"type": "remove_keyshift", "id": "keyshift.2"}
     {"type": "set_keyshift", "id": "keyshift", "key": 7, "length": 8,
      "steps": [0, null, 7, ...]}   (key/steps = pitch-class distance from C;
@@ -261,14 +275,14 @@ class GuiServer:
                 memory=m.get("memory"), bass=m.get("bass"),
                 listening=m.get("listening"), deck_feed=m.get("deck_feed"))
             await self._broadcast_state(exclude=sender)
-        elif t == "spawn_switch":
-            self.synth.spawn_switch()
+        elif t == "spawn_relay":
+            self.synth.spawn_relay()
             await self._broadcast_state()
-        elif t == "remove_switch":
-            self.synth.remove_switch(m["id"])
+        elif t == "remove_relay":
+            self.synth.remove_relay(m["id"])
             await self._broadcast_state()
-        elif t == "set_switch":
-            self.synth.set_switch(m["id"], on=m.get("on"))
+        elif t == "set_relay":
+            self.synth.set_relay(m["id"], closed=m.get("closed"))
             await self._broadcast_state(exclude=sender)
         elif t == "spawn_logic":
             self.synth.spawn_logic()
@@ -302,10 +316,16 @@ class GuiServer:
                 kw["binding"] = m["binding"]
             if "armed" in m:
                 kw["armed"] = m["armed"]
+            if "latch" in m:
+                kw["latch"] = m.get("latch")
             self.synth.set_button(m["id"], **kw)
             await self._broadcast_state(exclude=sender)
         elif t == "fire_button":
             self.synth.fire_button(m["id"])   # hot path: no state broadcast
+        elif t == "button_down":
+            self.synth.button_down(m["id"])   # hot path: no state broadcast
+        elif t == "button_up":
+            self.synth.button_up(m["id"])     # hot path: no state broadcast
         elif t == "spawn_clock":
             self.synth.spawn_clock()
             await self._broadcast_state()

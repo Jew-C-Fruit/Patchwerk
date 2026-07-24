@@ -24,21 +24,24 @@ Current coverage:
      ordinary MONO ctl note-sink (play-in, no follow chip); the deriver has
      ONE ctl out; keys→drone and deriver→drone wire as plain ctl; ctl wires
      into drones draw in the ctl family.
-  7. Ping (items 4+5): button/clock trigger cards render; the deriver grows
-     a QUIET node-scoped trigger-in; ping wires draw in their own pastel
-     family; the grammar is strict (ping↮mod/ctl/audio in BOTH directions);
-     the pad click + bound computer key fire; pairing binds only UNASSIGNED
-     keys (note keys can never bind) and the binding chip updates.
+  7. Binary sources (items 4+5 + binary rework): button/clock trigger
+     cards render; the deriver grows a QUIET node-scoped trigger-in; bin
+     wires draw in the yellow→pink family; the grammar is strict
+     (bin↮mod/ctl/audio in BOTH directions); the keycap press sends
+     button_down/button_up (momentary) and a bound computer key does the
+     same on keydown/keyup; pairing binds only UNASSIGNED keys (note keys
+     can never bind) and the binding chip updates.
   8. Deriver split (item 6): the Estimator card carries knob rows + the
      12-bar histogram viz that breathes on "deriver" analysis messages
      (presence/scores toggle, committed vs leading marking, confidence);
      the Literal card's chips cycle and send set_literal; both derivers
      take notes/emit notes/accept ping triggers in the grammar.
-  10. Threshold (item 8): the card renders from state.thresholds (small,
-     level/hyst/edge rows); its cv-in is a QUIET single-input mod handle
-     riding the level row; LFO-out → cv-in connects via threshold_wire
-     (targeted remove on cut); its ping-out draws/wires like button/clock
-     (trigger-ins only); ping events pulse the pad-less card.
+  10. Threshold (item 8 + binary rework): the card renders from
+     state.thresholds (small, level/hyst/edge rows); its cv-in is a QUIET
+     single-input mod handle riding the level row; LFO-out → cv-in
+     connects via threshold_wire (targeted remove on cut); its out is a
+     BINARY level now — it draws/wires like button/clock; ping events
+     (rising-edge taps) still pulse the pad-less card.
   11. Flex mode + zoom + lasso (backlog item 1): the header mode toggle
      swaps blocks ↔ flex; flex renders every card at fixed width with AUTO
      height (data-size F, all rows visible), seeds positions from the
@@ -82,15 +85,38 @@ Current coverage:
      wears the amplitude band; pre-item-7 per-assignment entries (the
      check_real fixture's shape) still render as one-dest legacy cards
      whose wires/kill fall back to lfo_unassign.
-  17. GATE suite (backlog item 8): LOGIC palette section (Switch/Logic
-     spawns); the Switch card's power-pad LED (click = set_switch, lit
-     follows state + live {"kind":"gate"} events); the Logic card's op
-     chip (set_logic) and op-shaped ports (SR latch: named set/reset ins
-     vs ONE bare fan-in); the gate wire kind (signal-red family, legend
-     swatch); head enable checkboxes converted to power-LED buttons with
-     QUIET ":pwr" gate toggle-ins (modules/arp/drums) and the deck's four
-     button-ins; the gate/ping toggle grammar (gate→pwr yes, gate→note/
-     trigger no; ping→pwr/switch yes).
+  17. The BINARY plane (binary rework, 07-23): ONE hi/lo signal kind
+     ("bin", yellow→pink family, ONE "binary" legend swatch — ping and
+     gate merged, the Switch node is GONE). The Logic card's op chip (set_logic)
+     and per-op NAMED single-input ins (":a"/":b", ":a" only for NOT,
+     ":set"/":reset" for SR — bare-id dsts refused, no + handle) riding
+     pin labels on the NEW circuit-diagram canvas (per-op gate glyphs;
+     traces light from live levels — pixel-diffed lo vs hi); the Button's
+     mode chip (set_button latch) + momentary down/up messages + head
+     level LED following {"kind":"gate"} events; head enable power-LED
+     buttons with QUIET ":pwr" level-ins (modules/arp/drums) and the
+     deck's four button-ins; the bin grammar (bin→pwr/deck/logic-in/
+     deriver-trigger yes; bin→note/mod/audio + self-wires no).
+  18. GUI pass B (07-23): the XS card size — 4.5u x 4.5u, OPT-IN
+     (cfg.allowXS: Button/Clock/Logic/Relay; every other card's floor
+     stays S), quadrant-resolution slots (2 per half block at a 5.5u
+     pitch = 4.5u + the 1u mid gutter, 4 per block), quadrant drops
+     (pxToSlotMem), half-step S-vs-XS and quarter-step XS-vs-XS shoves,
+     4-up tidy pour, and [bx,by,half,"XS",hh] layout memory. The Relay
+     card (palette LOGIC section, spawn_relay/remove_relay): a
+     type-agnostic switched junction whose circuits pair TOP in / BOTTOM
+     out handles ("relay:k" both ways), each wearing its CLAIMED kind's
+     sig (audio/ctl/bin from state.relays[].circuits) or the neutral
+     "any" that accepts any kind's drag; circuit OUTs connect onward
+     only per their claimed kind; the center power button sends
+     set_relay + follows {"kind":"gate"}; "relay:ctl" is a quiet
+     single-input bin level-in; AUTO-SIZE XS(4 circuits)↔S(9) from the
+     circuits in use; audio hops (never in the RESOLVED state.wires)
+     draw from the GUI-kept relayAW store, and every circuit wire cuts
+     with its kind's remove (ctl_wire / graph_wire). With all 4 XS slots
+     claimed, a little + right of the 4th slot latches the next wire
+     onto circuit 5 ("relay:5"), whose claim expands the card to S
+     (Cole, 07-24).
 """
 
 import glob
@@ -214,6 +240,20 @@ def slider_geom(page, gid, pname):
               w: tr.offsetWidth, zoom: zs,
               thumb: parseFloat(tr.firstElementChild.style.left) / 100};
     }""", [gid, pname])
+
+
+def relay_clip(page):
+    """A viewport-clamped clip rect around the relay card (screenshots)."""
+    page.evaluate("nodes.get('relay').el.scrollIntoView("
+                  "{block: 'center', inline: 'center'})")
+    page.wait_for_timeout(120)
+    return page.evaluate("""(() => {
+      const b = nodes.get('relay').el.getBoundingClientRect();
+      const x = Math.max(0, b.x - 16), y = Math.max(0, b.y - 16);
+      return {x, y,
+              width: Math.min(innerWidth - x, b.width + 32),
+              height: Math.min(innerHeight - y, b.height + 32)};
+    })()""")
 
 
 def main():
@@ -457,7 +497,9 @@ def main():
             ".find(p => p.sig === 'ctl' && p.dir === 'in'))"))
 
         # ================================================================
-        # 7 — ping: trigger cards, quiet trigger-in, strict grammar
+        # 7 — binary sources: trigger cards, quiet trigger-in, grammar
+        # (the buttons payload here PREDATES latch/on on purpose — an old
+        # server's buttons must still build → momentary, LED dark)
         # ================================================================
         st_p = base_state(
             [sg, echo],
@@ -475,30 +517,40 @@ def main():
         page.evaluate("(s) => __msg({type: 'state', ...s})", st_p)
         page.wait_for_timeout(500)
 
-        check("PRIMARY_SIGS gained ping",
-              page.evaluate("PRIMARY_SIGS.has('ping')"))
-        check("--ping CSS var present", page.evaluate(
+        check("PRIMARY_SIGS gained bin (ONE binary kind)",
+              page.evaluate("PRIMARY_SIGS.has('bin')"))
+        check("PRIMARY_SIGS has no ping/gate kinds", page.evaluate(
+            "!PRIMARY_SIGS.has('ping') && !PRIMARY_SIGS.has('gate')"))
+        check("--bin CSS var present (yellow base)", page.evaluate(
             "!!getComputedStyle(document.documentElement)"
-            ".getPropertyValue('--ping').trim()"))
-        check("ping legend entry present", page.evaluate(
-            "!!document.querySelector('[data-legend=ping]')"))
+            ".getPropertyValue('--bin').trim()"))
+        check("no --ping/--gate CSS vars remain", page.evaluate(
+            "!getComputedStyle(document.documentElement)"
+            ".getPropertyValue('--ping').trim() && "
+            "!getComputedStyle(document.documentElement)"
+            ".getPropertyValue('--gate').trim()"))
+        check("ONE binary legend entry replaces ping+gate", page.evaluate(
+            "!!document.querySelector('[data-legend=binary]') && "
+            "!document.querySelector('[data-legend=ping]') && "
+            "!document.querySelector('[data-legend=gate]')"))
         for gid in ("button", "clock"):
             check(f"trigger card renders: {gid}",
                   page.evaluate(f"nodes.has('{gid}')"))
 
         trig = page.evaluate("""(() => {
           const n = nodes.get('tonic');
-          const p = n.ports.find(p => p.sig === 'ping');
+          const p = n.ports.find(p => p.sig === 'bin');
           return p ? {dir: p.dir, quiet: !!p.quiet, label: p.label} : null;
         })()""")
-        check("deriver has a QUIET node-scoped ping trigger-in",
+        check("deriver has a QUIET node-scoped bin trigger-in",
               trig == {"dir": "in", "quiet": True, "label": "trigger"},
               str(trig))
 
-        # trigger cards are SMALL (Cole, 2026-07-22): both measure into S
+        # trigger cards are SMALL (Cole, 2026-07-22): both opt into the
+        # XS class since GUI pass B and measure into 4.5x4.5
         for gid in ("button", "clock"):
             sz = page.evaluate(f"nodes.get('{gid}').size")
-            check(f"trigger card {gid} sizes to S", sz == "S", str(sz))
+            check(f"trigger card {gid} sizes to XS", sz == "XS", str(sz))
 
         # the timing row is LABELED "trigger" now (Cole nomenclature; the
         # protocol field stays `every`), and the trigger-in handle rides
@@ -512,17 +564,19 @@ def main():
           const row = [...n.el.querySelectorAll('.mini')].find(
             r => (r.querySelector('label')||{}).title === 'trigger');
           const rowY = n.y + row.offsetTop + row.offsetHeight / 2;
-          const t = lay && lay.handles.find(H => H.sig === 'ping');
+          const t = lay && lay.handles.find(H => H.sig === 'bin');
           return {rowY, trigY: t && t.y};
         })()""")
         check("deriver trigger-in aligns with the trigger row (rendered)",
               aln["trigY"] is not None
               and abs(aln["trigY"] - aln["rowY"]) < 1.0, str(aln))
 
-        wsig = page.evaluate(
-            "(wires.find(w => w.from.node.gid === 'button') || {}).sig")
-        check("button→deriver wire draws in the ping family",
-              wsig == "ping", str(wsig))
+        wsig = page.evaluate("""(() => {
+          const w = wires.find(w => w.from.node.gid === 'button');
+          return w && {sig: w.sig, fam: LINES.bin.includes(w.color)};
+        })()""")
+        check("button→deriver wire draws in the bin family",
+              bool(wsig) and wsig["sig"] == "bin" and wsig["fam"], str(wsig))
 
         # strict grammar: every cross-kind combination refused, both ways
         combos = page.evaluate("""(() => {
@@ -531,32 +585,45 @@ def main():
           const btn = nodes.get('button'), ton = nodes.get('tonic');
           const sgn = nodes.get('m:signal_gen'), arp = nodes.get('arp');
           return {
-            ping_to_trig: !!connectAction(p(btn, 'out', 'ping'),
-              {node: ton, port: ton.ports.find(q => q.sig === 'ping')}),
-            ping_to_mod:  !!connectAction(p(btn, 'out', 'ping'), p(sgn, 'in', 'mod')),
-            mod_to_ping:  !!connectAction(p(sgn, 'out', 'mod'),
-              {node: ton, port: ton.ports.find(q => q.sig === 'ping')}),
-            ping_to_ctl:  !!connectAction(p(btn, 'out', 'ping'), p(arp, 'in', 'ctl')),
-            ctl_to_ping:  !!connectAction(p(nodes.get('keys'), 'out', 'ctl'),
-              {node: ton, port: ton.ports.find(q => q.sig === 'ping')}),
-            ping_to_audio: !!connectAction(p(btn, 'out', 'ping'),
+            bin_to_trig: !!connectAction(p(btn, 'out', 'bin'),
+              {node: ton, port: ton.ports.find(q => q.sig === 'bin')}),
+            bin_to_mod:  !!connectAction(p(btn, 'out', 'bin'), p(sgn, 'in', 'mod')),
+            mod_to_bin:  !!connectAction(p(sgn, 'out', 'mod'),
+              {node: ton, port: ton.ports.find(q => q.sig === 'bin')}),
+            bin_to_ctl:  !!connectAction(p(btn, 'out', 'bin'), p(arp, 'in', 'ctl')),
+            ctl_to_bin:  !!connectAction(p(nodes.get('keys'), 'out', 'ctl'),
+              {node: ton, port: ton.ports.find(q => q.sig === 'bin')}),
+            bin_to_audio: !!connectAction(p(btn, 'out', 'bin'),
               p(nodes.get('m:echo'), 'in', 'audio')),
           };
         })()""")
-        check("ping-out → trigger-in connects", combos["ping_to_trig"],
+        check("bin-out → trigger-in connects", combos["bin_to_trig"],
               str(combos))
-        for bad in ("ping_to_mod", "mod_to_ping", "ping_to_ctl",
-                    "ctl_to_ping", "ping_to_audio"):
+        for bad in ("bin_to_mod", "mod_to_bin", "bin_to_ctl",
+                    "ctl_to_bin", "bin_to_audio"):
             check(f"grammar refuses {bad}", not combos[bad], str(combos))
 
-        # keycap click fires (item 6: the keycap replaced the ◉ pad as the
-        # button's manual fire surface)
+        # the keycap is a MOMENTARY switch: pointerdown → button_down,
+        # pointerup → button_up (fire_button stays server-side click compat)
         page.evaluate("window.__sent.length = 0")
-        page.evaluate(
-            "nodes.get('button').el.querySelector('.keycap').click()")
+        page.evaluate("""() => {
+          const cap = nodes.get('button').el.querySelector('.keycap');
+          cap.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}));
+        }""")
         sent = page.evaluate("window.__sent")
-        check("keycap click sends fire_button",
-              {"type": "fire_button", "id": "button"} in sent, str(sent))
+        check("keycap pointerdown sends button_down (momentary)",
+              {"type": "button_down", "id": "button"} in sent, str(sent))
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("""() => {
+          const cap = nodes.get('button').el.querySelector('.keycap');
+          cap.dispatchEvent(new PointerEvent('pointerup', {bubbles: true}));
+          cap.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+        }""")
+        sent = page.evaluate("window.__sent")
+        check("keycap release sends button_up (and no fire_button)",
+              {"type": "button_up", "id": "button"} in sent
+              and not [m for m in sent if m.get("type") == "fire_button"],
+              str(sent))
 
         # pairing: arm via the bindline, then an ASSIGNED (note) key must
         # NOT bind…
@@ -582,15 +649,22 @@ def main():
               bound and bound[-1]["binding"] == {"kind": "key",
                                                  "code": "KeyN"}, str(bound))
 
-        # the bound key now FIRES the ping (binding kept client-side)
+        # the bound key IS the keycap now: keydown holds the momentary
+        # button down, keyup releases (binding kept client-side)
         page.evaluate("window.__sent.length = 0")
-        page.keyboard.press("n")
+        page.keyboard.down("n")
         page.wait_for_timeout(60)
         sent = page.evaluate("window.__sent")
-        check("bound key fires the ping",
-              {"type": "fire_button", "id": "button"} in sent, str(sent))
+        check("bound keydown sends button_down (momentary)",
+              {"type": "button_down", "id": "button"} in sent, str(sent))
         check("bound key does not ALSO play a note",
               not [m for m in sent if m.get("type") == "note_on"], str(sent))
+        page.evaluate("window.__sent.length = 0")
+        page.keyboard.up("n")
+        page.wait_for_timeout(60)
+        sent = page.evaluate("window.__sent")
+        check("bound keyup sends button_up",
+              {"type": "button_up", "id": "button"} in sent, str(sent))
 
         # ================================================================
         # 8 — deriver split: Estimator viz + knobs, Literal chips, grammar
@@ -679,7 +753,7 @@ def main():
           const row = [...n.el.querySelectorAll('.mini')].find(
             r => (r.querySelector('label')||{}).title === 'trigger');
           const rowY = n.y + row.offsetTop + row.offsetHeight / 2;
-          const t = lay && lay.handles.find(H => H.sig === 'ping');
+          const t = lay && lay.handles.find(H => H.sig === 'bin');
           return {rowY, trigY: t && t.y};
         })()""")
         check("literal trigger-in aligns with the trigger row (rendered)",
@@ -777,10 +851,10 @@ def main():
               litwires.count("ctl") == 2, str(litwires))
         trig = page.evaluate("""(() => {
           const n = nodes.get('literal');
-          const p = n.ports.find(p => p.sig === 'ping');
+          const p = n.ports.find(p => p.sig === 'bin');
           return p ? {dir: p.dir, quiet: !!p.quiet} : null;
         })()""")
-        check("literal has a quiet ping trigger-in",
+        check("literal has a quiet bin trigger-in",
               trig == {"dir": "in", "quiet": True}, str(trig))
 
         # ================================================================
@@ -912,7 +986,7 @@ def main():
               str(sent))
 
         # ================================================================
-        # 10 — threshold (item 8): CV edge → ping
+        # 10 — threshold (item 8 + binary rework): CV edge → binary level
         # ================================================================
         st_thr = base_state(
             [sg_m], [{"from": "signal_gen", "to": "master"}],
@@ -958,10 +1032,10 @@ def main():
         check("LFO → threshold cv wire draws (mod family)", page.evaluate(
             "wires.some(w => w.sig === 'mod'"
             " && w.to.node.gid === 'threshold')"))
-        check("threshold → deriver wire draws in the ping family",
+        check("threshold → deriver wire draws in the bin family",
               page.evaluate(
                   "(wires.find(w => w.from.node.gid === 'threshold') || {})"
-                  ".sig") == "ping")
+                  ".sig") == "bin")
         page.evaluate("window.__sent.length = 0")
         page.evaluate(
             "wires.find(w => w.sig === 'mod'"
@@ -972,30 +1046,30 @@ def main():
                "id": "threshold", "lfo": "lfo"} in sent, str(sent))
 
         # grammar: LFO-out → cv-in connects via threshold_wire add;
-        # threshold ping-out lands ONLY on a trigger-in
+        # the threshold's binary out lands on a trigger-in, never a ctl-in
         acts = page.evaluate("""(() => {
           const lfo = nodes.get('lfo:lfo'), thr = nodes.get('threshold');
           const ton = nodes.get('tonic'), arp = nodes.get('arp');
           const lout = {node: lfo, port: lfo.ports.find(p => p.sig === 'mod')};
           const cvin = {node: thr,
                         port: thr.ports.find(p => p.sig === 'mod' && p.dir === 'in')};
-          const pout = {node: thr,
-                        port: thr.ports.find(p => p.sig === 'ping' && p.dir === 'out')};
+          const bout = {node: thr,
+                        port: thr.ports.find(p => p.sig === 'bin' && p.dir === 'out')};
           window.__sent.length = 0;
           const add = connectAction(lout, cvin);
           if (add) add();
-          const ping = connectAction(pout,
-            {node: ton, port: ton.ports.find(p => p.sig === 'ping')});
-          const bad = arp && connectAction(pout,
+          const trig = connectAction(bout,
+            {node: ton, port: ton.ports.find(p => p.sig === 'bin')});
+          const bad = arp && connectAction(bout,
             {node: arp, port: arp.ports.find(p => p.sig === 'ctl' && p.dir === 'in')});
-          return {addSent: window.__sent, ping: !!ping, bad: !!bad};
+          return {addSent: window.__sent, trig: !!trig, bad: !!bad};
         })()""")
         check("LFO-out → cv-in connects (threshold_wire add)",
               {"type": "threshold_wire", "action": "add", "id": "threshold",
                "lfo": "lfo"} in acts["addSent"], str(acts))
-        check("threshold ping-out → deriver trigger-in connects",
-              acts["ping"], str(acts))
-        check("threshold ping-out → ctl-in refused", not acts["bad"],
+        check("threshold bin-out → deriver trigger-in connects",
+              acts["trig"], str(acts))
+        check("threshold bin-out → ctl-in refused", not acts["bad"],
               str(acts))
 
         # controls talk to the server; a ping event pulses the card
@@ -1701,10 +1775,11 @@ def main():
              {"from": "echo", "to": "master"}],
             buttons=[{"id": "button", "binding": {"kind": "key",
                                                   "code": "KeyN"},
-                      "armed": False},
-                     {"id": "button.2", "binding": None, "armed": False},
+                      "armed": False, "latch": False, "on": False},
+                     {"id": "button.2", "binding": None, "armed": False,
+                      "latch": False, "on": False},
                      {"id": "button.3", "binding": {"kind": "cc", "cc": 21},
-                      "armed": False}],
+                      "armed": False, "latch": False, "on": False}],
             clocks=[{"id": "clock", "division": "1/32",
                      "divisions": clock_ladder}])
         page.evaluate("(s) => __msg({type: 'state', ...s})", st16)
@@ -1732,14 +1807,14 @@ def main():
               and caps["b2"]["line"] == "pair…", str(caps))
         check("CC binding renders CC prefix + number",
               caps["b3"]["cc"] and "21" in caps["b3"]["txt"], str(caps))
-        check("button cards still measure into S",
-              all(caps[k]["size"] == "S" for k in ("b", "b2", "b3")),
+        check("button cards still measure into XS",
+              all(caps[k]["size"] == "XS" for k in ("b", "b2", "b3")),
               str(caps))
 
-        # the ◉ heartbeat icon rides next to the rendered ping-out handle
+        # the ◉ heartbeat icon rides next to the rendered bin-out handle
         fi = page.evaluate("""(() => {
           const n = nodes.get('button');
-          const H = n.lay.handles.find(h => h.sig === 'ping'
+          const H = n.lay.handles.find(h => h.sig === 'bin'
                                             && h.side === 'out');
           const el = n.fireIcon;
           if (!H || !el) return null;
@@ -1756,15 +1831,17 @@ def main():
         check("fire icon stays inside the card", fi is not None
               and fi["inX"] and fi["inY"], str(fi))
 
-        # firing pulses BOTH the keycap and the fire icon
+        # pressing pulses BOTH the keycap and the fire icon (rising edge)
         pulsed = page.evaluate("""(() => {
           const n = nodes.get('button');
-          n.el.querySelector('.keycap').click();
-          return {cap: n.el.querySelector('.keycap')
-                        .classList.contains('pulse'),
-                  icon: n.fireIcon.classList.contains('pulse')};
+          const cap = n.el.querySelector('.keycap');
+          cap.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}));
+          const out = {cap: cap.classList.contains('pulse'),
+                       icon: n.fireIcon.classList.contains('pulse')};
+          cap.dispatchEvent(new PointerEvent('pointerup', {bubbles: true}));
+          return out;
         })()""")
-        check("fire pulses keycap + heartbeat icon",
+        check("press pulses keycap + heartbeat icon",
               pulsed["cap"] and pulsed["icon"], str(pulsed))
 
         # arming flips the keycap to … and Escape restores it
@@ -1803,191 +1880,295 @@ def main():
               sent16 and sent16[-1] == {"type": "set_clock", "id": "clock",
                                         "division": "8/1"}, str(sent16))
         sz16 = page.evaluate("nodes.get('clock').size")
-        check("clock card still measures into S", sz16 == "S", str(sz16))
+        check("clock card still measures into XS", sz16 == "XS", str(sz16))
 
         # ================================================================
-        # 17 — gate suite (item 8): switch/logic, toggle-ins, grammar
+        # 17 — the BINARY plane: logic named ins + circuit viz, button
+        # modes + down/up, ONE bin wire kind, Switch gone, Relay tolerated
         # ================================================================
         st17 = base_state(
             [sg, echo],
             [{"from": "signal_gen", "to": "echo"},
              {"from": "echo", "to": "master"}],
             ctl_wires=[{"from": "keys", "to": "voice"},
-                       {"from": "switch", "to": "echo:pwr"},
+                       {"from": "logic", "to": "echo:pwr"},
                        {"from": "logic", "to": "deck:play"},
-                       {"from": "button", "to": "switch"}],
+                       {"from": "button", "to": "logic:a"},
+                       {"from": "threshold", "to": "logic:b"}],
             tonics=[{"id": "tonic", "every": "1 bar", "everies": ["1 bar"],
                      "octave": 2, "root": None}],
-            buttons=[{"id": "button", "binding": None, "armed": False}],
-            switches=[{"id": "switch", "on": False}],
+            buttons=[{"id": "button", "binding": None, "armed": False,
+                      "latch": False, "on": False},
+                     {"id": "button.2", "binding": None, "armed": False,
+                      "latch": True, "on": True}],
+            thresholds=[{"id": "threshold", "level": 0.0,
+                         "hysteresis": 0.02, "mode": "rising",
+                         "modes": ["rising", "falling", "both"],
+                         "source": None, "on": False}],
             logics=[{"id": "logic", "op": "AND",
                      "ops": ["AND", "OR", "NOT", "XOR", "SR latch"],
-                     "out": False}])
+                     "out": False}],
+            # binary rework: relays ride the snapshot (pass B renders the
+            # card — section 18); there is NO switches key any more
+            relays=[{"id": "relay", "closed": False, "circuits": {}}])
         page.evaluate("(s) => __msg({type: 'state', ...s})", st17)
         page.wait_for_timeout(500)
 
-        # palette: a LOGIC top-line section right after TRIGGERS
-        pal17 = page.evaluate(
-            "[...document.querySelectorAll('#palette h3')]"
-            ".map(h => h.textContent)")
-        check("palette LOGIC section sits right after TRIGGERS",
-              "logic" in pal17 and
-              pal17.index("logic") == pal17.index("triggers") + 1, str(pal17))
-        for nm, msgt in (("Switch", "spawn_switch"), ("Logic", "spawn_logic")):
-            page.evaluate("window.__sent.length = 0")
-            page.evaluate("""(nm) => {
-              [...document.querySelectorAll('#palette button')]
-                .find(b => b.textContent === nm).click();
-            }""", nm)
-            sent = page.evaluate("window.__sent")
-            check(f"palette {nm} sends {msgt}", {"type": msgt} in sent,
-                  str(sent))
-
-        # the Switch card: power pad LED, S size, flip-in + gate-out
-        sw17 = page.evaluate("""(() => {
-          const n = nodes.get('switch');
-          if (!n) return null;
-          const pad = n.el.querySelector('.powpad');
-          return {size: n.size, pad: !!pad,
-                  on: pad && pad.classList.contains('on'),
-                  ports: n.ports.map(p => [p.dir, p.sig, p.label, !!p.quiet])};
+        # palette: the LOGIC section holds Logic + Relay (Switch is
+        # gone since the binary rework) and still follows TRIGGERS
+        pal17 = page.evaluate("""(() => {
+          const hs = [...document.querySelectorAll('#palette h3')];
+          const logicH = hs.find(h => h.textContent === 'logic');
+          const btns = [];
+          for (let el = logicH && logicH.nextElementSibling;
+               el && el.tagName === 'BUTTON'; el = el.nextElementSibling)
+            btns.push(el.textContent);
+          return {h3: hs.map(h => h.textContent), btns,
+                  all: [...document.querySelectorAll('#palette button')]
+                    .map(b => b.textContent)};
         })()""")
-        check("switch card renders with an (unlit) power pad LED",
-              bool(sw17) and sw17["pad"] and sw17["on"] is False, str(sw17))
-        check("switch card sizes to S", sw17 and sw17["size"] == "S",
-              str(sw17))
-        check("switch ports: quiet ping flip-in + gate level-out",
-              bool(sw17) and ["in", "ping", "flip", True] in sw17["ports"]
-              and ["out", "gate", "level", False] in sw17["ports"],
-              str(sw17))
-
-        # pad click flips locally + sends set_switch on:true
+        check("palette LOGIC section sits right after TRIGGERS",
+              "logic" in pal17["h3"] and pal17["h3"].index("logic")
+              == pal17["h3"].index("triggers") + 1, str(pal17["h3"]))
+        check("LOGIC section holds Logic + Relay (Switch gone)",
+              pal17["btns"] == ["Logic", "Relay"], str(pal17))
+        check("no Switch palette button anywhere",
+              "Switch" not in pal17["all"], str(pal17["all"]))
         page.evaluate("window.__sent.length = 0")
-        page.evaluate("nodes.get('switch').el.querySelector('.powpad').click()")
+        page.evaluate("""() => {
+          [...document.querySelectorAll('#palette button')]
+            .find(b => b.textContent === 'Logic').click();
+        }""")
         sent = page.evaluate("window.__sent")
-        check("power pad click sends set_switch on:true",
-              {"type": "set_switch", "id": "switch", "on": True} in sent,
-              str(sent))
-        check("power pad lights locally on click", page.evaluate(
-            "nodes.get('switch').el.querySelector('.powpad')"
-            ".classList.contains('on')"))
+        check("palette Logic sends spawn_logic",
+              {"type": "spawn_logic"} in sent, str(sent))
 
-        # a live {"kind":"gate"} event drives the LED (off, then on)
-        page.evaluate("""() => __msg({type: 'midi',
-          event: {kind: 'gate', id: 'switch', on: false}})""")
-        check("gate event on:false unlights the switch LED", not page.evaluate(
-            "nodes.get('switch').el.querySelector('.powpad')"
-            ".classList.contains('on')"))
-        page.evaluate("""() => __msg({type: 'midi',
-          event: {kind: 'gate', id: 'switch', on: true}})""")
-        check("gate event on:true lights the switch LED", page.evaluate(
-            "nodes.get('switch').el.querySelector('.powpad')"
-            ".classList.contains('on')"))
+        check("no switch card builds (the node type is gone)", page.evaluate(
+            "![...nodes.keys()].some(k => k.startsWith('switch'))"))
+        check("state.relays builds a Relay card now (GUI pass B)",
+              page.evaluate("nodes.has('relay')"))
 
-        # the Logic card @AND: op chip, ONE bare fan-in, out LED
+        # the Logic card @AND: op chip, TWO named SINGLE-INPUT ins riding
+        # A/B pin labels, one bin out, an unlit LED, the circuit canvas
         lg17 = page.evaluate("""(() => {
           const n = nodes.get('logic');
           if (!n) return null;
+          const pins = [...n.el.querySelectorAll('.lpin')];
+          const ins = n.ports.filter(p => p.sig === 'bin' && p.dir === 'in');
           return {size: n.size,
                   sub: (n.el.querySelector('.sub')||{}).textContent,
                   led: !!n.el.querySelector('.gled'),
                   ledOn: n.el.querySelector('.gled')
                     && n.el.querySelector('.gled').classList.contains('on'),
-                  ins: n.ports.filter(p => p.sig === 'gate' && p.dir === 'in')
-                    .map(p => p.gate),
-                  outs: n.ports.filter(p => p.sig === 'gate' && p.dir === 'out')
-                    .length,
-                  plus: portAllowsPlus(n.ports.find(p => p.gate === 'logic'))};
+                  canvas: !!n.el.querySelector('canvas.lvz'),
+                  pins: pins.map(p => p.textContent),
+                  ins: ins.map(p => [p.ep, p.label, !!p.quiet, !!p.single,
+                                     portAllowsPlus(p),
+                                     !!(p.rowEl && p.rowEl.isConnected)]),
+                  outs: n.ports.filter(p => p.sig === 'bin'
+                                            && p.dir === 'out').length};
         })()""")
-        check("logic card renders @AND with ONE bare gate fan-in",
-              bool(lg17) and lg17["ins"] == ["logic"] and lg17["outs"] == 1,
-              str(lg17))
+        check("logic@AND: named single-input ins :a/:b labeled A/B (no +)",
+              bool(lg17) and lg17["ins"] == [
+                  ["logic:a", "A", True, True, False, True],
+                  ["logic:b", "B", True, True, False, True]], str(lg17))
+        check("logic@AND: A/B pin labels ride the circuit viz",
+              lg17 and lg17["pins"] == ["A", "B"], str(lg17))
+        check("logic has ONE bin out + head LED (unlit) + circuit canvas",
+              lg17 and lg17["outs"] == 1 and lg17["led"]
+              and lg17["ledOn"] is False and lg17["canvas"], str(lg17))
         check("logic sub shows the current op", lg17
-              and lg17["sub"] == "AND · gate logic", str(lg17))
-        check("logic fan-in allows multiple wires (+)",
-              lg17 and lg17["plus"] is True, str(lg17))
-        check("logic card has an (unlit) output LED",
-              lg17 and lg17["led"] and lg17["ledOn"] is False, str(lg17))
-        check("logic card sizes to S", lg17 and lg17["size"] == "S",
-              str(lg17))
+              and lg17["sub"] == "AND · binary logic", str(lg17))
+        check("logic card sizes to XS (opted in, pass B)",
+              lg17 and lg17["size"] == "XS", str(lg17))
 
-        # gate wires drew from state: switch→echo:pwr + logic→deck:play in
-        # the gate family; the ping wire button→switch stays ping-colored
-        gw17 = page.evaluate("""(() => {
-          const gw = wires.find(w => w.from.node.gid === 'switch');
-          const lw = wires.find(w => w.from.node.gid === 'logic');
-          const pw = wires.find(w => w.from.node.gid === 'button');
-          const d = (w) => w && {sig: w.sig, to: w.to.node.gid,
-            label: w.to.port.label, color: w.color,
-            stroke: w.topEl.getAttribute('stroke'),
-            fam: LINES.gate.includes(w.color)};
-          return {gw: d(gw), lw: d(lw), pw: d(pw)};
+        # the A and B in-handles land on SEPARATE lines (per-pin rows)
+        aby = page.evaluate("""(() => {
+          const lay = nodes.get('logic').lay;
+          const y = (ep) => {
+            const H = lay.handles.find(h => h.port && h.port.ep === ep);
+            return H ? H.y : null;
+          };
+          return {a: y('logic:a'), b: y('logic:b')};
         })()""")
-        check("switch→module pwr wire draws in the gate family",
-              bool(gw17["gw"]) and gw17["gw"]["sig"] == "gate"
-              and gw17["gw"]["to"] == "m:echo"
-              and gw17["gw"]["label"] == "pwr" and gw17["gw"]["fam"],
-              str(gw17))
-        check("gate wire stroke carries the gate color",
-              bool(gw17["gw"])
-              and gw17["gw"]["stroke"] == gw17["gw"]["color"], str(gw17))
-        check("logic→deck:play wire lands on the deck's play toggle-in",
-              bool(gw17["lw"]) and gw17["lw"]["sig"] == "gate"
-              and gw17["lw"]["to"] == "deck"
-              and gw17["lw"]["label"] == "play", str(gw17))
-        check("button→switch flip wire stays in the ping family",
-              bool(gw17["pw"]) and gw17["pw"]["sig"] == "ping"
-              and gw17["pw"]["to"] == "switch", str(gw17))
-        check("legend has a gate swatch", page.evaluate(
-            "!!document.querySelector('[data-legend=gate]')"))
+        check("A and B handles sit on separate rows",
+              aby["a"] is not None and aby["b"] is not None
+              and abs(aby["a"] - aby["b"]) > 4, str(aby))
 
-        # grammar: gate→pwr connects; gate→note-in / gate→trigger-in
-        # refused; ping→pwr and ping→switch-flip connect
+        # wires from state: ONE bin kind — logic→echo:pwr, logic→deck:play,
+        # button→logic:a, threshold→logic:b all draw bin-family colors
+        gw17 = page.evaluate("""(() => {
+          const d = (pred) => {
+            const w = wires.find(pred);
+            return w && {sig: w.sig, to: w.to.node.gid,
+              ep: w.to.port.ep || null, color: w.color,
+              stroke: w.topEl.getAttribute('stroke'),
+              fam: LINES.bin.includes(w.color)};
+          };
+          return {pwr: d(w => w.from.node.gid === 'logic'
+                              && w.to.node.gid === 'm:echo'),
+                  play: d(w => w.from.node.gid === 'logic'
+                               && w.to.node.gid === 'deck'),
+                  ba: d(w => w.from.node.gid === 'button'),
+                  tb: d(w => w.from.node.gid === 'threshold')};
+        })()""")
+        check("logic→module pwr wire draws in the bin family",
+              bool(gw17["pwr"]) and gw17["pwr"]["sig"] == "bin"
+              and gw17["pwr"]["ep"] == "echo:pwr" and gw17["pwr"]["fam"],
+              str(gw17))
+        check("bin wire stroke carries its line color",
+              bool(gw17["pwr"])
+              and gw17["pwr"]["stroke"] == gw17["pwr"]["color"], str(gw17))
+        check("logic→deck:play lands on the deck's play button-in",
+              bool(gw17["play"]) and gw17["play"]["ep"] == "deck:play",
+              str(gw17))
+        check("button→logic:a lands on the A pin (bin family)",
+              bool(gw17["ba"]) and gw17["ba"]["sig"] == "bin"
+              and gw17["ba"]["ep"] == "logic:a" and gw17["ba"]["fam"],
+              str(gw17))
+        check("threshold→logic:b lands on the B pin",
+              bool(gw17["tb"]) and gw17["tb"]["ep"] == "logic:b",
+              str(gw17))
+
+        # circuit viz: deterministic, event-driven — a lo render and a hi
+        # render pixel-diff (traces light from the derived source levels)
+        lo_png = page.evaluate(
+            "nodes.get('logic').el.querySelector('canvas.lvz').toDataURL()")
+        page.evaluate("""() => {
+          __msg({type: 'midi', event: {kind: 'gate', id: 'button', on: true}});
+          __msg({type: 'midi', event: {kind: 'gate', id: 'threshold', on: true}});
+          __msg({type: 'midi', event: {kind: 'gate', id: 'logic', on: true}});
+        }""")
+        page.wait_for_timeout(60)
+        hi_png = page.evaluate(
+            "nodes.get('logic').el.querySelector('canvas.lvz').toDataURL()")
+        check("circuit viz canvas draws (non-empty lo render)",
+              bool(lo_png) and len(lo_png) > 100, str(len(lo_png or "")))
+        check("circuit traces light up (lo vs hi renders differ)",
+              lo_png != hi_png)
+        check("gate event lights the logic output LED", page.evaluate(
+            "nodes.get('logic').el.querySelector('.gled')"
+            ".classList.contains('on')"))
+        page.evaluate("""() => {
+          __msg({type: 'midi', event: {kind: 'gate', id: 'button', on: false}});
+          __msg({type: 'midi', event: {kind: 'gate', id: 'threshold', on: false}});
+          __msg({type: 'midi', event: {kind: 'gate', id: 'logic', on: false}});
+        }""")
+
+        # button cards: mode chip from latch, head level LED from on
+        bt17 = page.evaluate("""(() => {
+          const g = (gid) => {
+            const n = nodes.get(gid);
+            const chip = [...n.el.querySelectorAll('label')]
+              .find(l => l.title === 'mode')
+              .parentElement.querySelector('.chip');
+            return {mode: chip.textContent,
+                    led: n.el.querySelector('.gled')
+                      .classList.contains('on')};
+          };
+          return {b: g('button'), b2: g('button.2')};
+        })()""")
+        check("mode chip reads momentary / persistent from latch",
+              bt17["b"]["mode"] == "momentary"
+              and bt17["b2"]["mode"] == "persistent", str(bt17))
+        check("button head LED seeds from settings.on",
+              bt17["b"]["led"] is False and bt17["b2"]["led"] is True,
+              str(bt17))
+
+        # mode chip click sends set_button latch:true (then flip it back)
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("""() => {
+          const n = nodes.get('button');
+          [...n.el.querySelectorAll('label')].find(l => l.title === 'mode')
+            .parentElement.querySelector('.chip').click();
+        }""")
+        sent = page.evaluate("window.__sent")
+        check("mode chip cycles momentary→persistent (set_button latch)",
+              {"type": "set_button", "id": "button", "latch": True} in sent,
+              str(sent))
+        page.evaluate("""() => {
+          const n = nodes.get('button');
+          [...n.el.querySelectorAll('label')].find(l => l.title === 'mode')
+            .parentElement.querySelector('.chip').click();
+        }""")
+
+        # a latch (persistent) button's keycap CLICK sends fire_button —
+        # no down/up pair (the server toggles the level)
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("""() => {
+          const cap = nodes.get('button.2').el.querySelector('.keycap');
+          cap.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}));
+          cap.dispatchEvent(new PointerEvent('pointerup', {bubbles: true}));
+          cap.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+        }""")
+        sent = page.evaluate("window.__sent")
+        check("latch keycap click sends fire_button (no down/up)",
+              {"type": "fire_button", "id": "button.2"} in sent
+              and not [m for m in sent
+                       if m.get("type") in ("button_down", "button_up")],
+              str(sent))
+
+        # a live gate event drives the button LED (off, then on)
+        page.evaluate("""() => __msg({type: 'midi',
+          event: {kind: 'gate', id: 'button.2', on: false}})""")
+        check("gate event on:false unlights the button LED",
+              not page.evaluate(
+                  "nodes.get('button.2').el.querySelector('.gled')"
+                  ".classList.contains('on')"))
+        page.evaluate("""() => __msg({type: 'midi',
+          event: {kind: 'gate', id: 'button.2', on: true}})""")
+        check("gate event on:true lights the button LED", page.evaluate(
+            "nodes.get('button.2').el.querySelector('.gled')"
+            ".classList.contains('on')"))
+        check("button card (mode row + keycap) still sizes to XS",
+              page.evaluate("nodes.get('button').size") == "XS")
+
+        # grammar: ONE bin branch — accepts pwr/deck/logic-named-ins/
+        # deriver triggers; refuses note sinks, bare logic ids, self-wires
         acts17 = page.evaluate("""(() => {
-          const sw = nodes.get('switch'), lg = nodes.get('logic');
-          const echo = nodes.get('m:echo'), arp = nodes.get('arp');
-          const ton = nodes.get('tonic'), btn = nodes.get('button');
-          const gout = (n) => ({node: n,
-            port: n.ports.find(p => p.sig === 'gate' && p.dir === 'out')});
+          const lg = nodes.get('logic'), echo = nodes.get('m:echo');
+          const arp = nodes.get('arp'), ton = nodes.get('tonic');
+          const btn = nodes.get('button'), thr = nodes.get('threshold');
+          const bout = (n) => ({node: n,
+            port: n.ports.find(p => p.sig === 'bin' && p.dir === 'out')});
           const pwr = (n) => ({node: n,
             port: n.ports.find(p => p.label === 'pwr')});
-          const pout = {node: btn,
-            port: btn.ports.find(p => p.sig === 'ping' && p.dir === 'out')};
           window.__sent.length = 0;
-          const gatePwr = connectAction(gout(sw), pwr(echo));
-          if (gatePwr) gatePwr();
-          const gateNote = connectAction(gout(sw), {node: arp,
+          const logicPwr = connectAction(bout(lg), pwr(echo));
+          if (logicPwr) logicPwr();
+          const btnPin = connectAction(bout(btn), {node: lg,
+            port: lg.ports.find(p => p.ep === 'logic:a')});
+          if (btnPin) btnPin();
+          const logicTrig = connectAction(bout(lg), {node: ton,
+            port: ton.ports.find(p => p.sig === 'bin')});
+          if (logicTrig) logicTrig();
+          const binNote = connectAction(bout(thr), {node: arp,
             port: arp.ports.find(p => p.sig === 'ctl' && p.dir === 'in')});
-          const gateTrig = connectAction(gout(sw), {node: ton,
-            port: ton.ports.find(p => p.sig === 'ping')});
-          const pingPwr = connectAction(pout, pwr(echo));
-          if (pingPwr) pingPwr();
-          const pingSwitch = connectAction(pout, {node: sw,
-            port: sw.ports.find(p => p.sig === 'ping' && p.dir === 'in')});
-          if (pingSwitch) pingSwitch();
-          const logicSelf = connectAction(gout(lg), {node: lg,
-            port: lg.ports.find(p => p.gate === 'logic')});
-          return {sent: window.__sent, gatePwr: !!gatePwr,
-                  gateNote: !!gateNote, gateTrig: !!gateTrig,
-                  pingPwr: !!pingPwr, pingSwitch: !!pingSwitch,
+          const bareLogic = connectAction(bout(btn),
+            {node: lg, port: {dir: 'in', sig: 'bin', label: 'in'}});
+          const logicSelf = connectAction(bout(lg), {node: lg,
+            port: lg.ports.find(p => p.ep === 'logic:a')});
+          return {sent: window.__sent, logicPwr: !!logicPwr,
+                  btnPin: !!btnPin, logicTrig: !!logicTrig,
+                  binNote: !!binNote, bareLogic: !!bareLogic,
                   logicSelf: !!logicSelf};
         })()""")
-        check("gate-out → module pwr connects (ctl_wire add)",
-              acts17["gatePwr"] and
-              {"type": "ctl_wire", "action": "add", "from": "switch",
+        check("bin-out → module pwr connects (ctl_wire add)",
+              acts17["logicPwr"] and
+              {"type": "ctl_wire", "action": "add", "from": "logic",
                "to": "echo:pwr"} in acts17["sent"], str(acts17))
-        check("gate-out → note-in refused", not acts17["gateNote"],
-              str(acts17))
-        check("gate-out → deriver trigger-in refused", not acts17["gateTrig"],
-              str(acts17))
-        check("ping-out → module pwr connects (alternator)",
-              acts17["pingPwr"] and
+        check("bin-out → logic named in connects (button → logic:a)",
+              acts17["btnPin"] and
               {"type": "ctl_wire", "action": "add", "from": "button",
-               "to": "echo:pwr"} in acts17["sent"], str(acts17))
-        check("ping-out → switch flip-in connects",
-              acts17["pingSwitch"] and
-              {"type": "ctl_wire", "action": "add", "from": "button",
-               "to": "switch"} in acts17["sent"], str(acts17))
+               "to": "logic:a"} in acts17["sent"], str(acts17))
+        check("bin-out → deriver trigger-in connects (logic → tonic)",
+              acts17["logicTrig"] and
+              {"type": "ctl_wire", "action": "add", "from": "logic",
+               "to": "tonic"} in acts17["sent"], str(acts17))
+        check("bin-out → note-in refused", not acts17["binNote"],
+              str(acts17))
+        check("bare-id logic dst refused (named ins only)",
+              not acts17["bareLogic"], str(acts17))
         check("logic self-wire refused", not acts17["logicSelf"],
               str(acts17))
 
@@ -2004,39 +2185,51 @@ def main():
               {"type": "set_logic", "id": "logic", "op": "OR"} in sent,
               str(sent))
 
-        # SR latch payload: TWO named quiet ins (set/reset endpoints)
-        st17b = json.loads(json.dumps(st17))
-        st17b["logics"][0]["op"] = "SR latch"
-        page.evaluate("(s) => __msg({type: 'state', ...s})", st17b)
-        page.wait_for_timeout(400)
-        sr17 = page.evaluate("""(() => {
-          const n = nodes.get('logic');
-          return {sub: (n.el.querySelector('.sub')||{}).textContent,
-                  ins: n.ports.filter(p => p.sig === 'gate' && p.dir === 'in')
-                    .map(p => p.gate)};
-        })()""")
-        check("SR latch renders TWO named gate-ins (set/reset)",
-              sr17["ins"] == ["logic:set", "logic:reset"], str(sr17))
-        # a gate event lights the logic card's output LED
-        page.evaluate("""() => __msg({type: 'midi',
-          event: {kind: 'gate', id: 'logic', on: true}})""")
-        check("gate event lights the logic output LED", page.evaluate(
-            "nodes.get('logic').el.querySelector('.gled')"
-            ".classList.contains('on')"))
+        # per-op port SHAPES (server truth resent) + per-op glyphs: the
+        # circuit renders distinctly for every op (same all-lo levels)
+        op_pngs = {}
+
+        def logic_ins(op):
+            stx = json.loads(json.dumps(st17))
+            stx["logics"][0]["op"] = op
+            page.evaluate("(s) => __msg({type: 'state', ...s})", stx)
+            page.wait_for_timeout(350)
+            op_pngs[op] = page.evaluate(
+                "nodes.get('logic').el.querySelector('canvas.lvz')"
+                ".toDataURL()")
+            return page.evaluate(
+                "nodes.get('logic').ports"
+                ".filter(p => p.sig === 'bin' && p.dir === 'in')"
+                ".map(p => [p.ep, p.label])")
+
+        check("NOT exposes ONE named in (:a)",
+              logic_ins("NOT") == [["logic:a", "A"]], "")
+        check("XOR exposes :a/:b", logic_ins("XOR")
+              == [["logic:a", "A"], ["logic:b", "B"]], "")
+        check("OR exposes :a/:b", logic_ins("OR")
+              == [["logic:a", "A"], ["logic:b", "B"]], "")
+        check("AND exposes :a/:b", logic_ins("AND")
+              == [["logic:a", "A"], ["logic:b", "B"]], "")
+        check("SR latch exposes :set/:reset",
+              logic_ins("SR latch")
+              == [["logic:set", "set"], ["logic:reset", "reset"]], "")
+        check("every op draws a distinct gate glyph",
+              len(set(op_pngs.values())) == len(op_pngs),
+              str({k: len(v) for k, v in op_pngs.items()}))
 
         # head power LEDs: module/arp/drums carry the LED button + a quiet
-        # ":pwr" gate toggle-in anchored to the head; deck carries FOUR
+        # ":pwr" binary level-in anchored to the head; deck carries FOUR
         # button-ins with the deck:… endpoints
         eps17 = page.evaluate("""(() => {
           const g = (gid) => {
             const n = nodes.get(gid);
-            return n && n.ports.filter(p => p.sig === 'gate' && p.dir === 'in')
-              .map(p => [p.gate, !!p.quiet, !!(p.rowEl && p.rowEl.isConnected)]);
+            return n && n.ports.filter(p => p.sig === 'bin' && p.dir === 'in')
+              .map(p => [p.ep, !!p.quiet, !!(p.rowEl && p.rowEl.isConnected)]);
           };
           return {echo: g('m:echo'), arp: g('arp'), drums: g('drums'),
                   deck: g('deck')};
         })()""")
-        check("module card carries a quiet head-anchored :pwr toggle-in",
+        check("module card carries a quiet head-anchored :pwr level-in",
               eps17["echo"] == [["echo:pwr", True, True]], str(eps17))
         check("arp carries arp:pwr", eps17["arp"] == [["arp:pwr", True, True]],
               str(eps17))
@@ -2081,6 +2274,484 @@ def main():
               in sent and page.evaluate(
                   "!nodes.get('m:echo').el.classList.contains('bypassed')"),
               str(sent))
+
+        # ================================================================
+        # 18 — GUI pass B: the XS card size (4.5x4.5, quadrant slots) +
+        # the Relay card (type-agnostic switched junction, auto-sized)
+        # ================================================================
+        st18 = base_state(
+            [sg, echo],
+            [{"from": "signal_gen", "to": "echo"},
+             {"from": "echo", "to": "master"}],
+            ctl_wires=[{"from": "keys", "to": "relay:2"},
+                       {"from": "relay:2", "to": "voice"},
+                       {"from": "button", "to": "relay:3"},
+                       {"from": "relay:3", "to": "logic:a"},
+                       {"from": "button", "to": "relay:ctl"},
+                       {"from": "clock", "to": "logic:b"}],
+            tonics=[{"id": "tonic", "every": "1 bar", "everies": ["1 bar"],
+                     "octave": 2, "root": None}],
+            buttons=[{"id": "button", "binding": None, "armed": False,
+                      "latch": False, "on": False}],
+            clocks=[{"id": "clock", "division": "1/4",
+                     "divisions": ["1/4", "1/8"]}],
+            logics=[{"id": "logic", "op": "AND",
+                     "ops": ["AND", "OR", "NOT", "XOR", "SR latch"],
+                     "out": False}],
+            relays=[{"id": "relay", "closed": False,
+                     "circuits": {"2": {"kind": "notes"},
+                                  "3": {"kind": "binary"}}}])
+        page.evaluate("posMem = {}; relayAW = [];")   # deterministic geometry
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st18)
+        page.wait_for_timeout(500)
+
+        # ---- XS: the size class itself --------------------------------
+        check("SIZE_PX carries XS at 4.5u x 4.5u (72x72 px)",
+              page.evaluate("SIZE_PX.XS") == [72, 72],
+              str(page.evaluate("SIZE_PX.XS")))
+        szs18 = page.evaluate("""(() => {
+          const o = {};
+          for (const g of ['button', 'clock', 'logic', 'relay'])
+            o[g] = [nodes.get(g).size, nodes.get(g).el.offsetWidth,
+                    nodes.get(g).el.offsetHeight];
+          return o;
+        })()""")
+        for g in ("button", "clock", "logic", "relay"):
+            check(f"opted-in {g} card measures XS (72x72)",
+                  szs18[g] == ["XS", 72, 72], str(szs18))
+        nonopt = page.evaluate("""(() => {
+          const e = nodes.get('m:echo'), t = nodes.get('tonic');
+          const keep = e.size;
+          e.size = null; const floor = sizeFor(e);
+          e.allowXS = true; e.size = null; const opted = sizeFor(e);
+          e.allowXS = false; e.size = keep;
+          return {floor, opted, tonicSize: t.size, tonicXS: !!t.allowXS};
+        })()""")
+        check("non-opted card floor stays S even when its rows would fit",
+              nonopt["floor"] == "S" and nonopt["opted"] == "XS",
+              str(nonopt))
+        check("estimator (deriver) never measures XS",
+              nonopt["tonicSize"] in ("M", "L") and not nonopt["tonicXS"],
+              str(nonopt))
+
+        # ---- XS packing: tidy pours 4 to a block, 5.5u quadrant pitch --
+        page.evaluate("compactLayout()")
+        page.wait_for_timeout(400)
+        pack = page.evaluate("""(() => {
+          const g = (id) => { const n = nodes.get(id);
+            return {bx: n.bx, by: n.by, half: n.half, hh: n.hh,
+                    r: nodeUnitRect(n)}; };
+          return {button: g('button'), clock: g('clock'),
+                  logic: g('logic'), relay: g('relay')};
+        })()""")
+        xs4 = [pack[g] for g in ("button", "clock", "logic", "relay")]
+        check("tidy packs the four XS cards into ONE block",
+              len({(q["bx"], q["by"]) for q in xs4}) == 1, str(pack))
+        check("…across all four distinct quadrants",
+              {(q["half"], q["hh"]) for q in xs4}
+              == {("top", "left"), ("top", "right"),
+                  ("bottom", "left"), ("bottom", "right")}, str(pack))
+        tl = next(q for q in xs4 if (q["half"], q["hh"]) == ("top", "left"))
+        tr = next(q for q in xs4 if (q["half"], q["hh"]) == ("top", "right"))
+        bl = next(q for q in xs4 if (q["half"], q["hh"]) == ("bottom", "left"))
+        check("side-by-side XS pitch is exactly 5.5u (4.5u + 1u gutter)",
+              tr["r"]["x"] - tl["r"]["x"] == 5.5
+              and tr["r"]["y"] == tl["r"]["y"]
+              and tl["r"]["w"] == 4.5 and tl["r"]["h"] == 4.5, str(pack))
+        check("stacked XS pitch is exactly 5.5u vertically too",
+              bl["r"]["y"] - tl["r"]["y"] == 5.5
+              and bl["r"]["x"] == tl["r"]["x"], str(pack))
+        page.evaluate("nodes.get('button').el.scrollIntoView("
+                      "{block: 'center', inline: 'center'})")
+        page.wait_for_timeout(150)
+        page.screenshot(path="/tmp/binB_board_xs.png")
+
+        # ---- XS occupancy + shove: quadrant collisions honored ---------
+        occ18 = page.evaluate("""(() => {
+          const lg = placeOf(nodes.get('logic'));
+          const sPl = {size: 'S', bx: lg.bx, by: lg.by, half: lg.half};
+          const over = halfCells(sPl).filter(
+            c => halfCells(lg).includes(c));
+          const occ = occOf(currentPos(null));
+          const fits = !halfCells(sPl).some(c => occ.get(c) !== undefined);
+          return {cells: halfCells(lg).length, over: over.length, fits};
+        })()""")
+        check("an XS occupies exactly ONE quadrant cell",
+              occ18["cells"] == 1, str(occ18))
+        check("an S over an occupied quadrant collides (occupancy honored)",
+              occ18["over"] == 1 and occ18["fits"] is False, str(occ18))
+        shove = page.evaluate("""(() => {
+          const lg = nodes.get('logic'), pl = placeOf(lg);
+          // an S dropped onto logic's half: the XS shoves a HALF step down
+          const sPlan = planShove('keys',
+            {size: 'S', bx: pl.bx, by: pl.by, half: pl.half}, 'down');
+          const sMove = sPlan.moves.get('logic');
+          // an XS dropped onto logic's quadrant from the left: QUARTER step
+          const xPlan = planShove('button',
+            {size: 'XS', bx: pl.bx, by: pl.by, half: pl.half, hh: pl.hh},
+            'right');
+          const xMove = xPlan.moves.get('logic');
+          return {pl, sOk: sPlan.ok, sMove, xOk: xPlan.ok, xMove};
+        })()""")
+        pl0 = shove["pl"]
+        want_s = {"top": "bottom", "bottom": "top"}[pl0["half"]]
+        check("S-onto-XS shove displaces the XS a half step",
+              shove["sOk"] and shove["sMove"]
+              and shove["sMove"]["half"] == want_s
+              and shove["sMove"]["by"] == pl0["by"]
+              + (1 if pl0["half"] == "bottom" else 0), str(shove))
+        want_hh = {"left": "right", "right": "left"}[pl0["hh"]]
+        check("XS-onto-XS shove displaces a quarter step sideways",
+              shove["xOk"] and shove["xMove"]
+              and shove["xMove"]["hh"] == want_hh
+              and shove["xMove"]["bx"] == pl0["bx"]
+              + (1 if pl0["hh"] == "right" else 0), str(shove))
+
+        # ---- XS persistence: a quadrant position round-trips ----------
+        mem18 = page.evaluate("memOf(nodes.get('logic'))")
+        check("memOf records the quadrant (5-tuple ending in hh)",
+              len(mem18) == 5 and mem18[3] == "XS"
+              and mem18[4] in ("left", "right"), str(mem18))
+        # move logic to the bottom-right quadrant of an EMPTY block (found
+        # from the far corner — layout variants never reach it), rebuild
+        spot = page.evaluate("""(() => {
+          const occ = occOf(currentPos(null));
+          for (let bx = BX - 1; bx >= 0; bx--)
+            for (let by = BY - 1; by >= 0; by--) {
+              const cells = [];
+              for (const v of ['top', 'bottom'])
+                for (const h of ['left', 'right'])
+                  cells.push(`${bx},${by},${v},${h}`);
+              if (!cells.some(c => occ.get(c) !== undefined))
+                return [bx, by];
+            }
+        })()""")
+        page.evaluate("""([bx, by]) => {
+          const n = nodes.get('logic');   // a real move, then a rebuild:
+          n.bx = bx; n.by = by; n.half = 'bottom'; n.hh = 'right';
+          place(n); saveLayout();
+        }""", spot)
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st18)
+        page.wait_for_timeout(400)
+        back = page.evaluate("""(() => {
+          const n = nodes.get('logic');
+          return [n.bx, n.by, n.half, n.size, n.hh,
+                  posMem['logic'] || null];
+        })()""")
+        want = [spot[0], spot[1], "bottom", "XS", "right"]
+        check("a moved quadrant position survives the rebuild verbatim",
+              back[:5] == want and back[5] == want, str([back, want]))
+        # a point 2u into that block = its top-left quadrant; 8u in = its
+        # bottom-right (occupied by logic → the OTHER half's quadrant)
+        px2 = page.evaluate(
+            "([bx,by]) => pxToSlotMem((bx*12+2+2)*16, (by*12+2+2)*16, 'XS')",
+            spot)
+        px8 = page.evaluate(
+            "([bx,by]) => pxToSlotMem((bx*12+2+8)*16, (by*12+2+8)*16, 'XS')",
+            spot)
+        check("pxToSlotMem resolves XS drops at quadrant resolution",
+              px2 == [spot[0], spot[1], "top", "XS", "left"]
+              and px8 == [spot[0], spot[1], "top", "XS", "right"],
+              str([px2, px8, spot]))
+
+        # ---- Relay: palette spawn + the card itself -------------------
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("""() => {
+          [...document.querySelectorAll('#palette button')]
+            .find(b => b.textContent === 'Relay').click();
+        }""")
+        check("palette Relay sends spawn_relay",
+              {"type": "spawn_relay"} in page.evaluate("window.__sent"),
+              str(page.evaluate("window.__sent")))
+        rl18 = page.evaluate("""(() => {
+          const n = nodes.get('relay');
+          const circ = n.ports.filter(p => p.relayCirc);
+          const pair = (k) => {
+            const i = n.lay.handles.find(h => h.port.relayCirc === k
+                                              && h.side === 'in');
+            const o = n.lay.handles.find(h => h.port.relayCirc === k
+                                              && h.side === 'out');
+            return i && o && {ix: i.x, iy: i.y, ox: o.x, oy: o.y,
+                              ie: i.edge, oe: o.edge};
+          };
+          const r = nodeUnitRect(n);
+          return {size: n.size, relayN: n.relayN,
+                  name: n.el.querySelector('.title').textContent,
+                  sub: n.el.querySelector('.sub').textContent,
+                  nCirc: circ.length,
+                  sigs: circ.filter(p => p.dir === 'in')
+                            .map(p => [p.relayCirc, p.sig]),
+                  ctl: n.ports.filter(p => p.ep === 'relay:ctl')
+                    .map(p => [p.dir, p.sig, !!p.quiet, !!p.single]),
+                  btn: !!n.el.querySelector('.relaybtn'),
+                  lit: n.el.querySelector('.relaybtn')
+                    .classList.contains('on'),
+                  p1: pair(1), p3: pair(3), top: r.y * 16, bot: (r.y + r.h) * 16};
+        })()""")
+        check("relay card renders XS with 4 circuits while ≤4 in use",
+              rl18["size"] == "XS" and rl18["relayN"] == 4
+              and rl18["nCirc"] == 8, str(rl18))
+        check("relay title/sub read Relay · signal relay · 4 circuits",
+              rl18["name"] == "Rly"
+              and rl18["sub"] == "signal relay · 4 circuits", str(rl18))
+        check("circuit handles pair vertically (in k above out k)",
+              rl18["p1"] and rl18["p1"]["ix"] == rl18["p1"]["ox"]
+              and rl18["p3"] and rl18["p3"]["ix"] == rl18["p3"]["ox"]
+              and rl18["p1"]["ie"] == "T" and rl18["p1"]["oe"] == "B"
+              and rl18["p1"]["iy"] == rl18["top"]
+              and rl18["p1"]["oy"] == rl18["bot"], str(rl18))
+        check("circuit sigs follow their claims (any/ctl/bin, agnostic card)",
+              rl18["sigs"] == [[1, "any"], [2, "ctl"], [3, "bin"],
+                               [4, "any"]], str(rl18))
+        check("relay:ctl is ONE quiet single-input bin level-in",
+              rl18["ctl"] == [["in", "bin", True, True]], str(rl18))
+        check("relay button present, unlit while open",
+              rl18["btn"] and rl18["lit"] is False, str(rl18))
+        page.screenshot(path="/tmp/binB_relay_xs.png",
+                        clip=relay_clip(page))
+
+        # relay circuit wires draw in their KIND's family (transparent node)
+        rw18 = page.evaluate("""(() => {
+          const f = (pred) => { const w = wires.find(pred);
+            return w && {sig: w.sig,
+                         ctlFam: LINES.ctl.includes(w.color),
+                         binFam: LINES.bin.includes(w.color)}; };
+          return {kin: f(w => w.from.node.gid === 'keys'
+                              && w.to.node.gid === 'relay'),
+                  kout: f(w => w.from.node.gid === 'relay'
+                               && w.to.node.gid === 'voice'),
+                  bin: f(w => w.from.node.gid === 'button'
+                              && w.to.port.ep === 'relay:3'),
+                  bout: f(w => w.from.node.gid === 'relay'
+                               && w.to.port.ep === 'logic:a'),
+                  ctl: f(w => w.to.port && w.to.port.ep === 'relay:ctl')};
+        })()""")
+        check("notes wires through a circuit draw in the ctl family",
+              bool(rw18["kin"]) and rw18["kin"]["ctlFam"]
+              and bool(rw18["kout"]) and rw18["kout"]["ctlFam"], str(rw18))
+        check("binary wires through a circuit draw in the bin family",
+              bool(rw18["bin"]) and rw18["bin"]["binFam"]
+              and bool(rw18["bout"]) and rw18["bout"]["binFam"], str(rw18))
+        check("the ctl level-in wire lands on relay:ctl (bin family)",
+              bool(rw18["ctl"]) and rw18["ctl"]["binFam"], str(rw18))
+
+        # ---- relay switch: click sends set_relay; LED follows gates ----
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate(
+            "nodes.get('relay').el.querySelector('.relaybtn').click()")
+        sent = page.evaluate("window.__sent")
+        check("relay button click sends set_relay closed:true + lights",
+              {"type": "set_relay", "id": "relay", "closed": True} in sent
+              and page.evaluate("nodes.get('relay').el"
+                                ".querySelector('.relaybtn')"
+                                ".classList.contains('on')"), str(sent))
+        page.evaluate("""() => __msg({type: 'midi',
+          event: {kind: 'gate', id: 'relay', on: false}})""")
+        check("gate event on:false unlights the relay button",
+              not page.evaluate("nodes.get('relay').el"
+                                ".querySelector('.relaybtn')"
+                                ".classList.contains('on')"))
+        page.evaluate("""() => __msg({type: 'midi',
+          event: {kind: 'gate', id: 'relay', on: true}})""")
+        check("gate event on:true lights the relay button", page.evaluate(
+            "nodes.get('relay').el.querySelector('.relaybtn')"
+            ".classList.contains('on')"))
+
+        # ---- grammar: type-agnostic ins, kind-locked outs -------------
+        acts18 = page.evaluate("""(() => {
+          const rel = nodes.get('relay'), sgN = nodes.get('m:signal_gen');
+          const echoN = nodes.get('m:echo'), keysN = nodes.get('keys');
+          const btn = nodes.get('button'), lg = nodes.get('logic');
+          const voiceN = nodes.get('voice'), ton = nodes.get('tonic');
+          const cin = (k) => ({node: rel,
+            port: rel.ports.find(p => p.relayCirc === k && p.dir === 'in')});
+          const cout = (k) => ({node: rel,
+            port: rel.ports.find(p => p.relayCirc === k && p.dir === 'out')});
+          const aout = (n) => ({node: n,
+            port: n.ports.find(p => p.sig === 'audio' && p.dir === 'out')});
+          const ain = (n) => ({node: n,
+            port: n.ports.find(p => p.sig === 'audio' && p.dir === 'in')});
+          const bout = (n) => ({node: n,
+            port: n.ports.find(p => p.sig === 'bin' && p.dir === 'out')});
+          const nout = (n) => ({node: n,
+            port: n.ports.find(p => p.sig === 'ctl' && p.dir === 'out')});
+          const nin = (n) => ({node: n,
+            port: n.ports.find(p => p.sig === 'ctl' && p.dir === 'in')});
+          const ctlH = {node: rel,
+            port: rel.ports.find(p => p.ep === 'relay:ctl')};
+          window.__sent.length = 0;
+          const r = {};
+          r.audio_to_unclaimed = !!connectAction(aout(sgN), cin(1));
+          r.audio_to_notes_circ = !!connectAction(aout(sgN), cin(2));
+          r.note_to_unclaimed = !!connectAction(nout(keysN), cin(4));
+          r.note_to_bin_circ = !!connectAction(nout(keysN), cin(3));
+          r.bin_to_unclaimed = !!connectAction(bout(btn), cin(4));
+          r.bin_to_ctl = !!connectAction(bout(btn), ctlH);
+          r.note_to_ctl = !!connectAction(nout(keysN), ctlH);
+          r.audio_to_ctl = !!connectAction(aout(sgN), ctlH);
+          r.unclaimed_out = !!connectAction(cout(4), ain(echoN));
+          r.note_out_to_voice = !!connectAction(cout(2), nin(voiceN));
+          r.note_out_to_logic = !!connectAction(cout(2),
+            {node: lg, port: lg.ports.find(p => p.ep === 'logic:a')});
+          const binLg = connectAction(cout(3),
+            {node: lg, port: lg.ports.find(p => p.ep === 'logic:a')});
+          r.bin_out_to_logic = !!binLg;
+          if (binLg) binLg();
+          r.bin_out_to_deriver = !!connectAction(cout(3),
+            {node: ton, port: ton.ports.find(p => p.sig === 'bin')});
+          const audioAdd = connectAction(aout(sgN), cin(1));
+          if (audioAdd) audioAdd();
+          return {r, sent: window.__sent};
+        })()""")
+        page.wait_for_timeout(400)
+        r18 = acts18["r"]
+        check("audio-out → unclaimed circuit IN connects (graph_wire add)",
+              r18["audio_to_unclaimed"] and
+              {"type": "graph_wire", "action": "add", "from": "signal_gen",
+               "to": "relay:1"} in acts18["sent"], str(acts18))
+        check("note-out → unclaimed IN yes; onto bin/audio-claimed no",
+              r18["note_to_unclaimed"] and not r18["note_to_bin_circ"]
+              and not r18["audio_to_notes_circ"], str(r18))
+        check("bin-out → unclaimed IN + relay:ctl connect",
+              r18["bin_to_unclaimed"] and r18["bin_to_ctl"], str(r18))
+        check("relay:ctl accepts bin ONLY (note/audio refused)",
+              not r18["note_to_ctl"] and not r18["audio_to_ctl"], str(r18))
+        check("an UNCLAIMED circuit OUT refuses (kind unknown)",
+              not r18["unclaimed_out"], str(r18))
+        check("notes circuit OUT → note dsts only (voice yes, logic:a no)",
+              r18["note_out_to_voice"] and not r18["note_out_to_logic"],
+              str(r18))
+        check("bin circuit OUT → logic:a connects (ctl_wire add)",
+              r18["bin_out_to_logic"] and
+              {"type": "ctl_wire", "action": "add", "from": "relay:3",
+               "to": "logic:a"} in acts18["sent"], str(acts18))
+        check("bin circuit OUT → deriver trigger connects",
+              r18["bin_out_to_deriver"], str(r18))
+
+        # the audio add CLAIMED circuit 1 (local echo): a note drag onto it
+        # now refuses; the stored hop draws src → circuit IN in the audio
+        # family while the resolved duplicate (sg → echo) is suppressed
+        claimed = page.evaluate("""(() => {
+          const rel = nodes.get('relay'), keysN = nodes.get('keys');
+          const p1 = rel.ports.find(p => p.relayCirc === 1 && p.dir === 'in');
+          const refuse = !connectAction(
+            {node: keysN,
+             port: keysN.ports.find(p => p.sig === 'ctl' && p.dir === 'out')},
+            {node: rel, port: p1});
+          const w = wires.find(x => x.from.node.gid === 'm:signal_gen'
+                                    && x.to.node.gid === 'relay');
+          const dup = wires.find(x => x.from.node.gid === 'm:signal_gen'
+                                      && x.to.node.gid === 'm:echo');
+          return {sig1: p1.sig, refuse,
+                  drawn: w && {sig: w.sig,
+                               fam: LINES.audio.includes(w.color),
+                               cut: !!w.cutAction},
+                  dup: !!dup};
+        })()""")
+        check("first wire claims the circuit (audio; note drag now refused)",
+              claimed["sig1"] == "audio" and claimed["refuse"],
+              str(claimed))
+        check("relay audio hop draws src → circuit IN in the audio family",
+              bool(claimed["drawn"]) and claimed["drawn"]["sig"] == "audio"
+              and claimed["drawn"]["fam"] and claimed["drawn"]["cut"],
+              str(claimed))
+        check("…and the RESOLVED duplicate (src → old dst) is suppressed",
+              claimed["dup"] is False, str(claimed))
+
+        # ---- endpoint wire cuts route per kind ------------------------
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("""() => {
+          wires.find(x => x.from.node.gid === 'button'
+                          && x.to.port.ep === 'relay:3').cutAction();
+          wires.find(x => x.from.node.gid === 'm:signal_gen'
+                          && x.to.node.gid === 'relay').cutAction();
+        }""")
+        page.wait_for_timeout(400)
+        sent = page.evaluate("window.__sent")
+        check("cutting a bin circuit wire sends the targeted ctl_wire remove",
+              {"type": "ctl_wire", "action": "remove", "from": "button",
+               "to": "relay:3"} in sent, str(sent))
+        check("cutting the audio hop sends graph_wire remove (+ forgets it)",
+              {"type": "graph_wire", "action": "remove",
+               "from": "signal_gen"} in sent
+              and page.evaluate("relayAW.length") == 0, str(sent))
+
+        # ---- auto-size: >4 circuits in use flips XS → S (and back) ----
+        st18b = json.loads(json.dumps(st18))
+        st18b["relays"][0]["circuits"] = {
+            str(k): {"kind": "binary"} for k in range(1, 6)}
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st18b)
+        page.wait_for_timeout(400)
+        big = page.evaluate("""(() => {
+          const n = nodes.get('relay');
+          return {size: n.size, relayN: n.relayN,
+                  sub: n.el.querySelector('.sub').textContent,
+                  circ: n.ports.filter(p => p.relayCirc).length,
+                  w: n.el.offsetWidth, h: n.el.offsetHeight};
+        })()""")
+        check("5 circuits in use → the relay re-measures S with 9 circuits",
+              big == {"size": "S", "relayN": 9,
+                      "sub": "signal relay · 9 circuits", "circ": 18,
+                      "w": 160, "h": 72}, str(big))
+        page.screenshot(path="/tmp/binB_relay_s.png",
+                        clip=relay_clip(page))
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st18)
+        page.wait_for_timeout(400)
+        check("back to ≤4 in use → the relay re-measures XS",
+              page.evaluate("nodes.get('relay').size") == "XS")
+
+        # ---- the expansion + (Cole, 07-24): 4 slots claimed on XS ------
+        check("no expansion + while XS has free circuits (2 in use)",
+              page.evaluate(
+                  "!nodes.get('relay').ports.some(p => p.plusSlot)"))
+        st18c = json.loads(json.dumps(st18))
+        st18c["relays"][0]["circuits"] = {
+            str(k): {"kind": "binary"} for k in range(1, 5)}
+        st18c["ctl_wires"] = [{"from": "button", "to": f"relay:{k}"}
+                              for k in range(1, 5)]
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st18c)
+        page.wait_for_timeout(400)
+        plus18 = page.evaluate("""(() => {
+          const n = nodes.get('relay');
+          const H = n.lay.handles.find(h => h.port.plusSlot);
+          const h4 = n.lay.handles.find(h => h.port.relayCirc === 4
+                                             && h.side === 'in'
+                                             && h.role === 'wire');
+          const clk = nodes.get('clock');
+          window.__sent.length = 0;
+          const act = connectAction(
+            {node: clk,
+             port: clk.ports.find(p => p.sig === 'bin' && p.dir === 'out')},
+            {node: n, port: n.ports.find(p => p.plusSlot)});
+          if (act) act();
+          return {size: n.size, role: H && H.role, edge: H && H.edge,
+                  rightOf4: !!(H && h4 && H.x > h4.x),
+                  cls: H && H.el.className, sent: window.__sent};
+        })()""")
+        check("XS + 4 circuits in use → a + appears right of the 4th slot",
+              plus18["size"] == "XS" and plus18["role"] == "plus"
+              and plus18["edge"] == "T" and plus18["rightOf4"]
+              and plus18["cls"] == "bhandle plus", str(plus18))
+        check("splicing to the + latches the wire onto circuit 5",
+              {"type": "ctl_wire", "action": "add", "from": "clock",
+               "to": "relay:5"} in plus18["sent"], str(plus18))
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st18b)
+        page.wait_for_timeout(400)
+        check("5 circuits in use → S face, the + is gone",
+              page.evaluate("nodes.get('relay').size") == "S"
+              and page.evaluate(
+                  "!nodes.get('relay').ports.some(p => p.plusSlot)"))
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st18)
+        page.wait_for_timeout(400)
+
+        # ---- kill ------------------------------------------------------
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate(
+            "nodes.get('relay').el.querySelector('.kill').click()")
+        check("relay kill sends remove_relay",
+              {"type": "remove_relay", "id": "relay"}
+              in page.evaluate("window.__sent"),
+              str(page.evaluate("window.__sent")))
 
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()

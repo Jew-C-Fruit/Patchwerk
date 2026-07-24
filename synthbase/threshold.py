@@ -1,12 +1,21 @@
-"""Threshold: CV edge → ping (item 8a) — a comparator that watches an
-analog signal and fires a PING when it crosses a limit.
+"""Threshold: CV crossing → binary level (item 8a, binary rework) — a
+comparator that watches an analog signal and flips a BINARY LEVEL when it
+crosses a limit.
 
 The whole point is the bridge rule: continuous stays server-side, discrete
 stays Python-side, and the only crossing is EDGE-NOTIFY — a ``_threshold_watch``
 synth reads the source LFO's normalized bus and a ``SendTrig`` fires exactly
 one ``/tr`` OSC message per threshold crossing. Python never polls a bus;
-the ``/tr`` handler turns each message into an ordinary ping fan-out
-(``app._ping_sinks``), identical to a Button or Clock fire.
+the ``/tr`` handler updates the node's Schmitt state and notifies the gate
+manager (``gates.on_source_level`` / ``gates.pulse``) so downstream binary
+wires follow, identical to a Button level change or a Clock pulse.
+
+The node's binary LEVEL is mode-mapped from the Schmitt state:
+``rising`` → state, ``falling`` → NOT state, ``both`` → pinned LO with
+every crossing delivered as a PULSE instead (``gates.pulse``) — a
+documented oddity: both-mode is pulse-only, it can never hold a level.
+Level changes emit {"kind": "gate", "id", "on"}; the {"kind": "ping"}
+viz tap survives on the crossings the selected mode listens to.
 
 Comparator semantics: ``Schmidt.kr(sig, level - hyst, level + hyst)`` — the
 hysteresis window IS the debounce, so a noisy CV can't machine-gun pings.
@@ -31,7 +40,7 @@ exercised only by tests.
 
 Wire model: the CV-in is SINGLE-INPUT (like a param's quiet handle) —
 ``threshold_wire add`` steals nothing (an LFO fans out freely); re-wiring
-replaces the source. Ping-out wires ride ``app.ctl_wires`` with the kind
+replaces the source. Binary out-wires ride ``app.ctl_wires`` with the kind
 inferred from the source endpoint, exactly like button/clock.
 """
 
@@ -71,21 +80,47 @@ class ThresholdNode:
         self.hysteresis = 0.02
         self.mode = "rising"
         self.source: str | None = None   # LFO id wired into the CV-in
+        self.state = False        # the Schmitt state (Python's mirror of it)
         self._armed_at = 0.0      # monotonic ts of last (re)spawn
         self._feed_state: bool | None = None   # pure-Python Schmitt (feed b)
 
-    # -- firing (shared by /tr and feed) ---------------------------------------
+    # -- the binary level ------------------------------------------------------
+    # (`level` is the comparator's float threshold; the BINARY output level
+    #  is `out_level` to keep the settings/preset key stable)
+
+    @property
+    def out_level(self) -> bool:
+        """Mode-mapped binary level: rising → state, falling → NOT state,
+        both → pinned LO (pulse-only — see fire())."""
+        if self.mode == "rising":
+            return bool(self.state)
+        if self.mode == "falling":
+            return not self.state
+        return False
+
+    # -- crossings (shared by /tr and feed) ------------------------------------
 
     def fire(self, rising: bool | None = None) -> None:
-        try:
-            self.app._emit_midi_event({"kind": "ping", "src": self.id})
-        except Exception:  # noqa: BLE001
-            pass
-        for s in self.app._ping_sinks(self.id):
+        """One Schmitt crossing: update the state and push it into the
+        binary plane. rising/falling modes carry a LEVEL (on_source_level);
+        both-mode delivers each crossing as a PULSE instead."""
+        rising = bool(rising)
+        self.state = rising
+        # the ping viz tap survives on the crossings the mode listens to
+        if (self.mode == "both" or (self.mode == "rising") == rising):
             try:
-                s.trigger()
-            except Exception:  # noqa: BLE001 — one dead target must not stop the rest
+                self.app._emit_midi_event({"kind": "ping", "src": self.id})
+            except Exception:  # noqa: BLE001
                 pass
+        try:
+            if self.mode == "both":
+                self.app.gates.pulse(self.id)
+            else:
+                self.app._emit_midi_event(
+                    {"kind": "gate", "id": self.id, "on": self.out_level})
+                self.app.gates.on_source_level(self.id)
+        except Exception:  # noqa: BLE001 — a dead gate plane must not stop the watch
+            pass
 
     def on_tr(self, value: float) -> None:
         """A /tr arrived for this node's tag (OSC thread — keep it light).
@@ -111,17 +146,17 @@ class ThresholdNode:
         self._feed_state = state
         if prev is None or state == prev:
             return
-        if state and self.mode in ("rising", "both"):
-            self.fire(rising=True)
-        elif not state and self.mode in ("falling", "both"):
-            self.fire(rising=False)
+        # EVERY crossing updates the binary state; fire() maps it through
+        # the mode (level for rising/falling, pulse for both)
+        self.fire(rising=state)
 
     # -- node contract ---------------------------------------------------------
 
     def settings(self) -> dict:
         return {"id": self.id, "level": self.level,
                 "hysteresis": self.hysteresis, "mode": self.mode,
-                "modes": list(MODES), "source": self.source}
+                "modes": list(MODES), "source": self.source,
+                "on": bool(self.out_level)}
 
 
 class ThresholdManager:
@@ -210,11 +245,21 @@ class ThresholdManager:
             node.level = max(-1.0, min(1.0, float(level)))
         if hysteresis is not None:
             node.hysteresis = max(0.0, min(0.5, float(hysteresis)))
+        mode_changed = False
         if mode is not None:
             if mode not in MODES:
                 raise ValueError(f"unknown threshold mode {mode!r}")
+            mode_changed = mode != node.mode
             node.mode = mode
         node._feed_state = None       # window moved: re-latch on next feed
+        if mode_changed:
+            # the mode remaps the SAME Schmitt state to a different level
+            # (rising→state, falling→not state, both→lo) — downstream
+            # binary wires must see the flip
+            try:
+                self.app.gates.on_source_level(tid)
+            except Exception:  # noqa: BLE001
+                pass
         if source != "__unset__" and source != node.source:
             self._set_source(rec, source)
         elif rec["synth"] is not None:
@@ -276,10 +321,14 @@ class ThresholdManager:
 
     @staticmethod
     def _synth_params(node: ThresholdNode) -> dict:
+        # binary rework: BOTH edge triggers stay on regardless of mode, so
+        # Python's mirror of the Schmitt state (node.state) tracks every
+        # crossing — the LEVEL needs both directions. Mode filtering (which
+        # crossings tap/pulse, how state maps to the level) lives Python-
+        # side in ThresholdNode.fire()/out_level.
         return {"lo": node.level - node.hysteresis,
                 "hi": node.level + node.hysteresis,
-                "r_on": 1 if node.mode in ("rising", "both") else 0,
-                "f_on": 1 if node.mode in ("falling", "both") else 0}
+                "r_on": 1, "f_on": 1}
 
     # -- resilience --------------------------------------------------------------
 

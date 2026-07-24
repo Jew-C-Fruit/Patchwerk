@@ -1,30 +1,34 @@
-"""Ping: a discrete EDGE signal on the Python control plane + its sources.
+"""Binary LEVEL sources on the Python control plane: Button and Clock.
 
-A ping is an instantaneous edge — trigger(), not a sustained gate. Ping
-wires live in app.ctl_wires alongside note wires; the KIND is inferred
-from the source endpoint (button/clock ids only ever emit pings, so a wire
-from one is a ping wire). Consumers expose trigger() through
-app._ping_sinks(src); derivers commit on it (their internal grid timer is
-suppressed while a ping source is wired in — unwire and the timer resumes).
+Since the binary rework there is ONE binary signal kind — sources own
+hi/lo LEVELS and edges DERIVE from level changes (synthbase/gate.py has
+the model). What used to be a "ping" is now just a pulse: a level going
+hi then lo, propagating through the graph. Wires still ride
+app.ctl_wires with the kind inferred from the source endpoint.
 
-Two source nodes:
+* ButtonTrigger ("button", "button.2", ...) — a manual LEVEL source with
+  two modes:
+  - momentary (latch=False, default): the level is hi WHILE HELD —
+    press() drives it hi, release() drops it lo. Hold-to-enable a :pwr,
+    tap to fire a downstream trig-in.
+  - persistent (latch=True): press() TOGGLES the level; release() is a
+    no-op — the button is a latching switch.
+  fire() is the click-compat path: press() then (momentary only)
+  release() — a pulse. A BOUND CC follows the same modes: momentary →
+  the level FOLLOWS the CC (>= 0.5 = down; press/release on crossings);
+  latch → toggle on the rising crossing. Binding/arming is unchanged:
+  pairing mode captures the next COMPATIBLE input — non-tonal MIDI
+  controls (the router never surfaces note messages as bindable events)
+  or an unassigned computer key (captured client-side).
+  Emits {"kind": "gate", "id", "on"} on level change (the GUI LED) and
+  keeps the {"kind": "ping", "src"} tap on RISING edges (pulse anims).
 
-* ButtonTrigger ("button", "button.2", ...) — a manual trigger that can be
-  BOUND to a physical control, key-binding style. Clicking the card fires
-  directly. Arming pairing mode captures the next COMPATIBLE input:
-  non-tonal MIDI controls (CCs; the router never surfaces note messages as
-  bindable events, so a note-on can never bind) or an unassigned computer
-  key (captured client-side; the GUI stores {"kind": "key", "code": ...}
-  here so it survives presets/resume). A bound CC fires on the RISING edge
-  (unit crosses 0.5 upward) so continuous controllers don't machine-gun.
-
-* ClockTrigger ("clock", "clock.2", ...) — fires on a selectable transport
-  grid division, phase-locked via transport.next_grid (never a free-running
-  timer, so ticks stay aligned across tempo changes). Its ladder is
-  CLOCK_DIVISIONS: the global DIVISIONS plus multi-bar periods past 1/1
-  (item 6) — clock-only; arp/deriver ladders are deliberately untouched.
-
-Both emit {"kind": "ping", "src": "<id>"} viz taps on fire.
+* ClockTrigger ("clock", "clock.2", ...) — the one PULSE-ONLY source:
+  its persistent level is always lo; each transport-grid tick calls
+  gates.pulse(id) (level hi → rising edges fire → level lo, silently).
+  Phase-locked via transport.next_grid, never a free-running timer. Its
+  ladder is CLOCK_DIVISIONS: the global DIVISIONS plus multi-bar periods
+  past 1/1 — clock-only; arp/deriver ladders are deliberately untouched.
 """
 
 from __future__ import annotations
@@ -45,29 +49,54 @@ CLOCK_DIVISIONS = {"8/1": 32.0, "4/1": 16.0, "2/1": 8.0, **DIVISIONS}
 
 
 class ButtonTrigger:
-    """A spawnable manual/bindable trigger node."""
+    """A spawnable manual/bindable binary LEVEL source."""
 
     def __init__(self, app, bid: str = "button") -> None:
         self.app = app
         self.id = bid
         self.binding: dict | None = None  # {"kind":"cc","cc":n} | {"kind":"key","code":s}
         self.armed = False                # pairing mode (transient, not persisted)
-        self._last_unit = 0.0             # bound-CC edge detector state
+        self.latch = False                # False = momentary, True = persistent
+        self.level = False                # the button's binary level
+        self._last_unit = 0.0             # bound-CC crossing detector state
 
-    # -- firing ----------------------------------------------------------------
+    # -- the level -------------------------------------------------------------
 
-    def fire(self) -> None:
+    def _set_level(self, lvl: bool) -> None:
+        lvl = bool(lvl)
+        if lvl == self.level:
+            return
+        self.level = lvl
         try:
-            self.app._emit_midi_event({"kind": "ping", "src": self.id})
+            if lvl:   # the ping tap survives on rising edges (pulse anims)
+                self.app._emit_midi_event({"kind": "ping", "src": self.id})
+            self.app._emit_midi_event(
+                {"kind": "gate", "id": self.id, "on": lvl})
         except Exception:  # noqa: BLE001
             pass
-        for s in self.app._ping_sinks(self.id):
-            try:
-                s.trigger()
-            except Exception:  # noqa: BLE001 — one dead target must not stop the rest
-                pass
+        try:
+            self.app.gates.on_source_level(self.id)
+        except Exception:  # noqa: BLE001
+            pass
 
-    # -- MIDI capture / bound-CC firing (called from the MIDI thread) ----------
+    def press(self) -> None:
+        """Mouse-down / key-down / CC rising crossing. Momentary: level
+        hi while held. Latch: toggles."""
+        self._set_level(not self.level if self.latch else True)
+
+    def release(self) -> None:
+        """Mouse-up / key-up / CC falling crossing. Latch mode ignores it."""
+        if not self.latch:
+            self._set_level(False)
+
+    def fire(self) -> None:
+        """Click compat: a full press+release — momentary buttons pulse,
+        latched buttons toggle."""
+        self.press()
+        if not self.latch:
+            self.release()
+
+    # -- MIDI capture / bound-CC levels (called from the MIDI thread) ----------
 
     def on_cc(self, cc: int, unit: float) -> bool:
         """Feed a CC event through this button. Returns True if it was
@@ -87,30 +116,42 @@ class ButtonTrigger:
         b = self.binding
         if b and b.get("kind") == "cc" and int(b.get("cc", -1)) == int(cc):
             rising = unit >= 0.5 and self._last_unit < 0.5
+            falling = unit < 0.5 and self._last_unit >= 0.5
             self._last_unit = float(unit)
-            if rising:
-                self.fire()
+            if self.latch:
+                if rising:          # toggle on the rising crossing only
+                    self.press()
+            elif rising:            # momentary: the level FOLLOWS the CC
+                self.press()
+            elif falling:
+                self.release()
             return True
         return False
 
     # -- node contract ---------------------------------------------------------
 
-    def configure(self, binding="__unset__", armed=None) -> None:
+    def configure(self, binding="__unset__", armed=None, latch=None) -> None:
         if binding != "__unset__":
             self.binding = dict(binding) if isinstance(binding, dict) else None
             self._last_unit = 0.0
         if armed is not None:
             self.armed = bool(armed)
+        if latch is not None and bool(latch) != self.latch:
+            self.latch = bool(latch)
+            # switching modes drops the level — a momentary button must
+            # never wake up stuck hi with nobody holding it
+            self._set_level(False)
 
     def settings(self) -> dict:
-        return {"id": self.id, "binding": self.binding, "armed": self.armed}
+        return {"id": self.id, "binding": self.binding, "armed": self.armed,
+                "latch": bool(self.latch), "on": bool(self.level)}
 
     def shutdown(self) -> None:
         self.armed = False
 
 
 class ClockTrigger:
-    """A spawnable transport-locked trigger node."""
+    """A spawnable transport-locked PULSE source."""
 
     def __init__(self, app, cid: str = "clock") -> None:
         self.app = app
@@ -126,11 +167,10 @@ class ClockTrigger:
             self.app._emit_midi_event({"kind": "ping", "src": self.id})
         except Exception:  # noqa: BLE001
             pass
-        for s in self.app._ping_sinks(self.id):
-            try:
-                s.trigger()
-            except Exception:  # noqa: BLE001
-                pass
+        try:
+            self.app.gates.pulse(self.id)   # hi → edges fire → lo, silently
+        except Exception:  # noqa: BLE001
+            pass
 
     def configure(self, division=None) -> None:
         if division in CLOCK_DIVISIONS and division != self.division:
