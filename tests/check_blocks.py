@@ -3549,6 +3549,253 @@ def main():
               old19 == [False, False] and len(errors) == err0,
               str([old19, errors[err0:]]))
 
+        # ================================================================
+        # 21 — BATCH B: blocks bugs & polish (items 14, 15, 18, 20, 19,
+        # 16, 17). Each check is written against the BROKEN behaviour Cole
+        # reported, so it fails on the old code and passes on the fix.
+        # ================================================================
+        st21 = base_state(
+            [sg, echo],
+            [{"from": "signal_gen", "to": "echo"},
+             {"from": "echo", "to": "master"}])
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st21)
+        page.wait_for_timeout(500)
+
+        # ---- item 20: +1 unit top margin + a non-occluding header -------
+        m21 = page.evaluate("""(() => {
+          const r0 = unitRect({size: 'M', bx: 0, by: 0, half: null});
+          const hdr = document.querySelector('header');
+          const hh = Math.ceil(hdr.getBoundingClientRect().height);
+          const cssTop = document.getElementById('board').style.top
+                         || getComputedStyle(document.getElementById('board')).top;
+          return {topUnits: r0.y, gut: GUT, topm: TOPM,
+                  hdrH: hh, boardTop: parseFloat(cssTop),
+                  blockBgTop: parseFloat(
+                    document.querySelector('.blockbg').style.top)};
+        })()""")
+        check("item 20: the top row sits GUT + 1 unit down (wire clearance)",
+              m21["topUnits"] == m21["gut"] + m21["topm"]
+              and m21["topm"] == 1, str(m21))
+        check("item 20: the grid backdrop moved with it (no drift)",
+              abs(m21["blockBgTop"] - (m21["gut"] + m21["topm"]) * 16) < 0.01,
+              str(m21))
+        check("item 20: the board clears the MEASURED header, not a constant",
+              m21["boardTop"] >= m21["hdrH"] - 1, str(m21))
+        # a taller (wrapped) header must push the board down, not cover it
+        page.evaluate("""() => {
+          const h = document.querySelector('header');
+          const pad = document.createElement('div');
+          pad.id = '__pad'; pad.style.cssText = 'flex-basis:100%;height:40px';
+          h.appendChild(pad);
+        }""")
+        page.wait_for_timeout(300)
+        m21b = page.evaluate("""(() => ({
+          hdrH: Math.ceil(document.querySelector('header')
+                  .getBoundingClientRect().height),
+          boardTop: parseFloat(document.getElementById('board').style.top)}))()""")
+        check("item 20: a WRAPPED header still never occludes the board",
+              m21b["boardTop"] >= m21b["hdrH"] - 1
+              and m21b["hdrH"] > m21["hdrH"], str(m21b))
+        page.evaluate("() => document.getElementById('__pad').remove()")
+        page.wait_for_timeout(250)
+
+        # ---- item 19: Apple-Music-style scrollbars ----------------------
+        sb21 = page.evaluate("""(() => {
+          const cs = getComputedStyle(document.getElementById('board'));
+          return {width: cs.scrollbarWidth, color: cs.scrollbarColor};
+        })()""")
+        # the TRACK must be fully transparent (no chrome) and the THUMB
+        # translucent white — Chromium reports both as rgba() pairs
+        check("item 19: scrollbars are thin with a translucent thumb",
+              sb21["width"] == "thin"
+              and "rgba(0, 0, 0, 0)" in (sb21["color"] or "")
+              and "rgba(255, 255, 255" in (sb21["color"] or ""), str(sb21))
+
+        # ---- item 18: an L card moves ONE column at a time ---------------
+        page.evaluate("""() => {
+          const n = nodes.get('m:echo');
+          n.size = 'L'; n.bx = 2; n.by = 1; n.half = null;
+          place(n); rerouteAll();
+        }""")
+        page.wait_for_timeout(250)
+        # walk the pointer right one BLOCK PITCH at a time; each step must
+        # advance the L card by exactly one column (the old rule quantised to
+        # block PAIRS, so half the columns were unreachable). Real pointer
+        # events — synthetic ones can't take a pointer capture.
+        # Drive the REAL drag handler with coordinates derived from the card's
+        # own world position — no hit-testing, so the probe can't be defeated
+        # by an overlay or the scroll position this late in the run. (A
+        # synthetic pointer has no capture, hence the two stubs.)
+        l21 = page.evaluate("""(() => {
+          const n = nodes.get('m:echo');
+          for (const o of nodes.values()) {
+            if (o === n) continue;
+            o.bx = 10; o.by = 7; o.half = 'top'; place(o);
+          }
+          const head = n.el.querySelector('.head');
+          head.setPointerCapture = () => {};
+          head.releasePointerCapture = () => {};
+          const zs = parseFloat(world.style.zoom) || 1;
+          const wr = world.getBoundingClientRect();
+          const cl = (wx, wy) => [wr.left + wx * zs, wr.top + wy * zs];
+          const fire = (t, x, y) => head.dispatchEvent(new PointerEvent(t,
+            {clientX: x, clientY: y, bubbles: true, pointerId: 21}));
+          const out = [];
+          for (const steps of [1, 2, 3]) {
+            n.size = 'L'; n.bx = 0; n.by = 0; n.half = null; place(n);
+            const gx = n.x + 60, gy = n.y + 10;
+            const [dx0, dy0] = cl(gx, gy);
+            fire('pointerdown', dx0, dy0);
+            const [mx, my] = cl(gx + PITCH * U * steps, gy);
+            fire('pointermove', mx, my);
+            out.push([steps, drag && drag.target ? drag.target.bx : null,
+                      !!drag]);
+            fire('pointerup', mx, my);
+          }
+          return out;
+        })()""")
+        check("item 18: the L-card drag actually starts (grab point is sane)",
+              all(r[2] for r in l21), str(l21))
+        check("item 18: L card targets one column per PITCH dragged",
+              [r[:2] for r in l21] == [[1, 1], [2, 2], [3, 3]], str(l21))
+
+        # ---- item 15: no wire may completely obscure another -------------
+        many21 = [mod(f"s{i}", f"S{i}", "source", "voice") for i in range(1, 7)]
+        st15 = base_state(many21,
+                          [{"from": f"s{i}", "to": "master"}
+                           for i in range(1, 7)])
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st15)
+        page.wait_for_timeout(700)
+        ov21 = page.evaluate("""(() => {
+          // collect every rendered straight run, then look for two different
+          // wires sharing a line AND a real overlap along it
+          const segs = [];
+          for (const w of wires) {
+            const Q = w.dpts || w.pts;
+            if (!Q) continue;
+            for (let k = 0; k < Q.length - 1; k++) {
+              const a = Q[k], b = Q[k + 1];
+              const vert = Math.abs(a[0] - b[0]) < 0.01;
+              const horiz = Math.abs(a[1] - b[1]) < 0.01;
+              if (vert === horiz) continue;
+              const p0 = vert ? a[1] : a[0], p1 = vert ? b[1] : b[0];
+              const lo = Math.min(p0, p1), hi = Math.max(p0, p1);
+              if (hi - lo < 8) continue;
+              segs.push({w, vert, coord: vert ? a[0] : a[1], lo, hi});
+            }
+          }
+          let worst = 0, pair = null;
+          for (let i = 0; i < segs.length; i++)
+            for (let j = i + 1; j < segs.length; j++) {
+              const A = segs[i], B = segs[j];
+              if (A.w === B.w || A.vert !== B.vert) continue;
+              if (Math.abs(A.coord - B.coord) > 1.0) continue;
+              const ov = Math.min(A.hi, B.hi) - Math.max(A.lo, B.lo);
+              if (ov > worst) { worst = ov;
+                pair = [A.w.from.node.gid, B.w.from.node.gid, ov]; }
+            }
+          return {segs: segs.length, worst, pair};
+        })()""")
+        check("item 15: no two wires run hidden inside each other",
+              ov21["worst"] < 8, str(ov21))
+
+        # ---- item 14: the Note Monitor must not pile bars on the left ----
+        nm21 = page.evaluate("""(() => {
+          const mon = [...nodes.values()].find(n => n.montype === 'notes')
+            || buildMonitor('notes');
+          rerouteAll();
+          const cv = mon.el.querySelector('canvas[data-viz=notes]');
+          cv.width = cv.clientWidth || 200; cv.height = cv.clientHeight || 54;
+          const ctx = cv.getContext('2d');
+          const now = performance.now();
+          // one LONG-PAST note: it started far off-screen to the left and
+          // ended just barely inside. Before the fix its width stayed
+          // (x1 - x0) while its start clamped to 0, smearing right across
+          // the whole canvas.
+          tapNotes.length = 0;
+          const bpm = (state.transport && state.transport.bpm) || 100;
+          const winMs = 16 * 60000 / bpm;
+          tapNotes.push({src: 'keys', note: 60,
+                         t0: now - winMs * 4, t1: now - winMs * 0.97});
+          // silence the beat GRID for this probe — we are measuring the NOTE
+          // bar's extent, and the gridlines paint across the whole canvas
+          const saveAnchor = typeof beatAnchor !== 'undefined' ? beatAnchor : null;
+          beatAnchor = null;
+          ctx.clearRect(0, 0, cv.width, cv.height);
+          drawNotesViz(mon, ctx, cv.width, cv.height, now,
+                       getComputedStyle(document.body));
+          // rightmost painted column
+          const d = ctx.getImageData(0, 0, cv.width, cv.height).data;
+          let right = -1;
+          for (let x = cv.width - 1; x >= 0 && right < 0; x--)
+            for (let y = 0; y < cv.height; y++)
+              if (d[(y * cv.width + x) * 4 + 3] > 8) { right = x; break; }
+          tapNotes.length = 0;
+          beatAnchor = saveAnchor;
+          return {W: cv.width, right};
+        })()""")
+        check("item 14: a departing note stays at the LEFT edge (no smear)",
+              nm21["right"] >= 0 and nm21["right"] < nm21["W"] * 0.25,
+              str(nm21))
+
+        # ---- item 14: the Loop Deck grid must not become a solid wash ----
+        dk21 = page.evaluate("""(() => {
+          const cv = document.createElement('canvas');
+          cv.width = 160; cv.height = 34;
+          const ctx = cv.getContext('2d');
+          // a LONG take: 64 bars of 4 = 256 beats across 160px. One line per
+          // beat would paint every single column solid.
+          const saveL = state.looper;
+          state.looper = {state: 'stopped', notes: [], loop_beats: 256,
+                          bars: 64, level: 0.9, overdub: false};
+          ctx.clearRect(0, 0, cv.width, cv.height);
+          drawDeckViz(ctx, cv.width, cv.height, performance.now(),
+                      getComputedStyle(document.body));
+          state.looper = saveL;
+          const d = ctx.getImageData(0, 0, cv.width, cv.height).data;
+          let painted = 0;
+          for (let x = 0; x < cv.width; x++) {
+            for (let y = 0; y < cv.height; y++)
+              if (d[(y * cv.width + x) * 4 + 3] > 8) { painted++; break; }
+          }
+          return {W: cv.width, painted};
+        })()""")
+        check("item 14: a long take does not fill the deck with grid ink",
+              dk21["painted"] < dk21["W"] * 0.6, str(dk21))
+
+        # ---- items 16 + 17: flex handle dead zones + translucency --------
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st21)
+        page.wait_for_timeout(400)
+        page.evaluate("() => setMode('flex')")
+        page.wait_for_timeout(700)
+        fx21 = page.evaluate("""(() => {
+          const n = nodes.get('m:echo');
+          const cardBg = getComputedStyle(n.el).backgroundColor;
+          const cr = n.el.getBoundingClientRect();
+          const ctrls = [...n.el.querySelectorAll(
+            '.mini .track, .mini .chip, .kill, .onoff, .stripe.pwr')]
+            .map(e => e.getBoundingClientRect());
+          const zs = parseFloat(world.style.zoom) || 1;
+          let hits = 0, prim = 0;
+          for (const H of n.lay.handles) {
+            if (H.quiet) continue;
+            prim++;
+            // handle centre in client px
+            const wr = world.getBoundingClientRect();
+            const hx = wr.left + H.x * zs, hy = wr.top + H.y * zs;
+            for (const c of ctrls)
+              if (hx > c.left - 3 && hx < c.right + 3
+                  && hy > c.top - 3 && hy < c.bottom + 3) hits++;
+          }
+          return {cardBg, prim, hits};
+        })()""")
+        check("item 17: flex cards are slightly translucent (wires show through)",
+              "rgba" in fx21["cardBg"] or "0." in fx21["cardBg"], str(fx21))
+        check("item 16: no flex wire handle sits on top of a control",
+              fx21["prim"] > 0 and fx21["hits"] == 0, str(fx21))
+        page.evaluate("() => setMode('blocks')")
+        page.wait_for_timeout(500)
+
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()
 
