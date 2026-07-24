@@ -2011,7 +2011,7 @@ def main():
                          "modes": ["rising", "falling", "both"],
                          "source": None, "on": False}],
             logics=[{"id": "logic", "op": "AND",
-                     "ops": ["AND", "OR", "NOR", "XOR", "SR latch"],
+                     "ops": ["AND", "OR", "NOR", "XOR", "SR latch", "T latch"],
                      "out": False}],
             # binary rework: relays ride the snapshot (pass B renders the
             # card — section 18); there is NO switches key any more
@@ -2466,6 +2466,11 @@ def main():
         r = logic_ins("OR")
         check("OR exposes :a/:b",
               r["ins"] == [["logic:a", "A"], ["logic:b", "B"]], str(r))
+        r = logic_ins("T latch")
+        check("T latch keeps :a/:b, labeled T/R (toggle / reset)",
+              r["ins"] == [["logic:a", "T"], ["logic:b", "R"]], str(r))
+        check("the :b wire survives the swap into T latch", r["bWire"],
+              str(r))
         r = logic_ins("AND")
         check("AND exposes :a/:b",
               r["ins"] == [["logic:a", "A"], ["logic:b", "B"]], str(r))
@@ -2474,6 +2479,20 @@ def main():
               str({k: len(v) for k, v in op_pngs.items()}))
         check("NOR glyph is pixel-distinct from OR (output bubble)",
               op_pngs["NOR"] != op_pngs["OR"])
+        check("the two latch boxes are pixel-distinct (SR vs T label)",
+              op_pngs["SR latch"] != op_pngs["T latch"])
+        # neither latch name fits an XS head beside the ✕ — both abbreviate
+        shorts = {}
+        for op, want in (("SR latch", "SR"), ("T latch", "T"), ("XOR", "XOR")):
+            stx = json.loads(json.dumps(st17))
+            stx["logics"][0]["op"] = op
+            page.evaluate("(s) => __msg({type: 'state', ...s})", stx)
+            page.wait_for_timeout(250)
+            shorts[op] = page.evaluate(
+                "nodes.get('logic').el.querySelector('.opsel').textContent")
+        check("the banner selector abbreviates both latches, not other ops",
+              shorts == {"SR latch": "SR", "T latch": "T", "XOR": "XOR"},
+              str(shorts))
 
         # head power LEDs: module/arp/drums carry the LED button + a quiet
         # ":pwr" binary level-in anchored to the head; deck carries FOUR
@@ -2588,7 +2607,7 @@ def main():
             clocks=[{"id": "clock", "division": "1/4",
                      "divisions": ["1/4", "1/8"]}],
             logics=[{"id": "logic", "op": "AND",
-                     "ops": ["AND", "OR", "NOR", "XOR", "SR latch"],
+                     "ops": ["AND", "OR", "NOR", "XOR", "SR latch", "T latch"],
                      "out": False}],
             relays=[{"id": "relay", "closed": False,
                      "circuits": {"2": {"kind": "notes"},
@@ -4244,7 +4263,7 @@ def main():
             clocks=[{"id": f"clock{i}" if i else "clock", "division": "1/4",
                      "divisions": ["1/4", "1/8"]} for i in range(2)],
             logics=[{"id": "logic", "op": "AND",
-                     "ops": ["AND", "OR", "NOR", "XOR", "SR latch"],
+                     "ops": ["AND", "OR", "NOR", "XOR", "SR latch", "T latch"],
                      "out": False}],
             relays=[{"id": "relay", "closed": False, "circuits": {}}])
         page.evaluate("posMem = {}; relayAW = [];")

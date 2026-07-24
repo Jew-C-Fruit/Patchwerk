@@ -270,7 +270,7 @@
   .modeseg span.on { background: rgba(22,21,15,0.82); color: var(--ink-1); }
   .modeseg:hover { box-shadow: 0 0 0 1px rgba(22,21,15,0.5); }
   /* the logic banner's circuit selector (replaces the title + op row):
-     click cycles AND → OR → NOR → XOR → SR latch */
+     click cycles AND → OR → NOR → XOR → SR latch → T latch */
   .opsel { font-size: 8.5px; font-weight: 800; letter-spacing: 0.2px;
     padding: 1px 5px; border-radius: 4px; background: rgba(22,21,15,0.22);
     color: #16150f; cursor: pointer; white-space: nowrap; overflow: hidden;
@@ -5241,9 +5241,14 @@ function buildThresholdCard(t) {
 // (server guarantee, synthbase/gate.py). NOR replaced NOT (one wired leg
 // = NOT); the SR latch reads :a as SET / :b as RESET, so only the pin
 // LABELS change with the op (A/B → S/R), never the handles.
+// Latches have no standard gate silhouette, so they draw as a labeled
+// box — and the label is also the banner's short form (an XS head cannot
+// hold "SR latch" beside the ✕).
+const LATCH_SHORT = {"SR latch": "SR", "T latch": "T"};
 function logicInsOf(op) {
-  return op === "SR latch" ? [["a", "S"], ["b", "R"]]
-                           : [["a", "A"], ["b", "B"]];
+  if (op === "SR latch") return [["a", "S"], ["b", "R"]];
+  if (op === "T latch")  return [["a", "T"], ["b", "R"]];
+  return [["a", "A"], ["b", "B"]];
 }
 function buildLogicCard(t) {
   // Cole, 07-24: NO title, NO subtitle, NO op row — the orange banner
@@ -5252,7 +5257,7 @@ function buildLogicCard(t) {
   // handle.
   const gid = t.id;
   const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
-  const ops = t.ops || ["AND", "OR", "NOR", "XOR", "SR latch"];
+  const ops = t.ops || ["AND", "OR", "NOR", "XOR", "SR latch", "T latch"];
   // circuit-diagram viz: pin labels ride the canvas at the trace heights —
   // the quiet in-handles anchor to them (offsetWithin handles the nesting)
   const ins = logicInsOf(t.op);
@@ -5282,8 +5287,8 @@ function buildLogicCard(t) {
   head.querySelector(".title").parentElement.remove();
   const opsel = document.createElement("span");
   opsel.className = "opsel";
-  // "SR latch" won't share an XS head with the ✕ — show its short form
-  const opText = (op) => (op === "SR latch" ? "SR" : op)
+  // the latches won't share an XS head with the ✕ — show short forms
+  const opText = (op) => (LATCH_SHORT[op] || op)
     + (suffix ? " ·" + suffix : "");
   opsel.textContent = opText(t.op);
   opsel.title = "circuit — click to change";
@@ -5648,16 +5653,16 @@ function drawLogicCanvas(n) {
       ctx.moveTo(tip + 4, cy);
       ctx.arc(tip + 2, cy, 2, 0, Math.PI * 2);
     }
-  } else {                                    // SR latch: small labeled box
+  } else {                            // latches: small labeled box
     ctx.rect(gx0, gy0, gx1 - gx0, gh);
   }
   ctx.stroke();
-  if (t.op === "SR latch") {
+  if (LATCH_SHORT[t.op]) {
     ctx.fillStyle = LOGIC_SYM;
     ctx.font = "600 " + Math.min(8, gh - 3) + "px system-ui, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText("SR", (gx0 + gx1) / 2, cy + 0.5);
+    ctx.fillText(LATCH_SHORT[t.op], (gx0 + gx1) / 2, cy + 0.5);
   }
 }
 function redrawLogicViz() {
