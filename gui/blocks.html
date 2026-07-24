@@ -1935,6 +1935,59 @@ function assignLanes(routed) {
   }
   for (const r of routed) rebuildLaned(r);
   reduceCrossings(routed, lines);
+  separateOverlaps(routed);
+}
+// item 15 (Cole, 07-22): one wire could COMPLETELY OBSCURE another along the
+// same gutter. Root cause: the lane pass above only lanes INTERIOR segments
+// (k from 1 to poly.length-3), so a SHORT route — whose only segments are the
+// first and last — never receives an offset at all. Two such routes sharing a
+// gutter render at identical coordinates and one vanishes under the other.
+// (reduceCrossings can also swap two segments onto the same offset.)
+// This is the backstop: after lanes AND crossing repair, any two RENDERED
+// collinear segments that genuinely overlap get pushed apart by one lane.
+// It is a no-op whenever the lane pass already did its job.
+function separateOverlaps(routed) {
+  const MIN_RUN = 8;        // px — shorter runs are stubs/corners, not runs
+  const EPS = 1.0;          // px — closer than this counts as the same line
+  const MAX_OFF = (LANE_MAX + 1) * LANE_W;
+  const segs = [];
+  for (const r of routed) {
+    if (r.noroute || r.bez || !r.laned || r.laned.length < 2) continue;
+    const Q = r.laned;
+    for (let k = 0; k < Q.length - 1 && k < r.offs.length; k++) {
+      const a = Q[k], b = Q[k + 1];
+      const vert = Math.abs(a[0] - b[0]) < 0.01;
+      const horiz = Math.abs(a[1] - b[1]) < 0.01;
+      if (vert === horiz) continue;            // diagonal or degenerate
+      const p0 = vert ? a[1] : a[0], p1 = vert ? b[1] : b[0];
+      const lo = Math.min(p0, p1), hi = Math.max(p0, p1);
+      if (hi - lo < MIN_RUN) continue;
+      segs.push({ r, k, vert, coord: vert ? a[0] : a[1], lo, hi });
+    }
+  }
+  let moved = false;
+  for (const dir of [true, false]) {
+    const list = segs.filter(s => s.vert === dir)
+                     .sort((a, b) => a.coord - b.coord || a.lo - b.lo);
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const A = list[i], B = list[j];
+        if (B.coord - A.coord > EPS) break;    // sorted: nothing else is near
+        if (A.r === B.r) continue;
+        const ov = Math.min(A.hi, B.hi) - Math.max(A.lo, B.lo);
+        if (ov < MIN_RUN) continue;            // a mere touch hides nothing
+        const cur = B.r.offs[B.k] || 0;
+        const push = cur >= (A.r.offs[A.k] || 0) ? LANE_W : -LANE_W;
+        const next = cur + push;
+        if (Math.abs(next) > MAX_OFF) continue;   // never fling a wire away
+        B.r.offs[B.k] = next;
+        B.coord += push;
+        moved = true;
+      }
+    }
+  }
+  if (moved) for (const r of routed) rebuildLaned(r);
+  return moved;
 }
 const _nrm = (x, y) => { const m = Math.hypot(x, y) || 1; return [x / m, y / m]; };
 function rebuildLaned(r) {
@@ -2796,7 +2849,17 @@ function bindNode(node) {
     } else if (node.size === "M") {
       target = { size: "M", bx: blk.bx, by: blk.by, half: null };
     } else {
-      let bx = blk.fx < 0.5 ? blk.bx : blk.bx - 1;
+      // item 18 (Cole, 07-22): L cards refused half their snap positions.
+      // The old rule read the block under the POINTER and stepped back one
+      // column in its right half (fx < 0.5 ? bx : bx - 1), which is NOT
+      // monotonic: dragging steadily right produced bx = b, b-1, b+1, b, ...
+      // so the card appeared to jump by TWO columns and skip the one in
+      // between. An L is two blocks wide, so quantize its OWN left edge —
+      // which tracks the pointer continuously — to the nearest column.
+      // Moving the pointer one PITCH now moves the card exactly one column,
+      // and every column is reachable.
+      const leftU = (p.x - drag.offX) / U;
+      let bx = Math.round((leftU - GUT) / PITCH);
       bx = Math.max(0, Math.min(BX - 2, bx));
       target = { size: "L", bx, by: blk.by, half: null };
     }
@@ -6548,10 +6611,14 @@ function drawVizOnce(now) {
     if (n.montype && n.expanded === false && n.el.querySelector(".expander"))
       continue;   // collapsed monitor → hidden canvas (deck now draws its
                   // mini strip when collapsed — item 4)
-    if (!cv.clientWidth) continue;
+    // item 14: never draw against STALE canvas dimensions. A zero
+    // clientHeight (collapsing card, mid-resize) used to skip the height
+    // sync but draw anyway, mapping the viz into the PREVIOUS geometry —
+    // squashed bars and merged grid lines. No measurable box, no paint.
+    if (!cv.clientWidth || !cv.clientHeight) continue;
     if (cv.width !== cv.clientWidth) cv.width = cv.clientWidth;
     const _ch = cv.clientHeight;
-    if (_ch && cv.height !== _ch) cv.height = _ch;
+    if (cv.height !== _ch) cv.height = _ch;
     const ctx = cv.getContext("2d"), W = cv.width, H = cv.height;
     ctx.clearRect(0, 0, W, H);
     try {   // one bad card must never kill the shared rAF loop (all viz dies)
@@ -6575,12 +6642,26 @@ function drawDeckViz(ctx, W, H, now, style) {
   if (deckAnchor && l && !["empty", "stopped", "armed"].includes(l.state))
     livePhase = (deckAnchor.phase + (now - deckAnchor.time) / 1000 * bpm / 60) % loopBeats;
   const hairline = style.getPropertyValue("--hairline");
-  for (let b = 0; b <= loopBeats; b++) {
-    const x = (b / loopBeats) * W;
-    ctx.strokeStyle = hairline;
-    ctx.lineWidth = b % bpb === 0 ? 2 : 1;
-    ctx.globalAlpha = b % bpb === 0 ? 1 : 0.45;
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  // item 14 (Cole, 07-22, recurring): SOLID LINES across the track. The grid
+  // drew one line PER BEAT no matter how long the loop or how narrow the
+  // canvas — a long take (or the collapsed 20px mini strip) packed the lines
+  // sub-pixel until they merged into a solid wash. Draw beat lines only when
+  // they can be told apart, and fall back to bar lines (then nothing) rather
+  // than filling the canvas with ink.
+  const MIN_GRID_PX = 3;
+  const beatPx = W / Math.max(1, loopBeats);
+  const showBeats = beatPx >= MIN_GRID_PX;
+  const showBars = beatPx * bpb >= MIN_GRID_PX;
+  if (showBars) {
+    for (let b = 0; b <= loopBeats; b++) {
+      const bar = b % bpb === 0;
+      if (!bar && !showBeats) continue;
+      const x = (b / loopBeats) * W;
+      ctx.strokeStyle = hairline;
+      ctx.lineWidth = bar ? 2 : 1;
+      ctx.globalAlpha = bar ? 1 : 0.45;
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    }
   }
   ctx.globalAlpha = 1;
   if (l && Array.isArray(l.notes) && l.notes.length) {
@@ -6616,8 +6697,15 @@ function drawDeckViz(ctx, W, H, now, style) {
     }
     for (const [note, b0, b1] of segs) {
       const y = H - ((Math.min(hi, Math.max(lo, note)) - lo) / (hi - lo)) * (H - 8) - 4;
-      const x0 = (b0 / loopBeats) * W;
-      const x1 = (Math.max(b1, b0 + 0.05) / loopBeats) * W;
+      // item 14: clamp to the DRAWN loop window. A take carried over from a
+      // longer loop (loop_beats shrank under it) had beats past loopBeats,
+      // and the unclamped width painted a full-track bar — one of the
+      // "solid lines". Off-window segments now clip instead of smearing.
+      const s0 = Math.max(0, Math.min(loopBeats, b0));
+      const s1 = Math.max(s0, Math.min(loopBeats, Math.max(b1, b0 + 0.05)));
+      if (s1 <= s0 && b0 > loopBeats) continue;   // wholly outside: drop it
+      const x0 = (s0 / loopBeats) * W;
+      const x1 = (s1 / loopBeats) * W;
       ctx.fillRect(x0, y - 2, Math.max(2, x1 - x0), 4);
     }
   }
@@ -6706,7 +6794,14 @@ function drawNotesViz(n, ctx, W, H, now, style) {
     if (x1 <= 0) continue;
     const y = H - ((Math.min(hi, Math.max(lo, ev.note)) - lo) / (hi - lo)) * (H - 6) - 3;
     ctx.fillStyle = tapColor(ev.src, style);
-    ctx.fillRect(Math.max(0, x0), y - 2, Math.max(2, x1 - x0), 4);
+    // item 14 (Cole, 07-22, recurring): bars STACKED UP on the LEFT edge.
+    // The x START was clamped to 0 but the WIDTH stayed (x1 - x0), so a bar
+    // scrolling off the left kept growing rightward — every departing note
+    // smeared back across the live ones at x=0. Clamp BOTH ends and derive
+    // the width from the clamped span: a leaving bar shrinks into the edge.
+    const xa = Math.max(0, x0), xb = Math.min(W, x1);
+    if (xb <= xa) continue;
+    ctx.fillRect(xa, y - 2, Math.max(1, xb - xa), 4);
   }
 }
 
