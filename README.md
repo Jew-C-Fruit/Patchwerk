@@ -38,6 +38,43 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+## Setup (Windows)
+
+Patchwerk's control plane is plain Python and the engine is scsynth, both
+of which run natively on Windows. From PowerShell:
+
+```powershell
+winget install SuperCollider.SuperCollider   # or the installer from supercollider.github.io
+py -3.12 -m venv .venv                       # any Python 3.10+
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+Notes for Windows users:
+
+- **scsynth on PATH**: supriya looks for `scsynth.exe`. If booting fails
+  with "could not find scsynth", add the SuperCollider install folder
+  (typically `C:\Program Files\SuperCollider-<version>`) to your PATH, or
+  set `SCSYNTH_PATH` to the full exe path before launching.
+- **`run.sh` is a bash script** — on Windows launch directly instead:
+
+  ```powershell
+  .venv\Scripts\python -u -m synthbase gui pad_space
+  ```
+
+  then open http://127.0.0.1:8765 in Chrome. Stop it with Ctrl+C (also
+  kills its scsynth child; a stray `scsynth.exe` can be ended from Task
+  Manager).
+- **MIDI**: `python-rtmidi` wheels ship for Windows — no compiler needed.
+  `python -m synthbase devices` lists inputs; loopMIDI is handy for
+  virtual ports.
+- **Audio device**: scsynth uses the system default output. Pick a
+  specific device (or an exclusive-mode/ASIO one) from the GUI's device
+  picker once running.
+- If `py -3.12` isn't found, install Python from python.org and re-open
+  PowerShell; if script activation is blocked, run
+  `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once.
+
 ## Quick start
 
 ```bash
