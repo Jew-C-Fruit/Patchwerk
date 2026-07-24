@@ -3561,24 +3561,24 @@ def main():
         page.evaluate("(s) => __msg({type: 'state', ...s})", st21)
         page.wait_for_timeout(500)
 
-        # ---- item 20: +1 unit top margin + a non-occluding header -------
+        # ---- item 20: a non-occluding header, and a top gutter that is
+        # EXACTLY GUT (the +1u margin shipped in Batch B is reverted — it
+        # desynchronised the card grid from the router lattice, see below)
         m21 = page.evaluate("""(() => {
           const r0 = unitRect({size: 'M', bx: 0, by: 0, half: null});
           const hdr = document.querySelector('header');
           const hh = Math.ceil(hdr.getBoundingClientRect().height);
           const cssTop = document.getElementById('board').style.top
                          || getComputedStyle(document.getElementById('board')).top;
-          return {topUnits: r0.y, gut: GUT, topm: TOPM,
+          return {topUnits: r0.y, gut: GUT, leftUnits: r0.x,
                   hdrH: hh, boardTop: parseFloat(cssTop),
                   blockBgTop: parseFloat(
                     document.querySelector('.blockbg').style.top)};
         })()""")
-        check("item 20: the top row sits GUT + 1 unit down (wire clearance)",
-              m21["topUnits"] == m21["gut"] + m21["topm"]
-              and m21["topm"] == 1, str(m21))
-        check("item 20: the grid backdrop moved with it (no drift)",
-              abs(m21["blockBgTop"] - (m21["gut"] + m21["topm"]) * 16) < 0.01,
-              str(m21))
+        check("item 20: the top gutter is exactly GUT — same as every side",
+              m21["topUnits"] == m21["gut"] == m21["leftUnits"], str(m21))
+        check("item 20: the grid backdrop sits on the same phase (no drift)",
+              abs(m21["blockBgTop"] - m21["gut"] * 16) < 0.01, str(m21))
         check("item 20: the board clears the MEASURED header, not a constant",
               m21["boardTop"] >= m21["hdrH"] - 1, str(m21))
         # a taller (wrapped) header must push the board down, not cover it
@@ -3954,6 +3954,112 @@ def main():
               prev22.get("pwm") is True, str(prev22))
         check("item 22: moving DETUNE redraws it too (3 detuned oscillators)",
               prev22.get("detune") is True, str(prev22))
+
+        # ================================================================
+        # 23 — THE SQUARE-WIRE SYSTEM: geometry invariants (Cole, 07-24).
+        # Batch B's item-20 top margin (TOPM=1) moved the CARD grid without
+        # moving the ROUTER LATTICE, and nothing in this suite noticed:
+        # every top/bottom handle stub fell off-lattice, routeGutter
+        # returned null for 14 of 19 wires on the real patch, and those
+        # wires rendered as the dashed straight-line fallback; the lanes
+        # that did survive ran along the card EDGES instead of down the
+        # middle of the gutter. These checks are that regression net —
+        # they fail on TOPM=1 and pass on the reverted geometry.
+        # ================================================================
+        st23 = base_state(
+            [sg, echo],
+            [{"from": "signal_gen", "to": "echo"},
+             {"from": "echo", "to": "master"}])
+        page.evaluate("posMem = {}; relayAW = [];")
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st23)
+        page.wait_for_timeout(600)
+        g23 = page.evaluate("""(() => {
+          const ctx = buildRouteCtx(currentPos(null));
+          // every wire handle's lattice stub must be a ROUTABLE node
+          let tb = 0, tbOpen = 0, lr = 0, lrOpen = 0;
+          for (const n of nodes.values()) {
+            if (!n.lay) continue;
+            for (const H of n.lay.handles) {
+              if (H.role !== 'wire') continue;
+              const ok = ctx.open(H.gnode.i, H.gnode.j);
+              if (H.edge === 'T' || H.edge === 'B') { tb++; if (ok) tbOpen++; }
+              else { lr++; if (ok) lrOpen++; }
+            }
+          }
+          // the 1u MID-BLOCK gutter line must sit BETWEEN the two S halves,
+          // never buried inside one of them
+          const MID0u = (2 * (GUT + SH + MIDG / 2)) / 2;
+          const sTop = unitRect({size: 'S', bx: 0, by: 0, half: 'top'});
+          // long horizontal runs must ride the CENTRE of a 2u gutter. Derive
+          // those centres from the CARD rects, never from the router's own
+          // constants — the two silently drifting apart IS the bug.
+          const rowRect = (b) => unitRect({size: 'M', bx: 0, by: b, half: null});
+          const GUT_CENTRES = [rowRect(0).y / 2];          // the TOP gutter
+          for (let b = 0; b < BY - 1; b++) {
+            const a2 = rowRect(b), b2 = rowRect(b + 1);
+            GUT_CENTRES.push((a2.y + a2.h + b2.y) / 2);
+          }
+          const worst = [];
+          for (const r of (window._routedDebug || [])) {
+            if (r.noroute || r.bez) continue;
+            const Q = r.laned || r.poly;
+            for (let k = 0; k < Q.length - 1; k++) {
+              const a = Q[k], b = Q[k + 1];
+              if (Math.abs(a[1] - b[1]) > 0.01) continue;
+              if (Math.abs(a[0] - b[0]) < 3 * U) continue;
+              const yU = a[1] / U;
+              worst.push(+Math.min(...GUT_CENTRES.map(
+                c => Math.abs(yU - c))).toFixed(2));
+            }
+          }
+          return {tb: [tbOpen, tb], lr: [lrOpen, lr],
+                  midInsideCard: MID0u > sTop.y && MID0u < sTop.y + sTop.h,
+                  maxRunOffsetUnits: worst.length ? Math.max(...worst) : 0,
+                  dashed: document.querySelectorAll(
+                            'svg#wires path.noroute').length,
+                  wires: wires.length};
+        })()""")
+        check("square wires: NOTHING falls back to the dashed straight line",
+              g23["dashed"] == 0, str(g23))
+        check("square wires: every top/bottom handle stub is ON the lattice",
+              g23["tb"][0] == g23["tb"][1] and g23["tb"][1] > 0, str(g23))
+        check("square wires: every left/right handle stub is ON the lattice",
+              g23["lr"][0] == g23["lr"][1] and g23["lr"][1] > 0, str(g23))
+        check("square wires: the 1u mid-block lane is not buried in a card",
+              g23["midInsideCard"] is False, str(g23))
+        # lanes fan around the centreline by at most LANE_MAX*LANE_W (12px =
+        # 0.75u); a whole-unit offset means the lane is hugging a card edge
+        check("square wires: horizontal runs ride the gutter CENTRE",
+              g23["maxRunOffsetUnits"] <= 0.8, str(g23))
+        # the drop ghost must land exactly where the card will
+        gh23 = page.evaluate("""(() => {
+          const t = {size: 'S', bx: 3, by: 2, half: 'top'};
+          setGhost(t, true, true);
+          const ghost = parseFloat(document.getElementById('fpghost').style.top);
+          const blk = unitRect({size: 'M', bx: t.bx, by: t.by, half: null});
+          setGhost(null);
+          return {ghostTop: ghost, blockTop: blk.y * U};
+        })()""")
+        check("drop ghost: an S onto an empty block lands where it previews",
+              abs(gh23["ghostTop"] - gh23["blockTop"]) < 0.01, str(gh23))
+        # a LOCKED blocks frame is gutter-aligned: the top gutter is the same
+        # width as the left one (item 20's margin made it GUT+1)
+        lk23 = page.evaluate("""(() => {
+          panLocked = true; blocksFree = null; viewCols = 4; viewRows = 3;
+          applyView();
+          boardEl.scrollLeft = 2 * PITCH * U * viewScale();
+          boardEl.scrollTop  = 2 * PITCH * U * viewScale();
+          alignLockedView();
+          return new Promise(res => setTimeout(() => {
+            const v = visibleWorldRect();
+            const c0 = Math.round(v.x / PITCH), r0 = Math.round(v.y / PITCH);
+            res({left: +(GUT + c0 * PITCH - v.x).toFixed(2),
+                 top:  +(GUT + r0 * PITCH - v.y).toFixed(2)});
+          }, 800));
+        })()""")
+        check("locked frame: the top gutter matches the left one (2u)",
+              abs(lk23["top"] - lk23["left"]) < 0.05
+              and abs(lk23["top"] - 2) < 0.05, str(lk23))
 
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()

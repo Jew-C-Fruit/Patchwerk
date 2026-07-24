@@ -115,6 +115,36 @@ def main():
         })()""")
         check("no card overflows its footprint", not overflow, str(overflow))
 
+        # (Cole, 07-24) EVERY wire must route squarely — no dashed straight
+        # fallback — and every centre tag must actually be grabbable: a tag
+        # that lands under a handle (#handles z 26 > #wlabels z 24) can never
+        # be dragged to splice or double-tapped to cut. Both were live bugs
+        # on THIS patch: 14/19 wires dashed, 2 tags dead under handles.
+        tags = page.evaluate("""(() => {
+          const dead = [], missing = [];
+          for (const w of wires) {
+            const t = document.querySelector(
+              `#wlabels .wtag[data-seq="${w.seq}"]`);
+            const nm = `${w.from.node.gid}->${w.to.node.gid}`;
+            if (!t) { missing.push(nm); continue; }
+            const b = t.getBoundingClientRect();
+            const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
+            if (cx < 0 || cy < 0 || cx > innerWidth || cy > innerHeight)
+              continue;                       // off-screen: not a hit-test
+            const hit = document.elementFromPoint(cx, cy);
+            const own = hit && hit.closest && hit.closest('.wtag');
+            if (!own || own.dataset.seq != w.seq) dead.push(nm);
+          }
+          return {dead, missing,
+                  dashed: document.querySelectorAll(
+                            'svg#wires path.noroute').length};
+        })()""")
+        check("every wire on the real patch routes squarely (none dashed)",
+              tags["dashed"] == 0, str(tags))
+        check("every wire has a centre tag", not tags["missing"], str(tags))
+        check("no wire tag is buried under a handle (splice stays grabbable)",
+              not tags["dead"], str(tags))
+
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()
 

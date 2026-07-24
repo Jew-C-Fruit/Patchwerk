@@ -1224,13 +1224,20 @@ const BLK = 10, GUT = 2, PITCH = BLK + GUT;
 const SH = 4.5, MIDG = BLK - 2 * SH;      // S = 10x4.5; mid-block gutter = 1u
                                           // (4.5 + 1 + 4.5 = a block — Cole 2026-07-18)
 const BX = 12, BY = 8;                    // board, in blocks
-// item 20 (Cole, 07-22, re-reported live 07-24): ONE EXTRA UNIT of margin
-// above the topmost card slots, so wires routed through the top gutter have
-// room to be seen instead of hugging the board's edge. Every block<->unit
-// conversion goes through TOPM (unitRect, blockAt, the grid backdrop and the
-// drop ghost), so the whole geometry shifts together.
-const TOPM = 1;
-const UW = BX * PITCH + GUT, UH = BY * PITCH + GUT + TOPM;
+// THE CARD GRID'S VERTICAL PHASE IS LOAD-BEARING (Cole, 07-24 — reverting
+// item 20's top margin). Block row r starts at exactly `GUT + r*PITCH`, and
+// THREE other systems hard-code that same phase:
+//   * the gutter-lattice router — CL0 (= GUT) and MID0 anchor every routable
+//     centreline. Shift the cards without shifting the lattice and T/B handle
+//     stubs land OFF-lattice, routeGutter returns null, and the wires fall
+//     back to the dashed straight line; the surviving lanes hug the card
+//     edges instead of running down the middle of the gutter.
+//   * setGhost's S-into-an-empty-block branch and alignLockedView, both of
+//     which step in whole PITCHes from 0.
+// A top margin is therefore NOT a one-constant change — the lattice, the
+// ghost and the lock alignment all have to move in lockstep. The top gutter
+// is GUT (2u), same as every other side.
+const UW = BX * PITCH + GUT, UH = BY * PITCH + GUT;
 const SIZE_PX = {                          // module footprints in px
   XS: [SH * U, SH * U],                    // 4.5x4.5 — really simple modules
   S: [BLK * U, SH * U], M: [BLK * U, BLK * U], L: [(BLK * 2 + GUT) * U, BLK * U],
@@ -1258,7 +1265,7 @@ function inBoundsPl(pl) {
   return pl.bx >= 0 && pl.by >= 0 && pl.bx + w <= BX && pl.by < BY;
 }
 function unitRect(pl) {
-  const x = pl.bx * PITCH + GUT, yB = pl.by * PITCH + GUT + TOPM;
+  const x = pl.bx * PITCH + GUT, yB = pl.by * PITCH + GUT;
   const yHalf = (pl.half || "top") === "top" ? yB : yB + SH + MIDG;
   if (pl.size === "XS")   // XS = 4.5x4.5: S's half-block logic, halved again
     return { x: x + ((pl.hh || "left") === "left" ? 0 : SH + MIDG),
@@ -1386,11 +1393,9 @@ function quadrantOf(fx, fy) {
 }
 function blockAt(x, y) {
   const ux = x / U, uy = y / U;
-  let bx = Math.floor((ux - GUT) / PITCH),
-      by = Math.floor((uy - GUT - TOPM) / PITCH);
+  let bx = Math.floor((ux - GUT) / PITCH), by = Math.floor((uy - GUT) / PITCH);
   bx = Math.max(0, Math.min(BX - 1, bx)); by = Math.max(0, Math.min(BY - 1, by));
-  const fx = (ux - GUT - bx * PITCH) / BLK,
-        fy = (uy - GUT - TOPM - by * PITCH) / BLK;
+  const fx = (ux - GUT - bx * PITCH) / BLK, fy = (uy - GUT - by * PITCH) / BLK;
   return { bx, by, fx: Math.max(0, Math.min(1, fx)), fy: Math.max(0, Math.min(1, fy)) };
 }
 // first free slot that fits `size`, scanning column-major from a preferred col
@@ -2778,10 +2783,20 @@ function renderParamLinks() {
 }
 // ---- tag placement: clear of corners, crossings, other tags -----------------
 function placeTags(routed) {
-  const CORNER_CLR = 17, TAG_SEP = 17;
+  const CORNER_CLR = 17, TAG_SEP = 17, HANDLE_CLR = 12;
+  // avoid points are [x, y] or [x, y, clearance] (default CORNER_CLR)
   const avoid = [];
   for (const r of routed) { if (r.noroute) continue; const Q = r.laned || r.poly;
     for (let n = 1; n < Q.length - 1; n++) avoid.push(Q[n]); }
+  // (Cole, 07-24) a tag that lands on a HANDLE is dead: #handles sits above
+  // #wlabels (z 26 vs 24), so the handle eats the pointer and the wire can
+  // never be grabbed to splice or double-tapped to cut. Handles keep that
+  // priority — you patch far more often than you splice — so the tag dodges
+  // them instead, the same way it already dodges corners and crossings.
+  for (const n of nodes.values()) {
+    if (!n.lay) continue;
+    for (const H of n.lay.handles) avoid.push([H.x, H.y, HANDLE_CLR]);
+  }
   for (let i = 0; i < routed.length; i++) { const A = routed[i]; if (A.noroute) continue;
     const QA = A.laned || A.poly;
     for (let j = i + 1; j < routed.length; j++) { const B = routed[j]; if (B.noroute) continue;
@@ -2815,7 +2830,7 @@ function placeTags(routed) {
       for (const d of cands) {
         if (d < CORNER_CLR || d > L - CORNER_CLR) continue;
         const x = a[0] + ux * d, y = a[1] + uy * d;
-        if (avoid.some(p => Math.hypot(p[0]-x, p[1]-y) < CORNER_CLR)) continue;
+        if (avoid.some(p => Math.hypot(p[0]-x, p[1]-y) < (p[2] || CORNER_CLR))) continue;
         if (placed.some(p => Math.hypot(p[0]-x, p[1]-y) < TAG_SEP)) continue;
         r.tagPt = { x, y }; placed.push([x, y]); orient(a, b);
         break outer;
@@ -2934,8 +2949,12 @@ function setGhost(target, ok, sEmpty) {
   fpGhost.className = ok ? "" : "bad";
   const half = fpGhost.querySelector(".halfline");
   if (target.size === "S" && sEmpty && ok) {
-    fpGhost.style.left = (r.x * U) + "px";
-    fpGhost.style.top  = ((target.by * PITCH + GUT) * U) + "px";
+    // whole-block ghost: take the block's origin from unitRect, NEVER from a
+    // second copy of the grid phase — a re-derived `by*PITCH+GUT` is exactly
+    // what drifted the ghost a unit off the drop point under item 20's margin
+    const blk = unitRect({ size: "M", bx: target.bx, by: target.by, half: null });
+    fpGhost.style.left = (blk.x * U) + "px";
+    fpGhost.style.top  = (blk.y * U) + "px";
     fpGhost.style.width  = (BLK * U) + "px";
     fpGhost.style.height = (BLK * U) + "px";
     half.style.top = (SH * U) + "px";
@@ -3426,7 +3445,7 @@ document.addEventListener("pointerup", () => {
     const d = document.createElement("div");
     d.className = "blockbg";
     d.style.left = ((x * PITCH + GUT) * U) + "px";
-    d.style.top  = ((y * PITCH + GUT + TOPM) * U) + "px";   // item 20 margin
+    d.style.top  = ((y * PITCH + GUT) * U) + "px";
     d.style.width = (BLK * U) + "px";
     d.style.height = (BLK * U) + "px";
     holder.appendChild(d);
@@ -3447,7 +3466,7 @@ const boardEl = $("board");
 function scaleFor(cols, rows) {
   const bw = boardEl.clientWidth || 1, bh = boardEl.clientHeight || 1;
   return Math.min(bw / ((cols * PITCH + GUT) * U),
-                  bh / ((rows * PITCH + GUT + TOPM) * U));
+                  bh / ((rows * PITCH + GUT) * U));
 }
 function viewScale() {
   if (uiMode === "flex") return flexZoom;
@@ -3474,10 +3493,9 @@ function visBlockBounds() {
   // block-grid range whose blocks are FULLY inside the current viewport
   const v = visibleWorldRect();
   const c0 = Math.max(0, Math.ceil((v.x - GUT) / PITCH));
-  const r0 = Math.max(0, Math.ceil((v.y - GUT - TOPM) / PITCH));
+  const r0 = Math.max(0, Math.ceil((v.y - GUT) / PITCH));
   const c1 = Math.min(BX - 1, Math.floor((v.x + v.w - GUT - BLK) / PITCH));
-  const r1 = Math.min(BY - 1,
-                      Math.floor((v.y + v.h - GUT - TOPM - BLK) / PITCH));
+  const r1 = Math.min(BY - 1, Math.floor((v.y + v.h - GUT - BLK) / PITCH));
   return (c1 >= c0 && r1 >= r0) ? { c0, c1, r0, r1 } : null;
 }
 function modulesHidden() {
