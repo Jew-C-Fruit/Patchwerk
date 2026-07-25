@@ -6293,9 +6293,20 @@ function rebuildGraph() {
   // handle. Cutting a wire removes just that destination — the LFO card
   // stays (it's a standalone node now). Legacy (pre-item-7) entries cut
   // with lfo_unassign, which removes their whole one-dest assignment.
+  // RELAY-ROUTED dests are SUPPRESSED here (Cole, live 07-24): a closed
+  // mod circuit makes relay.resolve_mod wire the param for real, so the
+  // dest shows up in state.lfos as well — drawing it would add a THIRD
+  // wire straight from the LFO to the param, bypassing the relay on
+  // screen AND owning the cut (severing it killed the modulation while
+  // the two stored hops kept drawing, looking like dummies). The stored
+  // mod_wires are the truth; the resolved duplicate is skipped, exactly
+  // as relayFed skips the resolved AUDIO duplicate above.
+  const modRouted = new Set((state.mod_wires || [])
+    .map(w => String(w.to)).filter(t => !relayIds().has(splitEp(t)[0])));
   for (let i = 0; i < lfoNodes.length; i++) {
     const l = state.lfos[i], legacy = lfoIsLegacy(l);
     for (const d of lfoDests(l)) {
+      if (modRouted.has(`${d.key}:${d.param}`)) continue;   // drawn as a hop
       const tgt = nodes.get("m:" + d.key);
       if (!tgt) continue;
       addWire({node: lfoNodes[i], port: port(lfoNodes[i], "out", "mod")},
