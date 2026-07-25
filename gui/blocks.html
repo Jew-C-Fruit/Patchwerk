@@ -6973,6 +6973,83 @@ function genWave(mtype, pv, N) {
   }
   return null;   // unknown generator → live scope only
 }
+// item 22b (Cole, 07-24): envelope params (attack/decay/release) are not
+// part of single-cycle waveform math at all, so they get an amplitude
+// OVERLAY rather than bending the shape — the waveform stays a pure shape
+// view at a normalised pitch, and the envelope is drawn faintly behind it
+// on its OWN time axis.
+//
+// Like genWave, this is a per-type RECIPE, not a generic "read the attack
+// param" — the DSP envelopes differ and several are DERIVED. fm_bell is
+// adsr(0.002, decay*0.5, 0.15, decay*0.6): reading its `decay` knob as an
+// ADSR "decay" would draw the wrong picture in two of four segments.
+//
+// Only voices whose envelope is PARAM-DRIVEN get an overlay. psines
+// (0.01/0.1/0.85/0.4) and wobble_saw (0.01/0.1/0.8/0.3) are hardcoded in
+// the DSP and wind/drone are gateless, so an overlay there would be a
+// permanently static decoration — it could never answer the question this
+// feature exists to answer. FLAGGED for Cole: he may want them anyway.
+function genEnv(mtype, pv) {
+  if (mtype === "pulse_pad")            // adsr(attack, 0.2, 0.75, release)
+    return {a: pv.attack ?? 0.15, d: 0.2, s: 0.75, r: pv.release ?? 0.8};
+  if (mtype === "fm_bell") {            // adsr(0.002, d*0.5, 0.15, d*0.6)
+    const dk = pv.decay ?? 2.5;
+    return {a: 0.002, d: dk * 0.5, s: 0.15, r: dk * 0.6};
+  }
+  if (mtype === "pluck")                // Pluck.ar decays to silence; no
+    return {a: 0.002, d: pv.decay ?? 4.0, s: 0, r: 0};   // sustain, no release
+  return null;
+}
+// Envelope amplitude at time t (seconds). Attack is linear; decay and
+// release are convex, which is both how adsr sounds and what makes a
+// pluck read as a pluck.
+function envAt(e, t, hold) {
+  if (t < e.a) return e.a > 0 ? t / e.a : 1;
+  if (t < e.a + e.d) {
+    const x = e.d > 0 ? (t - e.a) / e.d : 1;
+    return e.s + (1 - e.s) * Math.pow(1 - x, 2);
+  }
+  if (t < e.a + e.d + hold) return e.s;
+  if (e.r <= 0) return 0;
+  const x = (t - e.a - e.d - hold) / e.r;
+  return x >= 1 ? 0 : e.s * Math.pow(1 - x, 2);
+}
+function drawGenEnvelope(ctx, e, W, mid, span, colour) {
+  // a nominal sustain hold so S is visible; skipped when there is no
+  // sustain to show (pluck), where the decay IS the whole picture
+  const hold = e.s > 0 ? Math.max(0.15, 0.25 * (e.a + e.d + e.r)) : 0;
+  const T = e.a + e.d + hold + e.r;
+  if (!(T > 0)) return;
+  const N = 96, up = [], dn = [];
+  for (let i = 0; i <= N; i++) {
+    const x = (i / N) * W;
+    const v = Math.max(0, Math.min(1, envAt(e, (i / N) * T, hold)));
+    up.push([x, mid - v * span]);
+    dn.push([x, mid + v * span]);
+  }
+  ctx.save();
+  ctx.strokeStyle = colour;
+  // DASHED on purpose: the envelope outline runs exactly where the
+  // waveform's peaks do (that IS the amplitude contour), so a solid faint
+  // line just reads as a second, blurrier waveform. A dash says "different
+  // kind of line, different time axis" at a glance.
+  ctx.setLineDash([3, 2]);
+  ctx.globalAlpha = 0.55;
+  ctx.lineWidth = 1;
+  for (const side of [up, dn]) {
+    ctx.beginPath();
+    side.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 0.10;               // the band between them, barely there
+  ctx.fillStyle = colour;
+  ctx.beginPath();
+  up.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+  for (let i = dn.length - 1; i >= 0; i--) ctx.lineTo(dn[i][0], dn[i][1]);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
 function drawPsineViz(n, ctx, W, H, style) {
   const m = ((state && state.chain) || []).find(x => x.key === n.chainKey);
   if (!m) return;
@@ -7034,6 +7111,12 @@ function drawPsineViz(n, ctx, W, H, style) {
   // shape-normalized; amp modulates display gain so the knob still reads
   const data = n._psWave, N = data.length;
   const g = (mid - 4) * (0.25 + 0.75 * Math.min(1, A)) / n._psPeak;
+  // item 22b: the envelope rides BEHIND the shape, at the same display
+  // gain, so it reads as the amplitude contour the waveform sits inside
+  const env = genEnv(mtype, pv);
+  if (env) drawGenEnvelope(ctx, env, W, mid,
+                           (mid - 4) * (0.25 + 0.75 * Math.min(1, A)),
+                           ctx.strokeStyle);
   ctx.beginPath();
   for (let i = 0; i < N; i++) {
     const x = (i / (N - 1)) * W;
