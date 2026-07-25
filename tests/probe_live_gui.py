@@ -259,18 +259,29 @@ def main() -> int:
               ov["worst"] < 8, str(ov))
 
         # ============================================================
-        # 5. layout: top margin, header clearance, scrollbars
+        # 5. layout: grid phase, header clearance, scrollbars
         # ============================================================
+        # REWRITTEN 2026-07-25 against PR #40. This section used to read
+        # `topm: TOPM` and assert `topUnits == GUT + TOPM`. Item 20's top
+        # margin was REVERTED and the TOPM knob REMOVED ENTIRELY (a dead
+        # knob invites the bug back), so the old evaluate threw a bare
+        # ReferenceError against any current build — the probe could not
+        # run at all, let alone verify anything. The invariant that
+        # actually matters is the one #40 restored: the card grid's
+        # vertical phase is GUT, and the wire router must agree with it.
         g = page.evaluate("""() => ({
           topUnits: unitRect({size: 'M', bx: 0, by: 0, half: null}).y,
-          gut: GUT, topm: TOPM,
+          gut: GUT,
           hdrH: Math.ceil(document.querySelector('header')
                   .getBoundingClientRect().height),
           boardTop: parseFloat(document.getElementById('board').style.top || '0'),
           sb: getComputedStyle(document.getElementById('board')).scrollbarWidth,
+          topmGone: typeof TOPM === 'undefined',
         })""")
-        check("the top row sits GUT + 1 unit down (wire clearance)",
-              g["topUnits"] == g["gut"] + g["topm"], str(g))
+        check("the top row sits exactly GUT down — no top margin (#40)",
+              g["topUnits"] == g["gut"], str(g))
+        check("the TOPM knob is gone, not merely zeroed",
+              g["topmGone"] is True, str(g))
         check("the board clears the MEASURED header (never occluded)",
               g["boardTop"] >= g["hdrH"] - 1, str(g))
         check("scrollbars are the thin variant", g["sb"] == "thin", str(g))
