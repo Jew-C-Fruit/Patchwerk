@@ -31,11 +31,13 @@ _CHROME_GLOB = (glob.glob("/opt/pw-browsers/chromium-*/chrome-linux/chrome")
 CHROME = _CHROME_GLOB[0] if _CHROME_GLOB else None
 
 FAILURES = []
+RAN = []
 
 
 def check(name, cond, extra=""):
     print(("ok    " if cond else "FAIL  ") + name
           + (f"  [{extra}]" if extra and not cond else ""))
+    RAN.append(name)
     if not cond:
         FAILURES.append(name)
 
@@ -148,7 +150,8 @@ def main():
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()
 
-    print(f"\n{'PASS' if not FAILURES else 'FAIL'} — {len(FAILURES)} failures")
+    print(f"\n{'PASS' if not FAILURES else 'FAIL'} — "
+          f"{len(RAN)} checks, {len(FAILURES)} failures")
     return 1 if FAILURES else 0
 
 
