@@ -182,8 +182,8 @@ def test_spawn_and_state():
     check("logic settings shape",
           ls == {"id": "logic", "op": "AND", "ops": list(GATE_OPS),
                  "out": False})
-    check("op list is AND/OR/NOR/XOR/SR latch (NOT is gone)",
-          GATE_OPS == ("AND", "OR", "NOR", "XOR", "SR latch"))
+    check("op list is AND/OR/NOR/XOR/SR latch/T latch (NOT is gone)",
+          GATE_OPS == ("AND", "OR", "NOR", "XOR", "SR latch", "T latch"))
     rs = app.relays["relay"].settings()
     check("relay settings shape (open by default, no circuits yet)",
           rs == {"id": "relay", "closed": False, "circuits": {}})
@@ -367,6 +367,144 @@ def test_sr_latch():
     app.set_logic(lid, op="SR latch")
     check("re-entering SR starts lo (the held-hi latch did not survive)",
           out(app, lid) is False)
+
+
+# ---- T latch -----------------------------------------------------------------
+
+def test_t_latch():
+    """The T latch exists because a SINGLE pulse source cannot express
+    alternation with anything else we have: SR needs two sources (one pulse
+    into :a latches hi and nothing ever resets it; the same source into both
+    legs is reset-wins, so permanently lo), and the level ops are pure
+    functions of the current levels. Each rising edge at :a FLIPS."""
+    app = SynthApp(use_midi=False, use_reload=False)
+
+    # the motivating case: one clock, alternating output (divide by 2)
+    lid = app.spawn_logic()
+    app.set_logic(lid, op="T latch")
+    cid = app.spawn_clock()
+    app.clocks[cid].shutdown()            # stop the grid thread; tick by hand
+    app.set_ctl_wire("add", cid, f"{lid}:a")
+    check("T latch starts lo", out(app, lid) is False)
+    app.clocks[cid].fire()
+    check("first clock tick flips it hi", out(app, lid) is True)
+    app.clocks[cid].fire()
+    check("second tick flips it back lo", out(app, lid) is False)
+    app.clocks[cid].fire()
+    check("third tick flips hi again (durable, not a blip)",
+          out(app, lid) is True)
+
+    # contrast, on the same wiring: SR would latch hi and stay there
+    sid = app.spawn_logic()
+    app.set_logic(sid, op="SR latch")
+    app.set_ctl_wire("add", cid, f"{sid}:a")
+    app.clocks[cid].fire()
+    app.clocks[cid].fire()
+    check("SR on the same one clock is stuck hi (this is what T fixes)",
+          out(app, sid) is True)
+
+    # a LEVEL that stays hi is one edge, not a stream of them
+    app2 = SynthApp(use_midi=False, use_reload=False)
+    l2 = app2.spawn_logic()
+    app2.set_logic(l2, op="T latch")
+    b = latch_button(app2)
+    app2.set_ctl_wire("add", b, f"{l2}:a")
+    set_lvl(app2, b, True)
+    check("rising edge flips once", out(app2, l2) is True)
+    app2.gates.recompute()
+    app2.gates.recompute()
+    check("a steady hi does not keep flipping", out(app2, l2) is True)
+    set_lvl(app2, b, False)
+    check("the falling edge is silent", out(app2, l2) is True)
+    set_lvl(app2, b, True)
+    check("the next rising edge flips again", out(app2, l2) is False)
+
+    # attach-while-hi is not an edge (same rule every trig-in follows)
+    app3 = SynthApp(use_midi=False, use_reload=False)
+    l3 = app3.spawn_logic()
+    app3.set_logic(l3, op="T latch")
+    b3 = latch_button(app3)
+    set_lvl(app3, b3, True)               # already hi BEFORE the wire lands
+    app3.set_ctl_wire("add", b3, f"{l3}:a")
+    check("attaching an already-hi source is not an edge",
+          out(app3, l3) is False)
+    set_lvl(app3, b3, False)
+    set_lvl(app3, b3, True)
+    check("its first real rising edge does flip", out(app3, l3) is True)
+    # ...and re-wiring starts edge-fresh rather than reading a stale sample
+    app3.set_ctl_wire("remove", b3, f"{l3}:a")
+    app3.set_ctl_wire("add", b3, f"{l3}:a")
+    check("re-attaching a still-hi source is not an edge either",
+          out(app3, l3) is True)
+
+    # :b is RESET and wins, exactly as SR's does
+    app4 = SynthApp(use_midi=False, use_reload=False)
+    l4 = app4.spawn_logic()
+    app4.set_logic(l4, op="T latch")
+    ba, bb = latch_button(app4), latch_button(app4)
+    app4.set_ctl_wire("add", ba, f"{l4}:a")
+    app4.set_ctl_wire("add", bb, f"{l4}:b")
+    set_lvl(app4, ba, True)
+    check("toggled hi", out(app4, l4) is True)
+    set_lvl(app4, bb, True)
+    check("reset (:b) forces lo", out(app4, l4) is False)
+    set_lvl(app4, ba, False)
+    set_lvl(app4, ba, True)
+    check("a rising edge while held in reset is eaten",
+          out(app4, l4) is False)
+    set_lvl(app4, bb, False)
+    set_lvl(app4, ba, False)
+    set_lvl(app4, ba, True)
+    check("toggling resumes once reset drops", out(app4, l4) is True)
+
+    # stateful-op swap discipline: wires survive, state does not
+    app5 = SynthApp(use_midi=False, use_reload=False)
+    l5 = app5.spawn_logic()
+    b5a, b5b = latch_button(app5), latch_button(app5)
+    app5.set_ctl_wire("add", b5a, f"{l5}:a")
+    app5.set_ctl_wire("add", b5b, f"{l5}:b")
+    app5.set_logic(l5, op="T latch")
+    check("AND→T preserves the :a and :b wires",
+          {"from": b5a, "to": f"{l5}:a"} in app5.ctl_wires
+          and {"from": b5b, "to": f"{l5}:b"} in app5.ctl_wires)
+    set_lvl(app5, b5a, True)
+    check("T latch holds hi pre-swap", out(app5, l5) is True)
+    set_lvl(app5, b5a, False)        # both ins lo: only STATE can hold it hi
+    check("T latch still hi with both ins lo", out(app5, l5) is True)
+    app5.set_logic(l5, op="SR latch")
+    check("T→SR starts lo (a held-hi T does not become a held-hi SR)",
+          out(app5, l5) is False)
+    app5.set_logic(l5, op="T latch")
+    check("SR→T starts lo too", out(app5, l5) is False)
+
+    # chained T latches divide by 2 per stage
+    app6 = SynthApp(use_midi=False, use_reload=False)
+    t1, t2 = app6.spawn_logic(), app6.spawn_logic()
+    app6.set_logic(t1, op="T latch")
+    app6.set_logic(t2, op="T latch")
+    c6 = app6.spawn_clock()
+    app6.clocks[c6].shutdown()
+    app6.set_ctl_wire("add", c6, f"{t1}:a")
+    app6.set_ctl_wire("add", t1, f"{t2}:a")
+    seen = []
+    for _ in range(4):
+        app6.clocks[c6].fire()
+        seen.append((out(app6, t1), out(app6, t2)))
+    # stage 1 has period 2, stage 2 has period 4 — t2 flips on each of t1's
+    # RISING edges, so the pair walks TT, FT, TF, FF and repeats
+    check("chained T latches divide by 2 per stage (t1 period 2, t2 period 4)",
+          seen == [(True, True), (False, True),
+                   (True, False), (False, False)])
+
+    # persistence
+    app7 = SynthApp(use_midi=False, use_reload=False)
+    l7 = app7.spawn_logic()
+    app7.set_logic(l7, op="T latch")
+    snap = presets.snapshot(app7)
+    app8 = SynthApp(use_midi=False, use_reload=False)
+    presets._apply(app8, snap)
+    check("a T latch survives a preset round-trip",
+          app8.gates.logics[l7].op == "T latch")
 
 
 # ---- rising-edge trig system -------------------------------------------------
@@ -983,6 +1121,7 @@ def main():
     test_wire_grammar()
     test_truth_tables()
     test_sr_latch()
+    test_t_latch()
     test_trig_edges()
     test_ping_thru_logic()
     test_level_ins()

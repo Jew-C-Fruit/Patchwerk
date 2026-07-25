@@ -54,8 +54,12 @@ from __future__ import annotations
 
 from .relay import MAX_CIRCUITS
 
-GATE_OPS = ("AND", "OR", "NOR", "XOR", "SR latch")
+GATE_OPS = ("AND", "OR", "NOR", "XOR", "SR latch", "T latch")
 LOGIC_INS = ("a", "b")           # EVERY op: exactly these two, always
+# ops that carry STATE across recomputes: their out is not a pure function
+# of the current input levels, so entering or leaving one starts it lo
+# rather than inheriting whatever the previous op happened to be showing.
+_STATEFUL_OPS = frozenset({"SR latch", "T latch"})
 # migration: shaped-endpoint saves (":set"/":reset" wires, op "NOT")
 _LEGACY_INS = {"set": "a", "reset": "b"}
 DECK_ACTIONS = {"rec": "record", "play": "play", "stop": "stop",
@@ -72,6 +76,11 @@ class LogicGate:
         self.id = lid
         self.op = "AND"
         self.out = False
+        # T latch only: the last level SAMPLED at :a, so a rising edge can
+        # be told from a steady hi. None = never sampled, which is how
+        # "attaching a wire whose source is already hi is not an edge"
+        # stays true here as it does for every other trig-in.
+        self.a_prev: bool | None = None
 
     def settings(self) -> dict:
         return {"id": self.id, "op": self.op, "ops": list(GATE_OPS),
@@ -109,6 +118,7 @@ class GateManager:
         self.app.ctl_wires = [w for w in self.app.ctl_wires if not touches(w)]
         for d in dropped:                  # a later re-wire starts edge-fresh
             self._edge.pop(d, None)
+            self._forget_edge(d)
         try:                               # orphaned relay circuits re-infer
             self.app._relay_refresh_kinds()
         except Exception:  # noqa: BLE001
@@ -122,12 +132,15 @@ class GateManager:
             op = "NOR"   # migration: NOR with one wired in IS the old NOT
         if op is not None and op in GATE_OPS and op != lg.op:
             # the endpoint shape is :a/:b for EVERY op — wires never drop
-            was_sr = lg.op == "SR latch"
+            was_stateful = lg.op in _STATEFUL_OPS
             lg.op = op
-            if was_sr != (op == "SR latch"):
-                # the latch neither survives the swap away NOR inherits the
-                # previous op's out on the way in — a fresh SR starts lo
+            if was_stateful or op in _STATEFUL_OPS:
+                # a latch neither survives the swap away NOR inherits the
+                # previous op's out on the way in — a fresh latch starts lo.
+                # SR -> T counts: they are different latches, not one latch
+                # with a different label.
                 lg.out = False
+            lg.a_prev = None       # the next hi at :a is not a stale edge
             self.recompute()
 
     # -- wire grammar helpers --------------------------------------------------
@@ -194,6 +207,16 @@ class GateManager:
         self.app.ctl_wires = [w for w in self.app.ctl_wires
                               if w.get("to") != dst]
         self._edge.pop(dst, None)
+        self._forget_edge(dst)
+
+    def _forget_edge(self, dst) -> None:
+        """A T latch's :a lost its wire — drop the sampled level so the
+        next source to land there starts edge-fresh instead of reading an
+        attach as a rising edge (mirrors popping _edge for trig-ins)."""
+        base, _, sub = str(dst or "").partition(":")
+        lg = self.logics.get(base)
+        if lg is not None and _LEGACY_INS.get(sub, sub) == "a":
+            lg.a_prev = None
 
     # -- levels ----------------------------------------------------------------
 
@@ -276,6 +299,9 @@ class GateManager:
     def _settle(self) -> None:
         changed_nodes: set[str] = set()
         for _ in range(_MAX_SETTLE):
+            # PHASE 1 — the combinational net, to a fixpoint. Edge-triggered
+            # ops HOLD here: a toggle evaluated once per iteration would flip
+            # on every pass and never converge.
             dirty = False
             for lg in self.logics.values():
                 a = self._in_level(f"{lg.id}:a")
@@ -283,6 +309,10 @@ class GateManager:
                 if lg.op == "SR latch":
                     # :a is SET, :b is RESET — reset wins
                     new = False if b else (True if a else lg.out)
+                elif lg.op == "T latch":
+                    # :b is RESET and wins, exactly as SR's does; the toggle
+                    # at :a is an EDGE and belongs to phase 2.
+                    new = False if b else lg.out
                 elif lg.op == "AND":
                     new = a and b
                 elif lg.op == "OR":
@@ -295,6 +325,27 @@ class GateManager:
                     lg.out = new
                     changed_nodes.add(lg.id)
                     dirty = True
+            if dirty:
+                continue
+
+            # PHASE 2 — sample rising edges, ONCE per real edge, and only
+            # once the combinational net around them has settled. Sampling
+            # updates a_prev, so a second phase-2 pass inside the same
+            # recompute sees no edge; the outer loop then re-settles and
+            # lets a toggle propagate into whatever it feeds (chained T
+            # latches divide by 2 per stage, one stage per iteration).
+            for lg in self.logics.values():
+                if lg.op != "T latch":
+                    continue
+                a = self._in_level(f"{lg.id}:a")
+                prev, lg.a_prev = lg.a_prev, a
+                if not a or prev is None or prev:
+                    continue           # steady, falling, or first sight
+                if self._in_level(f"{lg.id}:b"):
+                    continue           # held in reset — the edge is eaten
+                lg.out = not lg.out
+                changed_nodes.add(lg.id)
+                dirty = True
             if not dirty:
                 break
         for nid in sorted(changed_nodes):
