@@ -1477,6 +1477,11 @@ class SynthApp:
                 self._relay_refresh_kinds()
             elif action == "remove":
                 self.lfos.unwire(lid, key, name)
+                # a dest the RELAY layer owns re-asserts itself: its stored
+                # mod wires still exist and its circuits are still closed,
+                # so an unwire here would otherwise leave those hops drawn
+                # but silent (Cole's "the relay wires are dummies", 07-24)
+                relay_mod.resolve_mod(self)
             else:
                 raise ValueError(f"unknown lfo_wire action {action!r}")
 

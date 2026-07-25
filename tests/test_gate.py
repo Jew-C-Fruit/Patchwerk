@@ -772,6 +772,14 @@ def test_relay_mod_contacts_and_hygiene():
           owner(app, "pluck", "amp") == l2
           and owner(app, "echo", "amp") == l2)
 
+    # a relay-owned dest RE-ASSERTS itself if something unwires it directly
+    # (Cole, live 07-24: the GUI used to draw a shortcut wire whose cut sent
+    # lfo_wire remove, leaving the stored hops drawn but silent). The hops
+    # still exist and the circuit is still closed, so the layer re-wires.
+    app.lfo_wire("remove", l2, "echo", "amp")
+    check("unwiring a relay-owned dest directly re-resolves it",
+          owner(app, "echo", "amp") == l2)
+
     # a DIRECT lfo_wire onto a relay-driven param evicts the relay route
     app.lfo_wire("add", l1, "echo", "amp")
     check("a direct wire evicts the relay-routed one",

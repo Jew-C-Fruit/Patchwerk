@@ -3153,6 +3153,48 @@ def main():
         check("the mod pair is colour-matched and labels the whole hop",
               mod18["paired"]
               and mod18["lbl"] == "LFO > Relay > Echo.mix", str(mod18))
+
+        # A CLOSED mod circuit makes resolve_mod wire the param FOR REAL, so
+        # the dest also appears in state.lfos. Drawing it there too would add
+        # a third wire straight from the LFO to the param, bypassing the
+        # relay on screen and owning the cut — severing it killed the
+        # modulation while the two hops kept drawing (Cole, live 07-24).
+        # The stored mod_wires are the truth; the resolved duplicate is
+        # suppressed, exactly like the resolved AUDIO duplicate.
+        st18mc = json.loads(json.dumps(st18m))
+        st18mc["relays"][0]["closed"] = True
+        st18mc["lfos"][0]["dests"] = [{"key": "echo", "param": "mix",
+                                       "center": 0.3}]
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st18mc)
+        page.wait_for_timeout(500)
+        dup18 = page.evaluate("""(() => {
+          const mods = wires.filter(w => w.sig === 'mod');
+          return {n: mods.length,
+                  shortcut: mods.some(w => w.from.node.gid === 'lfo:lfo'
+                                           && w.to.node.gid === 'm:echo'),
+                  hops: mods.filter(w => w.from.node.gid === 'relay'
+                                         || w.to.node.gid === 'relay').length,
+                  eps: mods.map(w => [w.from.node.gid, w.to.node.gid])};
+        })()""")
+        check("a closed mod circuit draws NO shortcut wire around the relay",
+              dup18["n"] == 2 and dup18["hops"] == 2
+              and not dup18["shortcut"], str(dup18))
+        # …and an unrelated DIRECT dest on the same LFO still draws
+        st18md = json.loads(json.dumps(st18mc))
+        st18md["lfos"][0]["dests"].append({"key": "echo", "param": "amp",
+                                           "center": 0.5})
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st18md)
+        page.wait_for_timeout(500)
+        mix18 = page.evaluate("""(() => {
+          const direct = wires.filter(w => w.sig === 'mod'
+            && w.from.node.gid === 'lfo:lfo' && w.to.node.gid === 'm:echo');
+          return {n: wires.filter(w => w.sig === 'mod').length,
+                  direct: direct.map(w => w.to.port.param)};
+        })()""")
+        check("a DIRECT dest on the same LFO is untouched by the suppression",
+              mix18["n"] == 3 and mix18["direct"] == ["amp"], str(mix18))
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st18m)
+        page.wait_for_timeout(400)
         modact = page.evaluate("""(() => {
           const n = nodes.get('relay'), lfoN = nodes.get('lfo:lfo');
           const echoN = nodes.get('m:echo');
