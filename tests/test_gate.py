@@ -786,17 +786,25 @@ def test_relay_audio_and_removal():
           and {"from": f"{rid}:3", "to": "echo"} in app.graph_wires)
     check("audio circuit claims its kind",
           app.relays[rid].kinds.get(3) == "audio")
-    check("open circuit parks the source (disconnect recorded)",
-          ("disconnect", "pluck") in app.rack.calls)
+    # item 25: the claim spawns a PERMANENT lagged-gate circuit record
+    # (headless here: bus/node None, the bookkeeping IS the contract)
+    check("claimed circuit gets its gate record",
+          f"{rid}:3" in app.relay_audio.circuits)
+    check("circuit bookkeeping aims at the out-wire dst",
+          app.relay_audio.circuits[f"{rid}:3"]["dst"] == "echo")
+    check("state wires broadcast the STORED endpoints verbatim",
+          {"from": "pluck", "to": f"{rid}:3"} in app._wires_state()
+          and {"from": f"{rid}:3", "to": "echo"} in app._wires_state())
 
+    # open/close is the GATE PARAM only — never a rewire/disconnect/reorder
     app.rack.calls.clear()
     app.set_relay(rid, closed=True)
-    check("closing rewires the source through the circuit",
-          ("rewire", "pluck", "echo") in app.rack.calls)
-    app.rack.calls.clear()
     app.set_relay(rid, closed=False)
-    check("opening disconnects/parks the source again",
-          ("disconnect", "pluck") in app.rack.calls)
+    check("toggling never touches the rack (no rewire/park/reorder)",
+          app.rack.calls == [])
+    check("wires survive toggles verbatim",
+          {"from": "pluck", "to": f"{rid}:3"} in app.graph_wires
+          and {"from": f"{rid}:3", "to": "echo"} in app.graph_wires)
 
     # kind mismatch: a binary wire can't land on the audio circuit
     b = app.spawn_button()
@@ -813,11 +821,13 @@ def test_relay_audio_and_removal():
           not any(str(w.get("from")).startswith(rid)
                   or str(w.get("to")).startswith(rid)
                   for w in app.ctl_wires))
-    check("removal scrubs graph wires (source parked, virtual edge gone)",
+    check("removal scrubs graph wires (source parked, circuit edge gone)",
           {"from": "pluck", "to": None} in app.graph_wires
           and not any(str(w.get("from")).startswith(rid)
                       or str(w.get("to") or "").startswith(rid)
                       for w in app.graph_wires))
+    check("removal releases the circuit's gate record",
+          f"{rid}:3" not in app.relay_audio.circuits)
 
 
 # ---- relay: MOD circuit (LFO through a relay, Cole 07-24) --------------------

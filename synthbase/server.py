@@ -71,7 +71,11 @@ Protocol (JSON messages):
          first wire, and a circuit is 1:1 on BOTH sides (adding steals).
          closed gates flow per kind (opening all_offs note circuits);
          "relay:ctl" is a binary level-in driving closed; set_relay is
-         the manual click, last writer wins.)
+         the manual click, last writer wins. Item 25: a claimed AUDIO
+         circuit is a permanent lagged-gate synth, so its wires are REAL
+         graph wires open or closed — state "wires" broadcasts the STORED
+         graph wires, relay endpoints verbatim, and open/close moves only
+         the synth's gate param (clickless, ~10 ms lag, tails ring out).)
     {"type": "spawn_literal"} / {"type": "remove_literal", "id": "literal.2"}
     {"type": "set_literal", "id": "literal", "every": "immediate",
      "extract": "lowest-held", "place": "absolute", "fold_octave": 3,

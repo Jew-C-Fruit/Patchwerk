@@ -18,6 +18,10 @@
 > contacts and the `mod` circuit plane, and the wire fan-nesting rule
 > (#44). #40–#44 are GUI-only and change nothing this doc specifies
 > outside §13, which defers UI geometry to `docs/BLOCKS_SPEC.md`.
+> **The relay-audio and effects sections were revised with P1** — item 25
+> (relay audio circuits became permanent lagged-gate synths; `state.wires`
+> now broadcasts the stored graph) and item 11 (the new `power_shaper`
+> effect). Everything else still stands as verified.
 
 Sibling docs and their jobs (this doc does not duplicate them):
 `CLAUDE.md` = the module-authoring contract + house rules for LLM work;
@@ -553,9 +557,9 @@ Restore migrates the pre-item-7 per-assignment format.
 **Relay-routed modulation (`mod` circuits, PR #43).** An LFO can also
 reach a param THROUGH a relay. Those hops are stored verbatim in
 `app.mod_wires` (`"lfo"` → `"relay:1"` → `"echo:mix"`) as their own
-plane and are BROADCAST in `state`, so — unlike the audio plane, which
-still leans on the client-local `relayAW` store until item 25 — this
-plane needs no client-side bookkeeping. `relay.resolve_mod(app)` walks
+plane and are BROADCAST in `state`, so this plane needs no client-side
+bookkeeping — and since item 25 the audio plane works the same way
+(stored wires broadcast, no client store). `relay.resolve_mod(app)` walks
 every LFO through CLOSED circuits to the params it actually drives and
 diffs that against `LFOManager`'s destinations: closing a circuit maps
 the param, opening it unmaps and the param settles back on its own knob
@@ -631,24 +635,35 @@ notes). **binary** — out level = OR(in levels) AND closed, computed
 lazily; pulses pass while closed; a closed change re-settles the plane.
 **mod** — see §6.1; the stored `app.mod_wires` plane is broadcast, and
 `resolve_mod` maps/unmaps LFO destinations as circuits close and open.
-**audio** — graph_wires store relay endpoints verbatim (bypassing
-`rack.find`); `resolve_audio` flattens each real source's wire through
-closed relays to a real destination — open or out-unwired circuits park
-the source on the null bus; resolved edges get the same cycle-guard
-walk (a cycling source stays disconnected) and drive
-`reorder_for_wires`. Removing a relay silences its note circuits, parks
-its audio feeders, and drops all its wires.
+**audio** (item 25) — graph_wires store relay endpoints verbatim
+(bypassing `rack.find`) and every CLAIMED audio circuit is a permanent
+`_relay_gate` synth (`In.ar → × Lag.kr(gate, 10 ms) → Out.ar`) owned by
+`RelayAudioManager`, which follows the `LFOManager` lifecycle:
+registration tracked per server OBJECT, server touches guarded, records
+released when a circuit is unclaimed or its relay removed. The wires are
+therefore REAL open or closed — a source wired into `"relay:k"` writes
+that circuit's own in-bus, the gate synth writes the circuit's out-wire
+destination (the null bus when that side is unwired) — and `set_closed`
+moves only the gate param, so opening is clickless and reverb/echo tails
+downstream ring out honestly. `relay.apply_audio(app)` is the single
+entry point (wire edits, rebuilds, chain edits, relay removal): it syncs
+the gate synths, points everything at its bus, and topologically orders
+every wire's src before its dst with the gate synths in the same
+universe; with no claimed circuits it degrades to
+`rack.reorder_for_wires`. Cycles are still refused at `graph_wire add`
+by the stored-wire walk. Removing a relay silences its note circuits,
+parks its audio feeders, drops all its wires and frees its gates.
 
 GUI: a circuit allocates ONE line colour from its own family on first
 sight and both halves draw in it (light green in, light green out), and
 wire labels name the whole hop — `"Keys → Relay → Voice"`,
 `"LFO → Relay → Echo.mix"` — with an unwired end simply left off.
 
-**Open (item 25):** the audio plane still resolves rather than stores,
-so audio relay hops render from the client-local `relayAW` store and
-misrender to a second client. The fix is to make each claimed audio
-circuit a tiny permanent gate synth and broadcast stored `graph_wires` —
-the `mod` plane above is the template.
+**Item 25 (done, P1):** the audio plane STORES rather than resolves, and
+`state.wires` is the stored graph — relay endpoints verbatim, parked
+(`"to": null`) wires omitted — so audio relay hops render from server
+truth on every client. `resolve_audio` / `resolved_wires` and the GUI's
+`relayAW` store are deleted.
 
 ---
 
@@ -801,6 +816,7 @@ All psine voices share ADSR .01/.1/.85/.4 and a 24-partial bank.
 | `drive` | Drive | dirt | gain 1–40 · 4 exp; tone 500–12000 · 4000 exp; mix 0–1 · 1 | tanh soft clip (×0.7) + post-clip LPF |
 | `bitcrush` | Bitcrush | dirt | srate 400–44100 · 8000 exp; bits 2–16 · 10; mix 0–1 · 1 | Latch resampling + amplitude quantization |
 | `wavefolder` | Wavefolder | dirt | fold 1–12 · 2.5 exp; symmetry −0.5–0.5 · 0; mix 0–1 · 1 | fold2 with pre-fold DC offset (`symmetry`), LeakDC |
+| `power_shaper` | Power Shaper | psine | p 1–64 · 2 exp; drive 0.25–8 · 1 exp; mix 0–1 · 1 | item 11: the psine waveshaper law over INCOMING audio — `sgn(x)·abs(x)^(2/p)` after `drive`, LeakDC, dry/wet. Same law and same aliasing fingerprint as `power_sine_shaper`; the source/effect contract stays hard (this one takes `in_bus`, the generator does not) |
 | `compressor` | Compressor | dyn | threshold 0.01–1 · 0.3 exp; ratio 1–20 · 4 exp; attack 0.001–0.2 · 0.01 exp; release 0.02–1 · 0.15 exp; makeup 0.5–4 · 1.3 exp | Compander, downward only |
 | `pitchshift` | Pitch Shift | vox | semitones −24–24 · 0; mix 0–1 · 1; window 0.02–0.2 · 0.04 exp; smear 0–0.02 · 0.002 | granular PitchShift; `window` is grain size AND latency; `smear` 0 = robotic |
 | `ringmod` | Ring Mod | vox | carrier 20–4000 · 200 exp; mix 0–1 · 0.8 | multiply by lagged sine carrier |
@@ -918,8 +934,10 @@ curve, options, default, lfo-mapped flag, value}), `volume`, `devices`
 (inputs/outputs), `current_input`, `current_output`, `input_enabled`,
 `boot_note`, `voice_target` (legacy), `voices` [{id, target}], `tonics`,
 `literals`, `keyshifts`, `buttons`, `clocks`, `transpose`,
-`midi_inputs`, `midi_port`, `midi_enabled`, `wires` (audio, derived
-live), `ctl_wires`, `mod_wires` (relay-routed modulation hops, stored
+`midi_inputs`, `midi_port`, `midi_enabled`, `wires` (audio: the STORED
+graph wires since item 25 — relay endpoints verbatim, parked wires
+omitted; derived live from the rack only before the first structural
+edit), `ctl_wires`, `mod_wires` (relay-routed modulation hops, stored
 verbatim — §6.1), `drums_target`, `arp`, `transport`,
 `transport_cards`, `drone` (legacy shape), `drums`, `looper`, `lfos`,
 `thresholds`, `logics`, `relays`, `presets`, `available` (palette:

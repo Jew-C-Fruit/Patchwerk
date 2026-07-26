@@ -306,6 +306,10 @@ class SynthApp:
         # binary rework: relays (type-agnostic switched junctions),
         # keyshift-style dict of nodes
         self.relays: dict[str, RelayNode] = {}
+        # item 25: the relay AUDIO plane — one permanent lagged-gate synth
+        # per claimed audio circuit (LFOManager lifecycle pattern; replaces
+        # the retired resolve_audio/resolved_wires resolution layer)
+        self.relay_audio = relay_mod.RelayAudioManager(self)
         # the MOD plane's stored wires (07-24): LFO out → relay circuit →
         # "<key>:<param>". Which params an LFO really drives is RESOLVED
         # from these through the closed circuits (relay.resolve_mod);
@@ -478,17 +482,16 @@ class SynthApp:
                     self.rack.audio_rewire(w["from"], w["to"])
             except Exception:  # noqa: BLE001 — one bad wire must not stop the rest
                 pass
+        # ordering + the relay audio plane in one pass: apply_audio degrades
+        # to a plain (cheap-pathed) reorder_for_wires when no audio circuit
+        # is claimed; with circuits, sources wired into relay endpoints —
+        # skipped above — re-point at their circuit in-buses against the
+        # FRESH rack (the gate synths themselves are engine-level and
+        # survive a rack rebuild)
         try:
-            self.rack.reorder_for_wires(self.graph_wires)
+            relay_mod.apply_audio(self)
         except Exception:  # noqa: BLE001
             pass
-        if self.relays:
-            # relay-routed sources were skipped above (their stored dst is
-            # a virtual endpoint) — resolve them against the fresh rack
-            try:
-                relay_mod.resolve_audio(self)
-            except Exception:  # noqa: BLE001
-                pass
 
     def _on_node_replaced(self, key: str) -> None:
         self.lfos.on_node_replaced(key)
@@ -897,6 +900,14 @@ class SynthApp:
                         pass
                 if voice_touched:
                     self._make_voices(self.patch or {})
+                if self.relays:
+                    # circuits that fed (or were fed by) the removed module
+                    # re-point via the healed wires; unclaimed circuits
+                    # (kind forgotten above) release their gate synths
+                    try:
+                        relay_mod.apply_audio(self)
+                    except Exception:  # noqa: BLE001
+                        pass
 
             elif action == "move":
                 # audio order is wire-defined; a move is a pure list reorder.
@@ -906,7 +917,7 @@ class SynthApp:
                 j = max(0, min(len(insts) - 1, i + (index or 0)))
                 insts.insert(j, insts.pop(i))
                 self.rack.instances = insts + svc
-                self.rack.reorder_for_wires(self.graph_wires)
+                relay_mod.apply_audio(self)
             else:
                 raise ValueError(f"unknown edit_chain action {action!r}")
 
@@ -922,9 +933,10 @@ class SynthApp:
         (buses sum). Stored so rebuilds re-apply it.
 
         Binary rework: relay CIRCUIT endpoints ("relay:3") are legal on
-        either end — they bypass rack.find and are stored VERBATIM; the
-        audio consequences resolve through relay.resolve_audio (closed →
-        rewire through the circuit, open → parked)."""
+        either end — they bypass rack.find and are stored VERBATIM. Item
+        25: a claimed audio circuit is a permanent lagged-gate synth, so
+        these wires are REAL whether the relay is open or closed
+        (relay.apply_audio); open/close moves only the gate param."""
         with self._lock:
             if not self.rack:
                 raise RuntimeError("no rack running")
@@ -972,21 +984,23 @@ class SynthApp:
                 if src_rk is None and dst_rk is None:
                     self.rack.audio_rewire(src, dst)   # plain wire: as before
             elif action == "remove":
-                wires.append({"from": src, "to": None})
-                self.graph_wires = wires
                 if src_rk is None:
+                    wires.append({"from": src, "to": None})
+                    self.graph_wires = wires
                     self.rack.audio_disconnect(src)
+                else:
+                    # a circuit with no out-wire is parked by definition —
+                    # no "to": None placeholder (it would pin the claim
+                    # alive after the last real wire leaves)
+                    self.graph_wires = wires
                 self._relay_refresh_kinds()
             else:
                 raise ValueError(f"unknown graph_wire action {action!r}")
-            if any(relay_mod.relay_ep(self, w.get("from")) is not None
-                   or relay_mod.relay_ep(self, w.get("to")) is not None
-                   for w in self.graph_wires):
-                # resolves relay-routed sources AND reorders on the
-                # RESOLVED edges (virtual endpoints replaced)
-                relay_mod.resolve_audio(self)
-            else:
-                self.rack.reorder_for_wires(self.graph_wires)
+            # item 25: relay endpoints are REAL nodes now (lagged-gate
+            # synths) — apply_audio syncs them, wires them, and orders
+            # every wire's src before its dst; with no claimed circuits
+            # it degrades to the plain (cheap-pathed) reorder
+            relay_mod.apply_audio(self)
 
     def swap_synth(self, key: str, new_type: str) -> None:
         """Swap a running instance's module type IN PLACE (the Instrument
@@ -1018,7 +1032,7 @@ class SynthApp:
             self.rack.swap_module(key, new_type)
             self.lfos.on_node_replaced(key)      # re-map surviving dests
             if self.graph_wires is not None:
-                self.rack.reorder_for_wires(self.graph_wires)
+                relay_mod.apply_audio(self)
 
     def spawn_unconnected(self, key: str) -> str:
         """Add a module to the rack with its audio out parked on the null bus
@@ -1142,6 +1156,12 @@ class SynthApp:
             for ep in eps:                  # edge state dies with the node
                 self.gates._edge.pop(ep, None)
             self.gates.recompute()
+            # gate synths of the departed relay's audio circuits die here
+            # (sync releases them — the relay is gone from app.relays)
+            try:
+                relay_mod.apply_audio(self)
+            except Exception:  # noqa: BLE001
+                pass
 
     def set_relay(self, rid: str, closed=None) -> None:
         """The manual click. Last writer wins — a wired relay:ctl level
@@ -1686,10 +1706,12 @@ class SynthApp:
             self.drums.shutdown()
             self.thresholds.clear()   # watch synths before their LFO norms
             self.lfos.clear()
+            self.relay_audio.clear()  # relay gate synths are engine-level too
             # the NEXT engine (device switch reboots via stop→start) must
             # re-receive synthdefs + re-register the /tr callback
             self.thresholds.reset()
             self.lfos.reset()
+            self.relay_audio.reset()
             for d in (*self.tonics.values(), *self.literals.values()):
                 d.shutdown()
             for ks in self.keyshifts.values():
@@ -1800,6 +1822,20 @@ class SynthApp:
 
     # -- state snapshot for clients -----------------------------------------------
 
+    def _wires_state(self) -> list[dict]:
+        """The "wires" broadcast (item 25): the STORED graph wires, relay
+        endpoints verbatim, open or closed — every client renders relay
+        hops from server truth (the old rack derivation could not see the
+        manager-owned gate synths, so relay hops misrendered on any second
+        client: an open hop vanished, a closed one drew as a shortcut
+        bypassing the relay). Parked ("to": None) wires are omitted,
+        matching the old derived shape. Pre-overlay (graph_wires None = no
+        structural edit yet) still falls back to the rack derivation."""
+        if self.graph_wires is not None:
+            return [{"from": w["from"], "to": w["to"]}
+                    for w in self.graph_wires if w.get("to") is not None]
+        return self.rack.audio_wires() if self.rack else []
+
     def _legacy_drone_settings(self) -> dict:
         """state.drone kept for /legacy clients (the old brain's shape)."""
         d = self.tonics.get("tonic")
@@ -1863,7 +1899,7 @@ class SynthApp:
                 "midi_inputs": _list_midi_inputs(),
                 "midi_port": self.router.active_port if self.router else None,
                 "midi_enabled": self.midi_enabled,
-                "wires": self.rack.audio_wires() if self.rack else [],
+                "wires": self._wires_state(),
                 "ctl_wires": [dict(w) for w in self.ctl_wires],
                 "drums_target": self.drums.target,
                 "arp": self.arp.settings() if self.arp else None,

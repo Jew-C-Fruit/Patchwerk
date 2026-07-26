@@ -984,8 +984,7 @@ function saveLayout() {
       .map(n => [n.gid, n.montype, ...memOf(n), !!n.expanded]);
     try {
       localStorage.setItem(storeKey(currentPatch),
-        JSON.stringify({pos: posMem, monitors, monN, fpos: fposMem,
-                        raw: (typeof relayAW !== "undefined" ? relayAW : [])}));
+        JSON.stringify({pos: posMem, monitors, monN, fpos: fposMem}));
     } catch (_) {}
   }, 400);
 }
@@ -995,7 +994,8 @@ function loadLayout(patch) {
     posMem = d.pos || {};
     fposMem = d.fpos || {};
     monN = d.monN || 1;
-    if (typeof relayAW !== "undefined") relayAW = d.raw || [];
+    // (pre-item-25 layouts carried a "raw" relay-hop list — obsolete now
+    // that the server broadcasts the stored wires; ignored on load)
     return d.monitors || [];
   } catch (_) { posMem = {}; fposMem = {}; return []; }
 }
@@ -4060,7 +4060,7 @@ function wouldCycle(from, to) {
   // audio graph is one-out-per-source, so following the single outgoing
   // wire from `to` either reaches master or reveals a loop through `from`
   const adj = new Map(((state && state.wires) || []).map(v => [v.from, v.to]));
-  for (const w of relayAW) adj.set(w.from, w.to);  // relay hops walk like nodes
+  // relay hops walk like nodes — state.wires carries them verbatim (item 25)
   let cur = to, hops = 0;
   while (cur && cur !== "master" && hops++ < 128) {
     if (cur === from) return true;
@@ -4156,45 +4156,11 @@ function binSrcEp(ep) {
   if (relayIds().has(b)) return relayLaneOk(l) && relayCircKind(b, l) === "binary";
   return l === undefined && binSrcIds().has(b);
 }
-// stored AUDIO wires touching relay circuits — the server broadcasts only
-// the RESOLVED bus routing (state.wires never carries virtual endpoints),
-// so the GUI keeps the stored relay hops itself: recorded on connect,
-// dropped on cut, persisted with the layout, pruned against server truth
-// (a relay circuit only stays claimed audio while a wire touches it).
-let relayAW = [];
-function relayAWAdd(from, to) {
-  relayAW = relayAW.filter(w => w.from !== from);   // one audio out per source
-  relayAW.push({from, to});
-  // local claim echo: the broadcast will confirm, but the local rebuild
-  // must not prune the wire (or grey its handles) before it lands
-  for (const ep of [from, to]) {
-    const [b, l] = splitEp(ep);
-    const r = ((state && state.relays) || []).find(x => x.id === b);
-    if (r && relayLaneOk(l)) {
-      r.circuits = r.circuits || {};
-      r.circuits[String(l)] = r.circuits[String(l)] || {kind: "audio"};
-    }
-  }
-  saveLayout();
-  rebuildGraph();
-}
-function relayAWRemove(from) {
-  relayAW = relayAW.filter(w => w.from !== from);
-  saveLayout();
-  rebuildGraph();
-}
-function relayAWPrune() {
-  const have = new Set(((state && state.chain) || []).map(m => m.key));
-  const okEnd = (ep, isSrc) => {
-    const [b, l] = splitEp(ep || "");
-    if (relayIds().has(b)) return relayLaneOk(l) && relayCircKind(b, l) === "audio";
-    if (ep === "master") return !isSrc;
-    return l === undefined && have.has(ep);
-  };
-  relayAW = relayAW.filter(w =>
-    w.to != null && okEnd(w.from, true) && okEnd(w.to, false) &&
-    (relayIds().has(splitEp(w.from)[0]) || relayIds().has(splitEp(w.to)[0])));
-}
+// item 25: the GUI-kept relayAW store is GONE. Each claimed audio circuit
+// is a permanent lagged-gate SYNTH backend-side, so its wires are real and
+// state.wires now carries the STORED graph — relay endpoints verbatim,
+// open or closed — exactly like state.mod_wires carries the mod plane.
+// Relay hops therefore render from server truth on EVERY client.
 // ctl endpoint grammar: "keyshift.2:3" = node "keyshift.2", lane 3. Nodes
 // without lanes are plain ids (unchanged).
 function splitEp(s) {
@@ -4255,9 +4221,8 @@ function connectAction(out, inn) {
     if (from === "drums")   // drums route via set_drums (keys only, no relays)
       return pi.relayCirc ? null : () => send({type: "set_drums", target: to});
     if (to !== "master" && wouldCycle(from, to)) return null;
-    if (po.relayCirc || pi.relayCirc)
-      return () => { send({type: "graph_wire", action: "add", from, to});
-                     relayAWAdd(from, to); };
+    // relay endpoints included (item 25): the state broadcast carries the
+    // stored wire back to every client — no local echo store to keep
     return () => send({type: "graph_wire", action: "add", from, to});
   }
   if (sig === "mod") {
@@ -6217,18 +6182,37 @@ function rebuildGraph() {
                    chainNodes.find(n => n.mod && n.mod.kind === "source") || null;
     W(voiceNodes[i], "ctl", target, "ctl");
   }
-  // audio: SERVER TRUTH — state.wires is derived from the actual bus routing,
-  // so multiple cascades / fan-in render exactly as they sound. Every audio
-  // wire cuts with graph_wire remove; master's in port takes any fan-in.
+  // audio: SERVER TRUTH — state.wires is the STORED graph (item 25), so
+  // multiple cascades / fan-in render exactly as they sound AND relay
+  // circuit endpoints arrive verbatim, open or closed (a claimed audio
+  // circuit is a permanent lagged-gate synth; opening moves its gate
+  // param, never the wiring). Every audio wire cuts with graph_wire
+  // remove; master's in port takes any fan-in.
   const audioNode = (k) => k === "master" ? master : nodes.get("m:" + k);
   const audioWires = state.wires || deriveLinearWires();
-  // relay-routed sources: state.wires is the RESOLVED routing (a closed
-  // relay shows src→realDst, an open one shows nothing) — the GUI's stored
-  // relay hops (relayAW) draw instead, so the resolved duplicate is skipped
-  relayAWPrune();
-  const relayFed = new Set(relayAW.map(w => w.from));
   for (const wr of audioWires) {
-    if (relayFed.has(wr.from)) continue;
+    const [fb, fl] = splitEp(wr.from), [tb, tl] = splitEp(wr.to);
+    const fromCirc = relayIds().has(fb) && relayLaneOk(fl);
+    const toCirc = relayIds().has(tb) && relayLaneOk(tl);
+    if (fromCirc || toCirc) {
+      // a relay hop: same audio family + cut, drawn on the circuit's own
+      // handles (mirrors the mod-plane loop below)
+      const a = fromCirc ? nodes.get(fb) : audioNode(wr.from);
+      const b = toCirc ? nodes.get(tb) : audioNode(wr.to);
+      if (!a || !b) continue;
+      const ap = fromCirc
+        ? a.ports.find(p => p.relayCirc === fl && p.dir === "out")
+        : port(a, "out", "audio");
+      const bp = toCirc
+        ? b.ports.find(p => p.relayCirc === tl && p.dir === "in")
+        : port(b, "in", "audio");
+      if (!ap || !bp) continue;
+      addWire({node: a, port: ap}, {node: b, port: bp},
+              {cut: () => send({type: "graph_wire", action: "remove",
+                                from: wr.from}),
+               ...circuitOpt(wr.from, wr.to, "audio")});
+      continue;
+    }
     const a = audioNode(wr.from), b = audioNode(wr.to);
     if (!a || !b) continue;
     const cut = () => send({type: "graph_wire", action: "remove", from: wr.from});
@@ -6253,26 +6237,8 @@ function rebuildGraph() {
   const dNode = dTarget != null ? (audioNode(dTarget) || master) : null;
   if (dNode) W(drums, "audio", dNode, "audio",
     {cut: () => send({type: "set_drums", target: null})});
-  // audio wires through relay circuits (GUI-side stored truth, see relayAW):
-  // src → circuit IN and circuit OUT → dst draw in the audio family; cutting
-  // either sends the targeted graph_wire remove and forgets the hop
-  for (const rw of relayAW) {
-    const [fb, fl] = splitEp(rw.from), [tb, tl] = splitEp(rw.to);
-    const a = relayIds().has(fb) ? nodes.get(fb) : audioNode(rw.from);
-    const b = relayIds().has(tb) ? nodes.get(tb) : audioNode(rw.to);
-    if (!a || !b) continue;
-    const cut = () => { send({type: "graph_wire", action: "remove",
-                              from: rw.from});
-                        relayAWRemove(rw.from); };
-    const ap = relayIds().has(fb)
-      ? a.ports.find(p => p.relayCirc === fl && p.dir === "out")
-      : port(a, "out", "audio");
-    const bp = relayIds().has(tb)
-      ? b.ports.find(p => p.relayCirc === tl && p.dir === "in")
-      : port(b, "in", "audio");
-    if (ap && bp) addWire({node: a, port: ap}, {node: b, port: bp},
-                          {cut, ...circuitOpt(rw.from, rw.to, "audio")});
-  }
+  // (item 25: audio hops through relay circuits arrive in state.wires and
+  // drew with the rest of the audio graph above — no client-local store)
   // MOD through a relay (Cole, 07-24): SERVER TRUTH — state.mod_wires holds
   // the stored hops (LFO out → circuit in, circuit out → "<key>:<param>").
   // Whether the modulation actually MOVES is the relay's business; the wire
@@ -6306,8 +6272,9 @@ function rebuildGraph() {
   // wire straight from the LFO to the param, bypassing the relay on
   // screen AND owning the cut (severing it killed the modulation while
   // the two stored hops kept drawing, looking like dummies). The stored
-  // mod_wires are the truth; the resolved duplicate is skipped, exactly
-  // as relayFed skips the resolved AUDIO duplicate above.
+  // mod_wires are the truth; the resolved duplicate is skipped. (The
+  // AUDIO plane no longer needs its own version of this: item 25 made
+  // state.wires the stored graph, so there is no resolved duplicate.)
   const modRouted = new Set((state.mod_wires || [])
     .map(w => String(w.to)).filter(t => !relayIds().has(splitEp(t)[0])));
   for (let i = 0; i < lfoNodes.length; i++) {
@@ -6427,7 +6394,8 @@ function renderPalette() {
   if (extraSrc.length) { h4("other"); extraSrc.forEach(a => { modBtn(a); used.add(a.key); }); }
   h3("fx");
   const FX_SUBS = [["filters", "filter"], ["time & space", "time"],
-                   ["dirt", "dirt"], ["dynamics", "dyn"], ["pitch", "vox"]];
+                   ["dirt", "dirt"], ["psines", "psine"],   // item 11: Power Shaper
+                   ["dynamics", "dyn"], ["pitch", "vox"]];
   for (const [label, fam] of FX_SUBS) {
     const members = avail.filter(x => x.kind === "effect" && x.family === fam
                                       && !used.has(x.key));

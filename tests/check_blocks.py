@@ -122,7 +122,9 @@ Current coverage:
      set_relay + follows {"kind":"gate"}; "relay:ctl" is a quiet
      single-input bin level-in; AUTO-SIZE XS(4 circuits)↔S(9) from the
      circuits in use; audio hops (never in the RESOLVED state.wires)
-     draw from the GUI-kept relayAW store, and every circuit wire cuts
+     draw straight from state.wires (item 25 — the server broadcasts the
+     STORED graph wires, endpoints verbatim; the old relayAW client store
+     is deleted), and every circuit wire cuts
      with its kind's remove (ctl_wire / graph_wire). With all 4 XS slots
      claimed, a little + right of the 4th slot latches the next wire
      onto circuit 5 ("relay:5"), whose claim expands the card to S
@@ -163,6 +165,16 @@ Current coverage:
      param handle stays on its row, flex still shows everything, a size
      the user CHOSE survives a rebuild, and a stale pre-07-24 layout
      entry (no chosen flag) never outranks the default.
+  27. P1 / BATCH C (items 25 + 11): relay AUDIO circuits are permanent
+     lagged-gate synths server-side, so the "wires" broadcast carries the
+     STORED graph — relay endpoints verbatim, open or closed — and every
+     client (not just the one that drew the wire) renders src → circuit
+     → dst; the relayAW client store is GONE, opening/closing changes the
+     LED and nothing about the wire picture, and each half cuts to its
+     own graph_wire remove. Plus item 11: Power Shaper, the psine
+     waveshaper law as an EFFECT, lands in a psines subsection under FX
+     (the generator stays under VOICES), takes an audio in, exposes
+     p/drive/mix, and draws no generator preview.
 """
 
 import glob
@@ -2614,7 +2626,7 @@ def main():
             relays=[{"id": "relay", "closed": False,
                      "circuits": {"2": {"kind": "notes"},
                                   "3": {"kind": "binary"}}}])
-        page.evaluate("posMem = {}; relayAW = [];")   # deterministic geometry
+        page.evaluate("posMem = {};")   # deterministic geometry
         page.evaluate("(s) => __msg({type: 'state', ...s})", st18)
         page.wait_for_timeout(500)
 
@@ -3012,9 +3024,16 @@ def main():
         check("bin circuit OUT → deriver trigger connects",
               r18["bin_out_to_deriver"], str(r18))
 
-        # the audio add CLAIMED circuit 1 (local echo): a note drag onto it
-        # now refuses; the stored hop draws src → circuit IN in the audio
-        # family while the resolved duplicate (sg → echo) is suppressed
+        # item 25: the audio add is a plain graph_wire — the SERVER echoes
+        # the stored hop back in state.wires (endpoints verbatim), and the
+        # card claims circuit 1 from that broadcast, not from a local store
+        st18a = json.loads(json.dumps(st18))
+        st18a["relays"][0]["circuits"]["1"] = {"kind": "audio"}
+        st18a["wires"] = [{"from": "signal_gen", "to": "relay:1"},
+                          {"from": "relay:1", "to": "echo"},
+                          {"from": "echo", "to": "master"}]
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st18a)
+        page.wait_for_timeout(400)
         claimed = page.evaluate("""(() => {
           const rel = nodes.get('relay'), keysN = nodes.get('keys');
           const p1 = rel.ports.find(p => p.relayCirc === 1 && p.dir === 'in');
@@ -3022,24 +3041,29 @@ def main():
             {node: keysN,
              port: keysN.ports.find(p => p.sig === 'ctl' && p.dir === 'out')},
             {node: rel, port: p1});
-          const w = wires.find(x => x.from.node.gid === 'm:signal_gen'
-                                    && x.to.node.gid === 'relay');
+          const shape = (w) => w && {sig: w.sig, cut: !!w.cutAction,
+                                     circ: w.from.port.relayCirc
+                                           || w.to.port.relayCirc};
+          const inw = wires.find(x => x.from.node.gid === 'm:signal_gen'
+                                      && x.to.node.gid === 'relay');
+          const outw = wires.find(x => x.from.node.gid === 'relay'
+                                       && x.to.node.gid === 'm:echo');
           const dup = wires.find(x => x.from.node.gid === 'm:signal_gen'
                                       && x.to.node.gid === 'm:echo');
-          return {sig1: p1.sig, refuse,
-                  drawn: w && {sig: w.sig,
-                               fam: LINES.audio.includes(w.color),
-                               cut: !!w.cutAction},
-                  dup: !!dup};
+          return {sig1: p1.sig, refuse, inw: shape(inw),
+                  outw: shape(outw), dup: !!dup};
         })()""")
-        check("first wire claims the circuit (audio; note drag now refused)",
+        check("broadcast claim locks the circuit (note drag now refused)",
               claimed["sig1"] == "audio" and claimed["refuse"],
               str(claimed))
-        check("relay audio hop draws src → circuit IN in the audio family",
-              bool(claimed["drawn"]) and claimed["drawn"]["sig"] == "audio"
-              and claimed["drawn"]["fam"] and claimed["drawn"]["cut"],
+        check("relay audio hop draws src → circuit IN from state.wires",
+              bool(claimed["inw"]) and claimed["inw"]["sig"] == "audio"
+              and claimed["inw"]["cut"] and claimed["inw"]["circ"] == 1,
               str(claimed))
-        check("…and the RESOLVED duplicate (src → old dst) is suppressed",
+        check("…and circuit OUT → dst, on the same circuit's handle",
+              bool(claimed["outw"]) and claimed["outw"]["sig"] == "audio"
+              and claimed["outw"]["circ"] == 1, str(claimed))
+        check("…with no duplicate bypassing the relay",
               claimed["dup"] is False, str(claimed))
 
         # ---- endpoint wire cuts route per kind ------------------------
@@ -3049,16 +3073,21 @@ def main():
                           && x.to.port.ep === 'relay:3').cutAction();
           wires.find(x => x.from.node.gid === 'm:signal_gen'
                           && x.to.node.gid === 'relay').cutAction();
+          wires.find(x => x.from.node.gid === 'relay'
+                          && x.to.node.gid === 'm:echo').cutAction();
         }""")
         page.wait_for_timeout(400)
         sent = page.evaluate("window.__sent")
         check("cutting a bin circuit wire sends the targeted ctl_wire remove",
               {"type": "ctl_wire", "action": "remove", "from": "button",
                "to": "relay:3"} in sent, str(sent))
-        check("cutting the audio hop sends graph_wire remove (+ forgets it)",
+        check("cutting either audio half sends ITS graph_wire remove",
               {"type": "graph_wire", "action": "remove",
                "from": "signal_gen"} in sent
-              and page.evaluate("relayAW.length") == 0, str(sent))
+              and {"type": "graph_wire", "action": "remove",
+                   "from": "relay:1"} in sent, str(sent))
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st18)
+        page.wait_for_timeout(400)
 
         # ---- auto-size: >4 circuits in use flips XS → S (and back) ----
         st18b = json.loads(json.dumps(st18))
@@ -3145,7 +3174,7 @@ def main():
                      "circuits": {"1": {"kind": "mod"}}}],
             mod_wires=[{"from": "lfo", "to": "relay:1"},
                        {"from": "relay:1", "to": "echo:mix"}])
-        page.evaluate("posMem = {}; relayAW = [];")
+        page.evaluate("posMem = {};")
         page.evaluate("(s) => __msg({type: 'state', ...s})", st18m)
         page.wait_for_timeout(500)
         mod18 = page.evaluate("""(() => {
@@ -3285,7 +3314,7 @@ def main():
             transport={"bpm": 120, "beats_per_bar": 3, "click": True,
                        "accent": True, "downbeat": 1, "running": False,
                        "divisions": ["1/4", "1/8"]})
-        page.evaluate("posMem = {}; relayAW = [];")
+        page.evaluate("posMem = {};")
         page.evaluate("(s) => __msg({type: 'state', ...s})", st19)
         page.wait_for_timeout(500)
 
@@ -4245,7 +4274,7 @@ def main():
             [sg, echo],
             [{"from": "signal_gen", "to": "echo"},
              {"from": "echo", "to": "master"}])
-        page.evaluate("posMem = {}; relayAW = [];")
+        page.evaluate("posMem = {};")
         page.evaluate("(s) => __msg({type: 'state', ...s})", st25)
         page.wait_for_timeout(600)
         g23 = page.evaluate("""(() => {
@@ -4361,7 +4390,7 @@ def main():
                      "ops": ["AND", "OR", "NOR", "XOR", "SR latch", "T latch"],
                      "out": False}],
             relays=[{"id": "relay", "closed": False, "circuits": {}}])
-        page.evaluate("posMem = {}; relayAW = [];")
+        page.evaluate("posMem = {};")
         page.evaluate("(s) => __msg({type: 'state', ...s})", st24)
         page.wait_for_timeout(600)
         for cols, rows in ((6, 4), (5, 3)):
@@ -4616,7 +4645,7 @@ def main():
             oscs, [{"from": f"osc{i}", "to": "master"} for i in range(6)],
             available=[{"key": f"osc{i}", "name": "Osc", "kind": "source",
                         "family": "voice"} for i in range(6)])
-        page.evaluate("posMem = {}; relayAW = [];")
+        page.evaluate("posMem = {};")
         page.evaluate("(s) => __msg({type: 'state', ...s})", st25)
         page.wait_for_timeout(700)
         page.evaluate("rerouteAll()")
@@ -4726,6 +4755,143 @@ def main():
         check("item 12: the drop sends ONE atomic swap_synth (id + new type)",
               {"type": "swap_synth", "id": "echo", "key": "reverb"} in sent26
               and len(sent26) == 1, str(sent26))
+
+        # ================================================================
+        # 27 — P1 / BATCH C: item 25 (relay audio = permanent lagged-gate
+        # synths; the server broadcasts the STORED graph wires, so relay
+        # hops render from server truth on EVERY client — the relayAW
+        # client store is deleted) + item 11 (Power Shaper FX in the
+        # palette's psine FX subsection). Written against the broken
+        # behaviour: a second client rendered an OPEN relay's hop as
+        # nothing and a CLOSED one as a wire bypassing the relay.
+        # ================================================================
+        AVAIL27 = [
+            {"key": "signal_gen", "name": "Signal Gen", "kind": "source",
+             "family": "voice"},
+            {"key": "power_sine_shaper", "name": "Psine Waveshaper",
+             "kind": "source", "family": "psine"},
+            {"key": "echo", "name": "Echo", "kind": "effect",
+             "family": "time"},
+            {"key": "power_shaper", "name": "Power Shaper", "kind": "effect",
+             "family": "psine"},
+        ]
+        # a SECOND client's view: no local history, relay OPEN, the stored
+        # hop is all it has — it must still draw src → circuit → dst
+        st27 = base_state(
+            [sg, echo],
+            [{"from": "signal_gen", "to": "relay:1"},
+             {"from": "relay:1", "to": "echo"},
+             {"from": "echo", "to": "master"}],
+            available=AVAIL27,
+            relays=[{"id": "relay", "closed": False,
+                     "circuits": {"1": {"kind": "audio"}}}])
+        page.evaluate("posMem = {};")
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st27)
+        page.wait_for_timeout(500)
+
+        check("item 25: the relayAW client store is GONE",
+              page.evaluate("typeof relayAW === 'undefined'"))
+        fresh27 = page.evaluate("""(() => {
+          const shape = (w) => w && {sig: w.sig, cut: !!w.cutAction,
+                                     circ: w.from.port.relayCirc
+                                           || w.to.port.relayCirc};
+          const inw = wires.find(x => x.from.node.gid === 'm:signal_gen'
+                                      && x.to.node.gid === 'relay');
+          const outw = wires.find(x => x.from.node.gid === 'relay'
+                                       && x.to.node.gid === 'm:echo');
+          const bypass = wires.find(x => x.from.node.gid === 'm:signal_gen'
+                                         && x.to.node.gid === 'm:echo');
+          return {inw: shape(inw), outw: shape(outw), bypass: !!bypass,
+                  n: wires.filter(w => w.sig === 'audio').length};
+        })()""")
+        check("a fresh client draws the OPEN relay's IN hop from state.wires",
+              bool(fresh27["inw"]) and fresh27["inw"]["sig"] == "audio"
+              and fresh27["inw"]["circ"] == 1 and fresh27["inw"]["cut"],
+              str(fresh27))
+        check("…and its OUT hop, on the same circuit's handle",
+              bool(fresh27["outw"]) and fresh27["outw"]["circ"] == 1,
+              str(fresh27))
+        check("…and never a wire bypassing the relay",
+              fresh27["bypass"] is False, str(fresh27))
+
+        # CLOSING the relay is a gate param backend-side: the broadcast
+        # wires are IDENTICAL, so the picture must not change
+        st227 = json.loads(json.dumps(st27))
+        st227["relays"][0]["closed"] = True
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st227)
+        page.wait_for_timeout(400)
+        closed27 = page.evaluate("""(() => ({
+          inw: !!wires.find(x => x.from.node.gid === 'm:signal_gen'
+                                 && x.to.node.gid === 'relay'),
+          outw: !!wires.find(x => x.from.node.gid === 'relay'
+                                  && x.to.node.gid === 'm:echo'),
+          bypass: !!wires.find(x => x.from.node.gid === 'm:signal_gen'
+                                    && x.to.node.gid === 'm:echo'),
+          lit: nodes.get('relay').el.querySelector('.relaybtn')
+                 .classList.contains('on'),
+          n: wires.filter(w => w.sig === 'audio').length,
+        }))()""")
+        check("closing changes the relay LED, not the wire picture",
+              closed27["inw"] and closed27["outw"]
+              and not closed27["bypass"] and closed27["lit"]
+              and closed27["n"] == fresh27["n"], str(closed27))
+
+        # cutting either half targets that half's stored wire
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("""() => wires.find(
+          x => x.from.node.gid === 'relay'
+               && x.to.node.gid === 'm:echo').cutAction()""")
+        page.wait_for_timeout(200)
+        check("cutting the circuit OUT removes the wire FROM the endpoint",
+              {"type": "graph_wire", "action": "remove", "from": "relay:1"}
+              in page.evaluate("window.__sent"),
+              str(page.evaluate("window.__sent")))
+
+        # ---- item 11: Power Shaper is an FX, in the psine FX subsection --
+        pal27 = page.evaluate("""(() => ({
+          btns: [...document.querySelectorAll('#palette button')]
+                .map(b => b.textContent),
+          order: [...document.querySelectorAll('#palette h3, #palette h4,'
+                  + ' #palette button')].map(e => e.tagName + ':'
+                  + e.textContent),
+        }))()""")
+        check("item 11: Power Shaper appears in the palette",
+              "Power Shaper" in pal27["btns"], str(pal27["btns"]))
+        fxi = pal27["order"].index("H3:fx")
+        after = pal27["order"][fxi:]
+        psi = next((i for i, e in enumerate(after) if e == "H4:psines"), -1)
+        check("…under a psines subsection INSIDE fx (not the voices one)",
+              psi >= 0 and after[psi + 1] == "BUTTON:Power Shaper",
+              str(after))
+        check("…while the GENERATOR psine stays under voices",
+              pal27["order"].index("BUTTON:Psine Waveshaper") < fxi,
+              str(pal27["order"]))
+        page.evaluate("(s) => __msg({type: 'state', ...s})", base_state(
+            [sg, mod("power_shaper", "Power Shaper", "effect", "psine",
+                     params={"p": param(), "drive": param(),
+                             "mix": param()})],
+            [{"from": "signal_gen", "to": "power_shaper"},
+             {"from": "power_shaper", "to": "master"}],
+            available=AVAIL27))
+        page.wait_for_timeout(400)
+        fx27 = page.evaluate("""(() => {
+          const n = nodes.get('m:power_shaper');
+          const sgN = nodes.get('m:signal_gen');
+          return n && {
+            hasIn: !!n.ports.find(p => p.sig === 'audio' && p.dir === 'in'),
+            params: [...n.el.querySelectorAll('.mini label')]
+                      .map(l => l.textContent.replace(' ∿', '')),
+            wired: !!wires.find(x => x.from.node === sgN && x.to.node === n),
+            noGen: !n.el.querySelector('canvas[data-viz="gen"]'),
+          };
+        })()""")
+        check("Power Shaper card takes an audio IN and accepts a source",
+              bool(fx27) and fx27["hasIn"] and fx27["wired"], str(fx27))
+        check("…exposes p / drive / mix",
+              bool(fx27) and set(fx27["params"]) >= {"p", "drive", "mix"},
+              str(fx27))
+        check("…and renders no generator preview (it is an effect)",
+              bool(fx27) and fx27["noGen"], str(fx27))
 
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()
