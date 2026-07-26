@@ -55,8 +55,9 @@ A fifth principle emerged later and now drives most of the design:
 
 1. **Module** (`modules/*.py`, 26 of them) — one small Python file.
    Declares a SynthDef (the DSP) plus metadata: display name, `kind`
-   (source/effect), params (name, range, default, curve). This is the main
-   vibecoding surface — see `CLAUDE.md` for the contract.
+   (source/effect — and `dual` once item 11 lands, see below), params
+   (name, range, default, curve). This is the main vibecoding surface —
+   see `CLAUDE.md` for the contract.
 2. **Patch** (`patches/*.py`, or the GUI's live graph) — which module
    instances exist, their settings, their order, and how buses connect them.
    In the CLI this is a static `PATCH = {"chain": [...], "bindings": {...}}`
@@ -95,6 +96,15 @@ bug. Disconnected outputs park on a persistent silent null bus, and
 `reorder_for_wires` topo-sorts nodes so every wire's source executes before
 its destination. Wires survive rebuilds; removing a module splice-heals
 A→X→B into A→B.
+
+> ⚠ **PENDING (item 11, local-only branch `feat/p11-dual-mode`, not on
+> `main`).** A third module kind, `dual`, generates AND processes. It
+> changes the rule above: a wire into a plain source sums into the running
+> bus, but a wire into a dual lands on its `in_bus` instead
+> (`Rack._dst_bus`), so fan-in semantics become kind-dependent rather than
+> universal. A dual's mode is derived from the graph, not set by the user —
+> which makes "the graph IS the routing" load-bearing for DSP behaviour and
+> not only for routing. See `REFERENCE.md` §2.2 and §10.3.1.
 
 **Control.** The node vocabulary: `keys` (every controller enters here, and
 it is never a destination), `arp`, `deck` (the MIDI looper), mono voices

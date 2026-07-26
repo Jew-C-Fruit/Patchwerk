@@ -29,6 +29,13 @@
 > (#44). #40–#44 are GUI-only and change nothing this doc specifies
 > outside §13, which defers UI geometry to `docs/BLOCKS_SPEC.md`.
 >
+> **Unmerged work is marked, never stated as shipped.** This file describes
+> `main`. Where a finished-but-unmerged branch would change what a section
+> says, the pending behaviour is called out in a blockquote naming the
+> branch, so nobody builds against something that is not there yet. Open as
+> of 2026-07-26: item 11's `dual` kind (`feat/p11-dual-mode`) in §2.2 and
+> §10.3/§10.3.1. Clear each marker as its branch merges.
+>
 > Re-verified 2026-07-26 through PRs #45–#53 and the item-32 merge:
 > the T latch (#47) is now specified in §5.4; §8.1–8.2 carry item 32's
 > stopped boot and the drone-pause INVARIANT, and §12.3 the
@@ -143,6 +150,22 @@ The same allocator names every spawnable control node: `voice`/`voice.2`,
 or `"effect"` (processes audio; takes `in_bus`, reads
 `In.ar(in_bus, channel_count=2)`). Everyone takes `out`. Audio is
 **stereo everywhere** between stages.
+
+> ⚠ **PENDING — a third kind, `"dual"`, is built but NOT on `main`**
+> (item 11, local-only branch `feat/p11-dual-mode`, 2026-07-26). A dual
+> module generates AND processes: it always owns an `in_bus` even while
+> generating, and `module.py` gains `KINDS = ("source", "effect", "dual")`
+> plus the two predicates the engine branches on, `generates(kind)`
+> (source + dual) and `takes_audio_in(kind)` (effect + dual).
+>
+> It changes what an incoming audio wire MEANS, which matters well beyond
+> §2.2: a wire into a plain source sums into the running bus, while a wire
+> into a dual lands on its `in_bus` (`Rack._dst_bus`). Its `mode` is not a
+> param — `App._sync_dual_modes` derives it from the stored audio graph
+> (wired ⇒ FX, unwired ⇒ generate) and announces it with a
+> `{"kind": "level", "ep": "<id>:mode"}` tap per the reactive-indicator
+> doctrine. On `main` today `kind` is validated against
+> `("source", "effect")` only. **`CLAUDE.md` carries the authoring rules.**
 
 `family` is a GUI-grouping label from `FAMILIES` in `module.py`
 (fallback: the kind): `voice` (wobble_saw, pulse_pad, fm_bell, pluck,
@@ -869,11 +892,52 @@ All psine voices share ADSR .01/.1/.85/.4 and a 24-partial bank.
 | `drive` | Drive | dirt | gain 1–40 · 4 exp; tone 500–12000 · 4000 exp; mix 0–1 · 1 | tanh soft clip (×0.7) + post-clip LPF |
 | `bitcrush` | Bitcrush | dirt | srate 400–44100 · 8000 exp; bits 2–16 · 10; mix 0–1 · 1 | Latch resampling + amplitude quantization |
 | `wavefolder` | Wavefolder | dirt | fold 1–12 · 2.5 exp; symmetry −0.5–0.5 · 0; mix 0–1 · 1 | fold2 with pre-fold DC offset (`symmetry`), LeakDC |
-| `power_shaper` | Power Shaper | psine | p 1–64 · 2 exp; drive 0.25–8 · 1 exp; mix 0–1 · 1 | item 11: the psine waveshaper law over INCOMING audio — `sgn(x)·abs(x)^(2/p)` after `drive`, LeakDC, dry/wet. Same law and same aliasing fingerprint as `power_sine_shaper`; the source/effect contract stays hard (this one takes `in_bus`, the generator does not) |
+| `power_shaper` | Power Shaper | psine | **on `main`:** p 1–64 · 2 exp; drive 0.25–8 · 1 exp; mix 0–1 · 1 | item 11: the psine waveshaper law over INCOMING audio — `sgn(x)·abs(x)^(2/p)` after `drive`, LeakDC, dry/wet. Same law and same aliasing fingerprint as `power_sine_shaper`. ⚠ **Superseded on `feat/p11-dual-mode` — see below; on that branch this is `kind="dual"`, not an effect, and it is the one module in this section that is not purely an effect.** |
 | `compressor` | Compressor | dyn | threshold 0.01–1 · 0.3 exp; ratio 1–20 · 4 exp; attack 0.001–0.2 · 0.01 exp; release 0.02–1 · 0.15 exp; makeup 0.5–4 · 1.3 exp | Compander, downward only |
 | `pitchshift` | Pitch Shift | vox | semitones −24–24 · 0; mix 0–1 · 1; window 0.02–0.2 · 0.04 exp; smear 0–0.02 · 0.002 | granular PitchShift; `window` is grain size AND latency; `smear` 0 = robotic |
 | `ringmod` | Ring Mod | vox | carrier 20–4000 · 200 exp; mix 0–1 · 0.8 | multiply by lagged sine carrier |
 | `scope_tap` | Scope Tap | effect | gain 0–2 · 1 | transparent inline probe: the GUI's oscilloscope card; splice anywhere, the scope draws its out bus (§6.3) |
+
+#### 10.3.1 Power Shaper as a DUAL module — PENDING, not on `main`
+
+> Built and finished on the local-only branch **`feat/p11-dual-mode`**
+> (item 11, 2026-07-26); unmerged and unpushed. On `main`, `power_shaper`
+> is the plain effect in the table above. Documented here because when it
+> lands it stops being an effect, and §10.3's framing would otherwise be
+> silently wrong.
+
+| Key | Name | Kind | Family | Params (branch) |
+| --- | --- | --- | --- | --- |
+| `power_shaper` | Power Shaper | **`dual`** | `psine` | freq 20–2000 · 220 exp *(GENERATE only)*; p 1–64 · 2 exp; drive 0.25–8 · 1 exp; amp 0–1 · 0.3 *(GENERATE only)*; mix 0–1 · 1 *(FX only)* |
+
+ONE card and ONE synthdef that either generates or shapes what you wire
+in. The psine law `T_p(A) = sgn(A)·|A|^(2/p)` is memoryless and computed
+per sample, so it is input-agnostic — the same law applies to an internal
+`SinOsc` or to `In.ar(in_bus)`:
+
+- **mode 0 — GENERATE:** the law over an internal sine, enveloped by
+  `gate` and levelled by `amp`. Equivalent to `power_sine_shaper` at
+  `drive=1`.
+- **mode 1 — FX:** the law over the incoming signal, blended dry/wet by
+  `mix`.
+
+`mode` is **not a knob**. `App._sync_dual_modes` derives it from the audio
+graph — a stored wire whose destination is this instance means FX, no wire
+means GENERATE — and pushes it to the node. Both chains are computed and
+crossfaded through a **lagged** `mode`, so a wire landing or being cut is
+click-free rather than a hard switch. A rebuild spawns every dual at the
+synthdef default (`mode=0`), so the sync is re-pushed with `force=True`
+afterwards, the same hazard class as playable sources spawning `gate=0`.
+
+The card reacts to `{"kind": "level", "ep": "<id>:mode", "on": …}` per the
+reactive-indicator doctrine: a shaper that silently switches from
+generating to processing is exactly the invisible state change that
+doctrine exists to catch. Params not owned by the active mode stay on the
+card; they simply do nothing until the mode changes.
+
+Aliasing note is unchanged from the generator: not band-limited, so as `p`
+climbs, fold-back is the sonic fingerprint. `p = 2` is identity; `p → 64`
+approaches `sgn(x)`; `p < 2` is pinched.
 
 ### 10.4 Shared DSP helper (`harmonics.py`)
 

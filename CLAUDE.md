@@ -141,6 +141,19 @@ the rig with `tests/probe_live_gui.py`.
 
 ## Writing a new module (the main vibecoding activity)
 
+> ⚠ **PENDING, NOT YET ON `main` (2026-07-26).** The `"dual"` kind, the
+> `generates()`/`takes_audio_in()` helpers and rule 10 below describe item
+> 11, which is **built and finished on the local-only branch
+> `feat/p11-dual-mode`** — not merged, and not pushed. On `main` today
+> `kind` is still validated against `("source", "effect")` only, and
+> `@module(kind="dual")` raises `ValueError`.
+>
+> It is documented here ahead of the merge deliberately: the contract is
+> what people read while building a module, and a contract that describes
+> only two kinds is actively misleading once the third lands. **Check
+> `KINDS` in `synthbase/module.py` if you need to know which world you are
+> in.** Delete this banner when the branch merges.
+
 Copy an existing file in `modules/` and change the body. The contract:
 
 ```python
@@ -151,7 +164,7 @@ from synthbase import module, param
 
 @module(
     name="Display Name",
-    kind="source",              # "source" = generates audio; "effect" = processes it
+    kind="source",              # "source" generates | "effect" processes | "dual" both
     params={                    # every knob a human/MIDI/GUI may turn
         "cutoff": param(60, 12000, 1200, curve="exp"),  # min, max, default
     },
@@ -168,8 +181,24 @@ Rules:
    it. Renaming the function = a new module.
 2. **Stereo everywhere.** `Out.ar` gets a 2-channel source. Mono signals:
    `[sig, sig]`.
-3. **Effects must take `in_bus` and read `In.ar(bus=in_bus, channel_count=2)`.**
-   Sources must not take `in_bus`. Everyone takes `out`.
+3. **`kind` decides whether you take `in_bus`.** There are THREE kinds, not
+   two (`KINDS` in `module.py`), and the two helpers there are what the
+   engine actually branches on — `generates(kind)` and `takes_audio_in(kind)`:
+
+   | kind | generates? | takes `in_bus`? |
+   | --- | --- | --- |
+   | `source` | yes | **no** |
+   | `effect` | no | yes — read `In.ar(bus=in_bus, channel_count=2)` |
+   | `dual` | yes | yes |
+
+   Everyone takes `out`. A **dual** module is both at once: it generates on
+   its own, AND processes whatever is wired into it. It therefore ALWAYS
+   owns an `in_bus`, even while generating.
+
+   ⚠ **A dual changes what an incoming audio wire means.** A wire into a
+   plain source SUMS into the running bus (see the landmine below); a wire
+   into a dual lands on its `in_bus` instead (`Rack._dst_bus`). Don't
+   generalise the fan-in rule across kinds.
 4. **Every human-facing knob goes in `params`** with a sensible range and
    `curve="exp"` for frequencies/times. Defaults in the function signature
    should match the param defaults.
@@ -186,6 +215,22 @@ Rules:
    ratios — convert inside the DSP with `.semitones_to_ratio()` (e.g.
    `(cents / 100).semitones_to_ratio()`). Voice-level pitch bend already
    follows this convention (±2 semitones).
+10. **A dual module's `mode` is DERIVED — never a param.** It is a plain
+    synthdef arg (`mode=0`), and `App._sync_dual_modes` pushes it from the
+    AUDIO GRAPH: a stored wire whose destination is this instance means FX
+    (`mode=1`), no wire means GENERATE (`mode=0`). Putting it in `params`
+    would give the user a knob that the next rewire silently overrides.
+    Three consequences worth building for:
+    - **Compute both chains and crossfade through a LAGGED `mode`**, so a
+      wire landing or being cut is click-free instead of a hard switch.
+    - **A rebuild spawns every dual at the synthdef default (`mode=0`)**,
+      so the sync is re-pushed with `force=True` after one — same class of
+      bug as playable sources having to spawn `gate=0`.
+    - **Mode is invisible state, so it must announce itself**: the backend
+      emits `{"kind": "level", "ep": "<id>:mode", "on": …}` for the card,
+      exactly as `:pwr` does. That is the reactive-indicator doctrine, and
+      a shaper that silently stops generating is precisely what it exists
+      to prevent.
 
 UGen naming: supriya mirrors SuperCollider UGens with snake_case keyword args
 (`SinOsc.ar(frequency=...)`, `RLPF.ar(source=..., frequency=...,
@@ -318,7 +363,10 @@ nets keep their last healthy state. Restore first, then diff.
 - Playable sources must spawn `gate=0` (the synthdef default of 1 leaves
   idle voices droning after every rebuild).
 - Extra sources SUM into the running bus — a fresh bus orphans everything
-  upstream ("generators go dead").
+  upstream ("generators go dead"). **This is kind-specific**: once item 11
+  lands (`feat/p11-dual-mode`, not yet on main), a wire into a `dual`
+  module goes to its `in_bus` instead of summing, so don't carry the
+  summing assumption across every destination — `Rack._dst_bus` decides.
 - Sort looper events by beat with a STABLE key-only sort — tuple sort puts
   offs before ons at equal beats and scrambles pairing.
 - Every all-off/silencing path must close its open notes AND their viz taps
