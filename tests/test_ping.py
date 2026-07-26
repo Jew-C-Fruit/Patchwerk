@@ -189,6 +189,9 @@ def test_button_levels():
 
 def test_clock_ticks():
     app = SynthApp(use_midi=False, use_reload=False)
+    # item 32: fresh boots come up STOPPED — start the transport so the
+    # clock has a grid to ride (the stopped case is asserted further down)
+    app.set_transport(playing=True)
     cid = app.spawn_clock()
     c = app.clocks[cid]
     app.set_clock(cid, division="1/16")   # 0.25 beat = 150 ms @ 100 bpm

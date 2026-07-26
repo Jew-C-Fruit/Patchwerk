@@ -22,13 +22,16 @@ app.rack stays None throughout — set_transport(playing=...) walks rack
 instances, and the None guard is exactly what existing suites rely on.
 """
 
+import json
 import sys
+import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from synthbase.app import SynthApp, TRANSPORT_CARDS  # noqa: E402
+from synthbase.app import SynthApp, TRANSPORT_CARDS, default_ctl_wires  # noqa: E402
 from synthbase.transport import TapTempo  # noqa: E402
 from synthbase import presets  # noqa: E402
 
@@ -83,7 +86,11 @@ def test_level_follow_run():
     app = make_app()
     tr = app.transport
     b = latch_button(app)
-    check("transport starts running", tr.running is True)
+    # item 32: a fresh boot comes up STOPPED (was running-by-default)
+    check("transport starts STOPPED (item 32 fresh-launch default)",
+          tr.running is False)
+    app.set_transport(playing=True)
+    check("play starts it", tr.running is True)
     # LEVEL-IN semantics: attach applies the level on first sight
     app.set_ctl_wire("add", b, "transport:run")
     check("attach applies the level (lo → stopped)", tr.running is False)
@@ -120,9 +127,10 @@ def test_level_follow_click_and_accent():
     set_lvl(app, ba, True)
     check("accent hi → accent on", tr.click_accent is True)
     st = tr.settings()
-    check("settings carries click/accent/running/downbeat",
+    check("settings carries click/accent/running/downbeat"
+          " (running False: item 32's stopped default, untouched here)",
           st["click"] is True and st["accent"] is True
-          and st["running"] is True and st["downbeat"] == 0)
+          and st["running"] is False and st["downbeat"] == 0)
 
 
 # ---- tap tempo: the TapTempo helper (injected timestamps) ----------------------
@@ -308,6 +316,147 @@ def test_persistence():
     check("old preset → downbeat stays 0", app3.transport.downbeat == 0)
 
 
+# ---- item 32: fresh-launch default state ---------------------------------------
+# A boot with NO custom preset populates STOPPED, with the default control
+# plane (keys→arp→voice) intact so the rig stays hand-playable; drones pause
+# while stopped; named presets never clobber the play state; a ⟳ resume
+# restores exactly what was running before the restart.
+
+class PauseNode:
+    """Records pause/unpause like a scsynth node (drone silence checks)."""
+
+    def __init__(self):
+        self.paused = None
+
+    def pause(self):
+        self.paused = True
+
+    def unpause(self):
+        self.paused = False
+
+
+class DroneRack:
+    """Minimal duck-typed rack: one enabled drone service instance."""
+
+    def __init__(self):
+        self.instances = [SimpleNamespace(
+            key="drone", type="drone", node=PauseNode(), enabled=True,
+            service=True, module=SimpleNamespace(kind="source"),
+            settings={})]
+
+    def find(self, key):
+        for i in self.instances:
+            if i.key == key:
+                return i
+        raise KeyError(key)
+
+    def set_enabled(self, key, enabled):
+        i = self.find(key)
+        i.enabled = bool(enabled)
+        # the real rack UNPAUSES on enable — exactly what item 32's re-sync
+        # has to correct while the transport is stopped
+        (i.node.unpause if enabled else i.node.pause)()
+
+
+def test_fresh_launch_defaults():
+    app = make_app()
+    check("fresh app: the transport populates STOPPED",
+          app.transport.running is False)
+    check("the state broadcast carries running False",
+          app.state()["transport"]["running"] is False)
+    check("the default control plane is intact (keys→arp→voice + deck)",
+          app.ctl_wires == default_ctl_wires()
+          and {"from": "keys", "to": "arp"} in app.ctl_wires
+          and {"from": "arp", "to": "voice"} in app.ctl_wires)
+    # the shipped default patches keep a playable midi→gen→master path:
+    # their notes_to binding names a module in the chain, so _make_voices
+    # aims the voice at a real source on build
+    from synthbase.cli import _load_patch
+    for name in ("demo", "pad_space"):
+        p = _load_patch(REPO / "patches" / f"{name}.py")
+        chain_keys = [c[0] for c in p["chain"]]
+        check(f"patch {name}: notes_to targets a chain module",
+              p["bindings"].get("notes_to") in chain_keys)
+
+
+def test_drone_paused_while_stopped():
+    app = make_app()
+    app.rack = DroneRack()
+    node = app.rack.instances[0].node
+    # every (re)create path funnels through _sync_drone_run_state, so a
+    # stopped transport lands the drone paused
+    app._sync_drone_run_state()
+    check("a drone spawned while stopped comes up PAUSED",
+          node.paused is True)
+    app.set_transport(playing=True)
+    check("play unpauses the drone", node.paused is False)
+    app.set_transport(playing=False)
+    check("stop re-pauses the drone", node.paused is True)
+    # re-enabling while stopped: the rack unpauses, the sync re-pauses
+    app.set_enabled("drone", False)
+    app.set_enabled("drone", True)
+    check("re-enable while stopped lands paused (no drone until play)",
+          node.paused is True)
+    # a DISABLED drone stays bypass-paused across play (rack owns that)
+    app.set_enabled("drone", False)
+    app.set_transport(playing=True)
+    check("play never unpauses a disabled drone", node.paused is True)
+
+
+def test_preset_never_touches_running():
+    app = make_app()
+    data = presets.snapshot(app)
+    check("the preset transport snapshot EXCLUDES running",
+          "running" not in data["transport"])
+    app2 = make_app()
+    app2._build_patch = lambda name: None
+    app2.set_transport(playing=True)
+    presets._apply(app2, data)
+    check("loading a preset mid-performance leaves PLAYING alone",
+          app2.transport.running is True)
+    app2.set_transport(playing=False)
+    presets._apply(app2, data)
+    check("loading a preset while stopped leaves STOPPED alone",
+          app2.transport.running is False)
+
+
+def test_resume_restores_running():
+    old_path = presets.RESUME_PATH
+    try:
+        presets.RESUME_PATH = Path(tempfile.mkdtemp()) / "resume.json"
+        app = make_app()
+        app.set_transport(playing=True)
+        presets.write_resume(app)
+        check("the resume payload carries running",
+              json.loads(presets.RESUME_PATH.read_text())
+              ["resume"]["running"] is True)
+        app2 = make_app()
+        app2._build_patch = lambda name: None
+        check("the pre-resume boot is stopped", app2.transport.running is False)
+        check("resume applies", presets.apply_resume(app2) is True)
+        check("⟳ resume restores PLAYING (the stopped default does not"
+              " clobber it)", app2.transport.running is True)
+
+        app.set_transport(playing=False)
+        presets.write_resume(app)
+        app3 = make_app()
+        app3._build_patch = lambda name: None
+        presets.apply_resume(app3)
+        check("⟳ resume restores STOPPED too", app3.transport.running is False)
+
+        # a LEGACY resume file (pre-item-32, no running key) was written by
+        # a running-by-default build — it resumes PLAYING
+        presets.RESUME_PATH.write_text(json.dumps(
+            {"version": 2, "resume": {}}))
+        app4 = make_app()
+        app4._build_patch = lambda name: None
+        presets.apply_resume(app4)
+        check("a legacy resume file (no key) resumes PLAYING",
+              app4.transport.running is True)
+    finally:
+        presets.RESUME_PATH = old_path
+
+
 def main():
     test_endpoint_grammar()
     test_level_follow_run()
@@ -318,6 +467,10 @@ def main():
     test_downbeat()
     test_cards()
     test_persistence()
+    test_fresh_launch_defaults()
+    test_drone_paused_while_stopped()
+    test_preset_never_touches_running()
+    test_resume_restores_running()
     print(f"\n{'PASS' if not FAILURES else 'FAIL'} — {len(FAILURES)} failures")
     return 1 if FAILURES else 0
 
