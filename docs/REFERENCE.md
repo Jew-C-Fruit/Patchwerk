@@ -37,9 +37,12 @@
 > §10.3/§10.3.1; item 10's allocation framework and poly voices
 > (`feat/p2-poly-voice`) in §4.1, §4.3.1 and §11.3, with its GUI half
 > (`feat/p11-dual-mode`) in §13.1 — item 10 is additionally **not
-> live-verified**, headless-green only; and the `transport` event plus the
-> `pulse` field on `level` (`feat/p3-reactive-taps`) in §11.2. Clear each
-> marker as its branch merges.
+> live-verified**, headless-green only; item 29's drone allocation
+> (`feat/p29-drone-allocation`, branched from item 10 — **merge 10 first**)
+> in §4.3.2, §4.7, §11.1, §11.3 and §13.1, carrying a real **behaviour
+> change** to drone pitch; and the `transport` event plus the `pulse` field
+> on `level` (`feat/p3-reactive-taps`) in §11.2. Clear each marker as its
+> branch merges.
 >
 > Re-verified 2026-07-26 through PRs #45–#53 and the item-32 merge:
 > the T latch (#47) is now specified in §5.4; §8.1–8.2 carry item 32's
@@ -368,6 +371,7 @@ grammar: plain ids, plus `":"` suffixes for lane-like sub-endpoints —
 | Loop Deck | `deck` (singleton) | yes (replay) | yes (record) | the MIDI looper (§9) |
 | Mono voices | `voice`, `voice.2`, … | — (drives audio) | yes | each drives one playable source's `freq`/`gate` (§4.3) |
 | Poly voices | `poly`, `poly.2`, … | — (drives audio) | yes | **PENDING (§4.3.1)** — N notes at once on ONE target source, oldest stolen when full |
+| Drone voices | `hold`, `hold.2`, … | — (drives audio) | yes | **PENDING (§4.3.2)** — holds the last root; ids are `hold`, NOT `drone`. Also a binary level-in at `"<id>:pwr"` (POWER) |
 | Estimator deriver | `tonic`, `tonic.2`, … | yes (mono root) | yes (evidence) | scale-aware root estimation (§4.5) |
 | Literal deriver | `literal`, `literal.2`, … | yes (mono) | yes | deterministic extract×place (§4.5) |
 | Drone instances | `drone`, `drone.2`, … (module instances) | no | yes (mono, single-input) | ctl note-sink retargeting the drone module's `freq` (§4.7) |
@@ -443,7 +447,7 @@ policy is a subclass and the rest is the base:
 | --- | --- | --- | --- | --- |
 | `MonoLatest` | 1 | yes | release | Mono Voice (§4.3) |
 | `Poly` | N (1–16) | yes | release | **Poly Voice** (item 10) |
-| `Hold` | 1 | **no** | **holds the last root** | Drone (§4.7) |
+| `Hold` | 1 | **no** (POWER instead) | **holds the last root** | **Drone Voice** (item 29 — §4.3.2) |
 
 `Poly` steals the OLDEST sounding note when full. A steal closes the gate
 and reopens it across a scheduled ~12 ms gap (`STEAL_GAP`): a gate is
@@ -481,6 +485,73 @@ replaced — per the "track the server OBJECT, not a boolean" landmine.
 | --- | --- | --- |
 | `spawn_poly` | `voices` (default 8) | a poly voice `poly`, `poly.2`, … — N notes at once on ONE target, stealing the oldest when full. A ctl-wire destination exactly like a mono voice, and removed with `remove_voice`. |
 | `set_poly_voices` | `id`, `voices` (1–16, `MAX_POLY_VOICES`) | resize; notes sounding on slots that go away are closed |
+
+#### 4.3.2 The drone as an allocation (`Hold`) — PENDING, not on `main`
+
+> Item 29, on the local-only branch **`feat/p29-drone-allocation`** @
+> `03d7d16`. It is branched from `feat/p2-poly-voice`, **not** from `main`,
+> so the **merge order is item 10 first, then 29**. Like item 10 it is
+> headless-green and **not live-verified**.
+
+The drone stops being a bespoke `_DroneSink` and becomes the third policy.
+Ids are **`hold`, `hold.2`, …** — the card is titled "Drone Voice", but the
+id type is `hold`, deliberately (see the landmine in `CLAUDE.md`: a ctl node
+called `drone` would shadow the drone MODULE instance in `_ctl_sinks`). One
+note-sink interface means every global fan-out — sustain, transpose, panic,
+ctl wiring, state — treats all three policies alike.
+
+##### ⚠ BEHAVIOUR CHANGE: the drone now follows global transpose
+
+**This changes existing patches.** It is only audible when `transpose ≠ 0`,
+but anyone with a saved patch and a non-zero transpose WILL hear it, and it
+also changes the old drone-MODULE path, not just the new card.
+
+Before, a deriver handed the drone a raw MIDI note number while the voice
+sounding the melody applied transpose at the freq stage — so **the drone sat
+exactly `transpose` semitones away from everything else in the patch**. That
+was a bug, not a behaviour. Transpose is a KEY CHANGE: a standing
+redefinition of what a note number means, and the **global-vs-wired doctrine
+already names pitch reference as GLOBAL** (§1), which is the justification.
+The drone is now transposed with everything else.
+
+##### The drone still ignores bend — deliberately
+
+Bend is a MOMENTARY gesture on what you are PLAYING; a drone is the fixed
+reference you play *against*. If the drone bent with the melody, **every
+interval would stay unchanged and the wheel would be silently cancelled in
+exactly the patches that have a drone in them.**
+
+This sits next to the transpose change and therefore looks like an
+inconsistency. It is not: transpose is standing, bend is momentary, and only
+one of them redefines the reference. **Do not "finish the job" by making
+bend apply too.**
+
+##### POWER
+
+`Hold` never gates from the note stream, but a drone aimed at an ordinary
+playable source still has to hold that source's envelope open or it is
+silent forever. That is POWER — a separate axis (`set_gate_open`), and the
+drone card's only off switch, inheriting "bypass is the only off switch"
+from the drone module as LEVEL semantics. On a GATELESS target (the `drone`
+module itself, which sounds while its node runs) there is nothing to open,
+so it is skipped rather than faked — writing a `gate` the synthdef lacks
+would put a phantom param into `inst.settings` and into broadcast state.
+
+**Effective gate = `power AND transport.running`** — item 32's invariant in
+allocation terms. `power` in state is USER INTENT, not the audible result;
+the transport card shows the other half. Drone MODULE nodes get paused; a
+drone CARD closes the gate it holds on its target instead, because **pausing
+the target would silence a poly voice sharing it** (second landmine).
+
+Both routes — a card click and a binary wire into `"<id>:pwr"` — emit
+`{"kind": "level", "ep": "<id>:pwr", "on": …}`, so the indicator reacts to
+logic input per §5.3. Unlike item 10's declined voice-count indicator, this
+tap is proven on both edges from both routes by `tests/test_drone_alloc.py`.
+
+| Message | Fields | Effect |
+| --- | --- | --- |
+| `spawn_drone_voice` | — | a `hold` allocation; throws if no note-playable source exists (same rule as `spawn_voice`/`spawn_poly`) |
+| `set_drone_power` | `id`, `on` | POWER intent; removal and retarget reuse `remove_voice` / `set_voice_target` — there is no `remove_drone_voice` |
 
 ### 4.4 Arpeggiator (`arp.py`)
 
@@ -565,6 +636,15 @@ falls back to the newest still-held note; an EMPTY held set HOLDS the
 last root — the drone's on/off is its bypass toggle, not the note
 stream. The play-in is single-input (a new wire drops stale held
 state). Transport stop/play pauses/unpauses every enabled drone node.
+
+> ⚠ **PENDING (`feat/p29-drone-allocation`) — `_DroneSink` is REPLACED by
+> the `Hold` allocation (§4.3.2), and its pitch behaviour CHANGES.** This
+> sink aimed at the raw MIDI pitch and honoured neither global transpose nor
+> bend; `Hold` **follows transpose** (it still ignores bend, by design).
+> That fixes a real bug — a drone previously sat exactly `transpose`
+> semitones away from the rest of the patch — but it is a behaviour change
+> on THIS path too, not only on the new card, so a saved patch with a
+> non-zero transpose will sound different. See §4.3.2.
 
 ### 4.8 Globals on the note path
 
@@ -1098,6 +1178,8 @@ sender (its UI already updated); structural changes broadcast to all.
 | `edit_chain` | action add/remove/move, key, [index] | live chain surgery (§3.2–3.3) |
 | `swap_synth` | id, key (new type) | in-place type swap (§3.3) |
 | `spawn_voice` / `remove_voice` | [id] | §4.3 (primary `voice` not removable) |
+| `spawn_poly` / `set_poly_voices` | [voices], id | **PENDING** (`feat/p2-poly-voice`) §4.3.1 |
+| `spawn_drone_voice` / `set_drone_power` | —, (id, on) | **PENDING** (`feat/p29-drone-allocation`) §4.3.2 — both removed with `remove_voice` |
 | `set_voice_target` | key, [voice] | re-aim a mono voice |
 | `spawn_tonic` / `remove_tonic` / `set_tonic` | id; every, octave, memory, bass, listening, deck_feed | estimator deriver (§4.5) |
 | `spawn_literal` / `remove_literal` / `set_literal` | id; every, extract, place, fold_octave, transpose, hold_on_empty | literal deriver (§4.5) |
@@ -1191,6 +1273,13 @@ key/name/kind/family, sources first), `module_errors`.
 > once, and is always 1 for `mono-latest`. **The card reads the policy off
 > this field and never guesses it from the id** — which is what lets item
 > 29's `hold` policy arrive as a label and nothing else. See §4.3.1.
+>
+> **Item 29 (`feat/p29-drone-allocation`) adds a third field, `power`** —
+> `{id, target, policy, slots, power}`. It is the drone card's POWER as USER
+> INTENT (not the audible state: the effective gate is
+> `power AND transport.running`), and it is **`null` for the gated
+> policies**, so `policy === "hold"` — not `power != null` — is the correct
+> discriminator. See §4.3.2.
 
 ---
 
@@ -1294,13 +1383,36 @@ reactive-indicator doctrine (§5.3) exists to prevent. When it is wanted it
 rides a `{"kind": "level", "ep": "<poly id>:active"}` tap, added *with* its
 test.
 
-**Palette placement — easy to get wrong.** Mono Voice and Poly Voice sit
-under the palette section headed **`allocation`**, NOT `voices`. There is a
-separate `voices` section, and it holds the playable SOURCE MODULES. The
-two are different things: `allocation` spawns note-routing nodes on the
-control plane, `voices` spawns audio-generating modules. Spawn buttons are
-`{"type": "spawn_voice"}` and `{"type": "spawn_poly", "voices": 8}` (8 is
-the engine's own default; the card's slider retunes it).
+**Palette placement — easy to get wrong.** Mono Voice, Poly Voice and Drone
+Voice sit under the palette section headed **`allocation`**, NOT `voices`.
+There is a separate `voices` section, and it holds the playable SOURCE
+MODULES. The two are different things: `allocation` spawns note-routing
+nodes on the control plane, `voices` spawns audio-generating modules. Spawn
+buttons are `{"type": "spawn_voice"}`, `{"type": "spawn_poly",
+"voices": 8}` (8 is the engine's own default; the card's slider retunes it)
+and `{"type": "spawn_drone_voice"}`.
+
+**Card dispatch is on `policy`, with an unknown policy falling back to the
+Mono card** so an older or newer server cannot blank the canvas:
+`mono-latest` → Mono Voice, `poly` → Poly Voice, `hold` → Drone Voice.
+
+**Drone Voice card (item 29, `feat/p29-drone-allocation`).** Titled "Drone
+Voice" though its id type is `hold` — the id is plumbing, the name is the
+product. Family `ctl`, params-only body so sizing stays MEASURED (no
+`defaultSize`/`addSizeChips`/`ownFaces`); two rows lands it at S. Rows are
+`target` (identical to Mono Voice's chip, reusing `set_voice_target`) and
+POWER. Three ports: TONE in (ctl, at the bare gid — anything emitting notes
+wires in, and releasing the last note HOLDS the root), POWER in (binary
+level-in at `"<id>:pwr"`, fan-in rather than single-input, so no
+steal-on-drop) and `drive` out.
+
+POWER is preferably rendered as the card's **COLOUR BAR** — the same power
+indicator idiom as chain cards, this being the first `ctl` card with a
+genuine power axis — with an explicit toggle row as an acceptable fallback.
+Deliberately absent: **no bend readout** (a drone ignores bend by design, so
+a `±2 st` chip would be a lie), **no voice-count row** (`slots` is always 1),
+**no root readout and no subtitle** (the held root is not broadcast, so
+there is nothing honest to show).
 
 ---
 

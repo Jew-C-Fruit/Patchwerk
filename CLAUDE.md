@@ -41,7 +41,10 @@ arp→deck records voiced, deck→X replays), mono voices (`voice`,
 `voice.2`, ...; each drives one target source), POLY voices (`poly`,
 `poly.2`, ...; N notes at once on ONE target, oldest stolen when full —
 **pending on `feat/p2-poly-voice`, not on main, and not live-verified**;
-see the satellite landmine below), tonic derivers (`tonic.N`:
+see the satellite landmine below), DRONE voices (`hold`, `hold.2`, ... —
+note the id type is `hold`, NOT `drone`; holds the last root, with a binary
+POWER level-in at `"<id>:pwr"` — **pending on `feat/p29-drone-allocation`,
+which branches from item 10, so merge 10 first**), tonic derivers (`tonic.N`:
 notes in → ctl THRU out + amber TONIC out; tonic outs land only on drone
 instances' tonic-ins), and key shifters (`keyshift.N` with four isolated
 LANES — endpoint grammar `"keyshift.2:3"` = lane 3; lane k in → shift →
@@ -52,6 +55,16 @@ on is a stuck note and a stuck monitor bar.
 **Global-vs-wired doctrine.** Transport/clock, panic + sustain, master
 volume + IO config, pitch reference (transpose/bend), and persistence stay
 GLOBAL. Everything else — who hears whom — is wire-defined.
+
+⚠ **Global does not mean uniform: transpose and bend part company on the
+drone.** Item 29 (pending, `feat/p29-drone-allocation`) makes the drone
+follow global TRANSPOSE — it previously sat exactly `transpose` semitones
+away from the rest of the patch, which was a bug — while still IGNORING
+bend, on purpose. Transpose is a standing key change, so it redefines the
+reference too; bend is a momentary gesture on what you're PLAYING, and a
+drone is what you play against, so bending it with the melody would leave
+every interval unchanged and silently cancel the wheel. The two look
+inconsistent side by side and are not. Don't "fix" the bend half.
 
 ## GUIs
 
@@ -441,6 +454,23 @@ nets keep their last healthy state. Restore first, then diff.
   identity changes (bypass, hot reload, rack rebuild) or the server object is
   replaced — the same rule as the entry above. **When you add a path that
   touches a target node, assume you owe the pool a call.**
+- **A ctl node id must never collide with a MODULE type** (item 29, pending
+  on `feat/p29-drone-allocation`). The drone allocation's ids are `hold`,
+  `hold.2`, … and NOT `drone`, for one reason: `drone` is already a module
+  type, and a ctl node sharing an id with a rack instance **shadows that
+  instance in `_ctl_sinks`** — the note router would resolve the wrong
+  thing. The card is still titled "Drone Voice"; the id is plumbing, the
+  name is the product. Any future ctl node needs the same check against the
+  module registry before its id type is chosen.
+- **A drone card's POWER must never call `set_enabled`** (item 29, same
+  branch). POWER holds the TARGET's envelope open (`set_gate_open`), because
+  bypassing the target node would **silence any poly voice sharing that same
+  source** — allocations lease slots from one pool, so bypass is not a
+  private off switch. Two related traps on that path: the effective gate is
+  `power AND transport.running` (item 32's invariant in allocation terms),
+  and on a GATELESS target there is nothing to open, so it is SKIPPED rather
+  than faked — writing a `gate` the synthdef doesn't have puts a phantom
+  param into `inst.settings` and into the broadcast state.
 - A relay circuit's stored wires are the truth on EVERY plane. Item 25 made
   the audio plane match the mod plane: a claimed audio circuit is a permanent
   lagged-gate synth, `state.wires` broadcasts the STORED graph (endpoints
