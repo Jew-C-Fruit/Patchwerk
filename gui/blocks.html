@@ -109,6 +109,13 @@
   #wire-labels g { pointer-events: auto; cursor: grab; }
   .mod.splice-target { border-color: rgba(255,255,255,0.85);
     box-shadow: 0 0 0 1.5px rgba(255,255,255,0.55), 0 3px 14px rgba(0,0,0,0.45); }
+  /* item 12 (Cole, 07-22): a same-kind card whose CENTRE you are hovering
+     with a palette drag goes RED — drop here and this module is REPLACED.
+     Deliberately unlike the white splice outline: this one destroys. */
+  .mod.replace-hi { border-color: var(--danger);
+    box-shadow: 0 0 0 2px var(--danger),
+                0 0 18px color-mix(in srgb, var(--danger) 60%, transparent); }
+  .mod.replace-hi .body, .mod.replace-hi .viz-sec { opacity: 0.45; }
   svg#wires path.hit.cuttable { cursor: pointer; }
   svg#wires path.splice-hi { stroke-width: 5 !important;
     filter: brightness(1.4) drop-shadow(0 0 4px rgba(255,255,255,0.45)); }
@@ -6453,6 +6460,40 @@ function overBoard(ev) {
   return ev.clientX > p.right && ev.clientY > b.top &&
          ev.clientX < b.right && ev.clientY < b.bottom;
 }
+// ---------- item 12 (Cole, 07-22): DROP-TO-REPLACE ---------------------------
+// Dragging a palette module onto the CENTRE of an existing SAME-KIND card
+// (source onto source, effect onto effect) marks it RED; dropping there
+// REPLACES that module, carrying its wiring over. Dropping on a SIDE keeps
+// the ordinary behaviour (splice / spawn where you dropped).
+//
+// The transfer is `swap_synth`, which is already the atomic same-id swap the
+// Instrument dropdown uses: same instance id, same buses, same audio + ctl
+// wires, same node order (AddAction.REPLACE), LFO dests re-mapped for
+// surviving param names and dropped for the rest, voices keep aiming at the
+// id. That is exactly item 12's "carry over all wire connections where
+// possible" — and doing it server-side in one message avoids the
+// spawn+rewire+remove rebuild race the backlog warns about.
+const REPLACE_CORE = 0.34;      // central fraction of the card = replace zone
+function replaceTargetAt(ev, a) {
+  if (!a || !overBoard(ev)) return null;
+  for (const n of nodes.values()) {
+    if (!n.mod || !n.chainKey) continue;              // real chain modules only
+    if (n.mod.service) continue;                      // never a service card
+    if (n.mod.kind !== a.kind) continue;              // SAME KIND only
+    const type = n.mod.type || String(n.chainKey).split(".")[0];
+    if (type === a.key) continue;                     // already that module
+    const r = n.el.getBoundingClientRect();
+    if (ev.clientX < r.left || ev.clientX > r.right ||
+        ev.clientY < r.top || ev.clientY > r.bottom) continue;
+    // CENTRE vs SIDE: the middle third in both axes is the replace core
+    const fx = (ev.clientX - r.left) / (r.width || 1);
+    const fy = (ev.clientY - r.top) / (r.height || 1);
+    const lo = 0.5 - REPLACE_CORE / 2, hi = 0.5 + REPLACE_CORE / 2;
+    if (fx < lo || fx > hi || fy < lo || fy > hi) return null;   // side → shove
+    return n;
+  }
+  return null;
+}
 function startPaletteDrag(e, btn, a) {
   e.preventDefault();
   try { btn.setPointerCapture(e.pointerId); } catch (_) {}
@@ -6471,9 +6512,16 @@ function startPaletteDrag(e, btn, a) {
     }
     pd.ghost.style.left = (ev.clientX - 60) + "px";
     pd.ghost.style.top = (ev.clientY - 16) + "px";
+    // item 12: a same-kind card under the pointer's CENTRE wins over the
+    // wire-splice highlight — you are aiming at the card, not through it
+    const rep = replaceTargetAt(ev, a);
+    if (pd.repTarget && pd.repTarget !== rep)
+      pd.repTarget.el.classList.remove("replace-hi");
+    pd.repTarget = rep;
+    if (rep) rep.el.classList.add("replace-hi");
     const r = world.getBoundingClientRect();
     const zs = parseFloat(world.style.zoom) || 1;
-    const hit = overBoard(ev)
+    const hit = (!rep && overBoard(ev))
       ? wireNearPoint((ev.clientX - r.left) / zs, (ev.clientY - r.top) / zs, 18) : null;
     if (pd.hover && pd.hover !== hit) pd.hover.el.classList.remove("splice-hi");
     pd.hover = hit;
@@ -6486,12 +6534,17 @@ function startPaletteDrag(e, btn, a) {
     if (!pd) return;
     if (pd.ghost) pd.ghost.remove();
     if (pd.hover) pd.hover.el.classList.remove("splice-hi");
+    if (pd.repTarget) pd.repTarget.el.classList.remove("replace-hi");
     if (cancelled) return;
     const r = world.getBoundingClientRect();
     const zs = parseFloat(world.style.zoom) || 1;
     const wx = (ev.clientX - r.left) / zs, wy = (ev.clientY - r.top) / zs;
     if (!pd.moved) {
       send({type: "spawn_module", key: a.key});           // click → unconnected
+    } else if (pd.repTarget) {
+      // item 12: REPLACE — one atomic server-side swap, same id and wiring
+      send({type: "swap_synth", id: pd.repTarget.chainKey, key: a.key});
+      toast(`replaced ${pd.repTarget.name} with ${a.name}`);
     } else if (pd.hover) {
       spliceNewIntoWire(pd.hover, a.key, a.kind, wx, wy); // drop on wire → splice
     } else if (overBoard(ev)) {

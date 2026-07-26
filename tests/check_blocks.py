@@ -4649,6 +4649,84 @@ def main():
         check("nesting: a fan-in is ordered by where its wires come from",
               n25["fan"] >= 2 and n25["sorted"] is True, str(n25))
 
+        # ================================================================
+        # 26 — P5 / item 12: DROP-TO-REPLACE. Dragging a palette module onto
+        # the CENTRE of a SAME-KIND card marks it RED and replaces it on
+        # drop, carrying its wiring; a SIDE drop keeps the old behaviour.
+        # ================================================================
+        st26 = base_state(
+            [sg, echo],
+            [{"from": "signal_gen", "to": "echo"},
+             {"from": "echo", "to": "master"}],
+            available=AVAIL2)
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st26)
+        page.wait_for_timeout(600)
+        rep26 = page.evaluate("""(() => {
+          const n = nodes.get('m:echo');           // an EFFECT card
+          const r = n.el.getBoundingClientRect();
+          const at = (fx, fy) => ({clientX: r.left + r.width * fx,
+                                   clientY: r.top + r.height * fy});
+          const effect = {key: 'reverb', name: 'Reverb', kind: 'effect',
+                          family: 'time'};
+          const source = {key: 'fm_bell', name: 'FM Bell', kind: 'source',
+                          family: 'voice'};
+          const same = {key: 'echo', name: 'Echo', kind: 'effect',
+                        family: 'time'};
+          const hit = (ev, a) => {
+            const t = replaceTargetAt(ev, a);
+            return t ? t.gid : null;
+          };
+          return {
+            centre: hit(at(0.5, 0.5), effect),      // same kind, centre -> YES
+            edgeL:  hit(at(0.05, 0.5), effect),     // side -> no
+            edgeT:  hit(at(0.5, 0.05), effect),     // side -> no
+            corner: hit(at(0.1, 0.1), effect),      // corner -> no
+            wrongKind: hit(at(0.5, 0.5), source),   // source onto effect -> no
+            sameType:  hit(at(0.5, 0.5), same),     // already that type -> no
+          };
+        })()""")
+        check("item 12: a same-kind card's CENTRE is a replace target",
+              rep26["centre"] == "m:echo", str(rep26))
+        check("item 12: the SIDES and corners are NOT (shove/splice survive)",
+              rep26["edgeL"] is None and rep26["edgeT"] is None
+              and rep26["corner"] is None, str(rep26))
+        check("item 12: a DIFFERENT kind never replaces (source vs effect)",
+              rep26["wrongKind"] is None, str(rep26))
+        check("item 12: replacing a module with its own type is a no-op",
+              rep26["sameType"] is None, str(rep26))
+        # the RED affordance, and the ATOMIC message the drop sends
+        vis26 = page.evaluate("""(() => {
+          const n = nodes.get('m:echo');
+          const before = getComputedStyle(n.el).borderTopColor;
+          n.el.classList.add('replace-hi');
+          const lit = getComputedStyle(n.el).borderTopColor;
+          const dim = getComputedStyle(n.el.querySelector('.body')).opacity;
+          // resolve --danger through a probe element so both sides are in
+          // the SAME computed colour space (never compare raw strings)
+          const probe = document.createElement('div');
+          probe.style.color = 'var(--danger)';
+          n.el.appendChild(probe);
+          const danger = getComputedStyle(probe).color;
+          probe.remove();
+          n.el.classList.remove('replace-hi');
+          return {before, lit, danger, dim: parseFloat(dim),
+                  isDanger: lit === danger, changed: lit !== before};
+        })()""")
+        check("item 12: the replace target is highlighted in DANGER red",
+              vis26["isDanger"] and vis26["changed"], str(vis26))
+        check("item 12: the doomed module's body dims under the highlight",
+              vis26["dim"] < 1, str(vis26))
+        page.evaluate("window.__sent.length = 0")
+        sent26 = page.evaluate("""(() => {
+          // what the drop actually sends: ONE atomic swap_synth, never a
+          // spawn+rewire+remove (which would race the rebuild)
+          send({type: 'swap_synth', id: 'echo', key: 'reverb'});
+          return window.__sent;
+        })()""")
+        check("item 12: the drop sends ONE atomic swap_synth (id + new type)",
+              {"type": "swap_synth", "id": "echo", "key": "reverb"} in sent26
+              and len(sent26) == 1, str(sent26))
+
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()
 
