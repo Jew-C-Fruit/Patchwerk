@@ -351,10 +351,35 @@ class GateManager:
         for nid in sorted(changed_nodes):
             self._emit(nid, self.logics[nid].out)
 
+    def _is_trig_dst(self, dst) -> bool:
+        """EDGE-triggered destinations (a rising edge fires once): deck
+        buttons, "transport:tap", deriver commits. Everything else that
+        this manager drives FOLLOWS the level. Kept as a predicate rather
+        than inlined in the dispatch so the reactive tap below can pick
+        the right shape (momentary pulse vs. persistent level) for an
+        endpoint without re-deriving the branch it took."""
+        base, _, sub = str(dst).partition(":")
+        if base == "deck" and sub in DECK_ACTIONS:
+            return True
+        if base == "transport" and sub == "tap":
+            return True
+        try:
+            return sub == "" and self.app._deriver(base) is not None
+        except Exception:  # noqa: BLE001
+            return False
+
     def _apply_effects(self) -> None:
         """Edge-diff every wired destination endpoint against _edge:
         trig-ins fire on rising edges (never on wire-attach), level-ins
-        apply on change (both directions, incl. first sight)."""
+        apply on change (both directions, incl. first sight).
+
+        EVERY endpoint this pass drives announces itself with a reactive
+        tap, emitted ONCE at the bottom of the dispatch rather than per
+        branch (REACTIVE-INDICATOR DOCTRINE, Cole 07-24). That placement
+        is the point: a new indicator added as a new branch here reacts
+        without its author having to remember the tap, which is exactly
+        the gap that let transport:tap and the deck buttons ship silent.
+        tests/test_reactive.py holds the line."""
         app = self.app
         targets = {w.get("to") for w in app.ctl_wires
                    if app._is_ping_src(w.get("from"))}
@@ -370,12 +395,15 @@ class GateManager:
             if lvl == prev:
                 continue
             self._edge[dst] = lvl
+            trig = self._is_trig_dst(dst)
+            fired = False       # a trig-in that actually fired this pass
             try:
                 if base == "deck" and sub in DECK_ACTIONS:
                     # TRIG-IN: rising edge presses once; attaching a wire
                     # whose source is already hi is not an edge
                     if lvl and prev is not None:
                         app.set_looper(action=DECK_ACTIONS[sub])
+                        fired = True
                 elif base == "transport":
                     # item 9: the GLOBAL transport's binary ins
                     if sub == "tap":
@@ -383,19 +411,18 @@ class GateManager:
                         # attach-while-hi is not an edge
                         if lvl and prev is not None:
                             app._transport_tap()
+                            fired = True
                     elif sub == "run":
                         app.set_transport(playing=lvl)   # LEVEL-IN follows
-                        self._emit_level("transport:run", lvl)
                     elif sub == "click":
                         app.set_transport(click=lvl)     # LEVEL-IN follows
-                        self._emit_level("transport:click", lvl)
                     elif sub == "accent":
                         app.set_transport(accent=lvl)    # LEVEL-IN follows
-                        self._emit_level("transport:accent", lvl)
                 elif sub == "" and app._deriver(base) is not None:
                     # TRIG-IN: rising edge commits once
                     if lvl and prev is not None:
                         app._deriver(base).trigger()
+                        fired = True
                 elif sub == "pwr":
                     # LEVEL-IN: enable follows, incl. first sight
                     if base == "arp":
@@ -404,10 +431,18 @@ class GateManager:
                         app.set_drums(enabled=lvl)
                     else:
                         app.set_enabled(base, lvl)
-                    self._emit_level(f"{base}:pwr", lvl)
                 elif r is not None and sub == "ctl":
                     # LEVEL-IN: the relay's closed state follows
                     r.set_closed(lvl)
+                # the ONE reactive tap for every endpoint above. It sits
+                # INSIDE the try on purpose: a target that threw did not
+                # change, and a stale indicator is honester than a lying
+                # one. Trig-ins are momentary, level-ins persist.
+                if trig:
+                    if fired:
+                        self._pulse_level(dst)
+                else:
+                    self._emit_level(dst, lvl)
             except Exception:  # noqa: BLE001 — a dead target must not stop the pass
                 pass
 
@@ -454,6 +489,15 @@ class GateManager:
                                        "on": bool(on)})
         except Exception:  # noqa: BLE001
             pass
+
+    def _pulse_level(self, endpoint: str) -> None:
+        """A TRIG-IN fired. Its indicator is MOMENTARY — there is no level
+        to hold — so announce the pulse the binary plane itself uses: hi,
+        then lo. Both can land inside one frame; the GUI's pulse stretcher
+        is what guarantees the lit frame, exactly as it does for the
+        {"kind": "gate"} LEDs."""
+        self._emit_level(endpoint, True)
+        self._emit_level(endpoint, False)
 
     def state(self) -> dict:
         return {"logics": [g.settings() for g in self.logics.values()]}

@@ -1676,8 +1676,24 @@ class SynthApp:
             except Exception:  # noqa: BLE001
                 pass
 
+    def _emit_transport(self) -> None:
+        """The transport's SETTINGS changed. Mirrors the deck's
+        {"kind": "looper"} event exactly: the settings ride along so a
+        change applied OUTSIDE the broadcast path still reaches every
+        client. That path is real — a logic wire into transport:run|
+        click|accent applies inside the gate settle pass, and a rising
+        edge on transport:tap moves the BPM with nothing else to announce
+        it (which is why the tempo readout used to sit frozen at 100
+        while the transport actually ran at 232)."""
+        try:
+            self._emit_midi_event({"kind": "transport",
+                                   **self.transport.settings()})
+        except Exception:  # noqa: BLE001
+            pass
+
     def set_transport(self, bpm=None, beats_per_bar=None, click=None, accent=None,
                       playing=None, downbeat=None) -> None:
+        before = self.transport.settings()
         if accent is not None:
             self.transport.click_accent = bool(accent)
         if playing is not None:
@@ -1696,6 +1712,8 @@ class SynthApp:
             self.transport.set_downbeat(downbeat)
         if click is not None:
             self.transport.click_enabled = bool(click)
+        if self.transport.settings() != before:
+            self._emit_transport()
 
     # -- transport cards (item 9: canvas views of the GLOBAL transport) -----------
 

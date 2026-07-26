@@ -47,6 +47,15 @@ jobs:
       - name: Transport card tests
         run: python tests/test_transport.py
 
+      # the REACTIVE-INDICATOR net: every binary endpoint the gate settle
+      # pass drives must emit its own tap. Without this, all four
+      # _emit_level calls could be deleted and every suite above stayed
+      # green — the GUI checks never import synthbase. This is Phase 0 of
+      # continuity/ai-control-build-plan.md, which names the file
+      # tests/test_events.py; it landed here first, as test_reactive.py.
+      - name: Reactive-indicator tests
+        run: python tests/test_reactive.py
+
   gui-checks:
     name: GUI checks (headless Playwright)
     runs-on: ubuntu-latest
