@@ -1475,8 +1475,106 @@ def test_relay_chain_and_engine_swap():
     app.transport.shutdown()
 
 
+# ---- item 11: the DUAL kind ---------------------------------------------------
+
+def test_dual_bus_and_wire_derivation():
+    """A dual takes audio IN like an effect, even though it also generates.
+
+    Both halves of this were live bugs waiting to happen: a wire into a dual
+    that summed into its OUTPUT (bypassing its DSP entirely), and a dual left
+    out of audio_wires' in_bus map, which reports the wire as "→ master" and
+    therefore loses it on the next edit.
+    """
+    rack = make_rack([
+        fake_inst("pluck", "source", {"out": 16}),
+        fake_inst("power_shaper", "dual", {"in_bus": 16, "out": 0}),
+        fake_inst("wobble_saw", "source", {"out": 20}),
+    ])
+    check("wire into a DUAL lands on its in_bus, not its out bus",
+          rack._dst_bus("power_shaper") == 16)
+    check("wire into a plain SOURCE still sums on its out bus",
+          rack._dst_bus("wobble_saw") == 20)
+    check("a dual appears in the derived wiring as a real destination",
+          {"from": "pluck", "to": "power_shaper"} in rack.audio_wires())
+    check("…and its own output still derives normally",
+          {"from": "power_shaper", "to": "master"} in rack.audio_wires())
+
+
+def test_dual_mode_follows_wires_and_emits_tap():
+    """The mode is DERIVED, pushed to the node, and ANNOUNCED.
+
+    The announcement is the part with no other safety net. A wire edit only
+    re-points the SOURCE's `out`; the dual's own node is never touched, so
+    App's "<key>:mode" level tap is the only live signal the GUI can react
+    to. Delete the _emit_midi_event call in _sync_dual_modes and the two
+    `tap` checks below fail — which is the point: until this test existed,
+    a silently-dropped tap passed every Python suite.
+    """
+    app = SynthApp(use_midi=False, use_reload=False)
+    app.rack = RecordingRack(
+        [("pluck", "source"), ("power_shaper", "dual"), ("echo", "effect")],
+        [{"from": "pluck", "to": "master"},
+         {"from": "power_shaper", "to": "master"}],
+    )
+    taps = []
+    app._emit_midi_event = taps.append
+    dual = app.rack.find("power_shaper")
+
+    app.graph_wire("add", "pluck", "power_shaper")
+    check("wiring audio in puts the dual in FX mode",
+          dual.settings.get("mode") == 1)
+    check("…pushed to the running node",
+          {"mode": 1} in dual.node.sets)
+    check("…and TAPPED so the card's indicator can react",
+          {"kind": "level", "ep": "power_shaper:mode", "on": True} in taps)
+
+    taps.clear()
+    app.graph_wire("remove", "pluck")
+    check("cutting the wire returns it to GENERATE",
+          dual.settings.get("mode") == 0)
+    check("…and taps that too (an unannounced revert is a stale indicator)",
+          {"kind": "level", "ep": "power_shaper:mode", "on": False} in taps)
+
+    # no wire touched the dual — nothing to announce
+    taps.clear()
+    app.graph_wire("add", "echo", "master")
+    check("an unrelated wire edit emits no mode tap",
+          not [t for t in taps if t.get("ep") == "power_shaper:mode"])
+
+    # a plain source must NOT acquire a mode (the kind is what gates this)
+    check("plain sources have no mode setting",
+          "mode" not in app.rack.find("pluck").settings)
+    app.transport.shutdown()
+
+
+def test_dual_mode_on_fresh_patch_load():
+    """A patch that LOADS with a dual mid-chain must come up in FX mode.
+
+    A fresh load has no wire overlay (graph_wires is None), but the linear
+    chain it builds still feeds the dual from its predecessor. Deriving the
+    mode only from the overlay leaves that dual generating over a signal it
+    was supposed to be shaping — silent-wrong, not crash-wrong.
+    """
+    app = SynthApp(use_midi=False, use_reload=False)
+    app.rack = RecordingRack(
+        [("pluck", "source"), ("power_shaper", "dual"), ("reverb", "effect")],
+        [{"from": "pluck", "to": "power_shaper"},
+         {"from": "power_shaper", "to": "reverb"},
+         {"from": "reverb", "to": "master"}],
+    )
+    check("no overlay yet (this is what a fresh load looks like)",
+          app.graph_wires is None)
+    app._reapply_graph_wires()
+    check("the mid-chain dual comes up in FX mode from the LINEAR chain",
+          app.rack.find("power_shaper").settings.get("mode") == 1)
+    app.transport.shutdown()
+
+
 def main():
     test_wires_derivation()
+    test_dual_bus_and_wire_derivation()
+    test_dual_mode_follows_wires_and_emits_tap()
+    test_dual_mode_on_fresh_patch_load()
     test_graph_wire_bookkeeping()
     test_spawn_unconnected()
     test_ctl_wires()

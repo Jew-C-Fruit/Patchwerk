@@ -482,7 +482,14 @@ class SynthApp:
     def _reapply_graph_wires(self) -> None:
         """After ANY rebuild the rack comes up linear; re-impose the user's
         stored graph wires for whichever keys still exist."""
-        if self.graph_wires is None or not self.rack:
+        if not self.rack:
+            return
+        if self.graph_wires is None:
+            # a FRESH patch load has no overlay yet, but the linear chain it
+            # just built can still put a dual mid-chain — which means that
+            # dual is receiving audio and must come up in FX mode, not
+            # generating (item 11). Derive it from the built rack and stop.
+            self._sync_dual_modes(force=True)
             return
         existing = {i.key for i in self.rack.instances if not i.service}
         for w in self.graph_wires:
@@ -505,6 +512,53 @@ class SynthApp:
             relay_mod.apply_audio(self)
         except Exception:  # noqa: BLE001
             pass
+        # a rebuild spawns every dual at its synthdef default (mode=0), so the
+        # re-push is unconditional here, not change-gated
+        self._sync_dual_modes(force=True)
+
+    def _sync_dual_modes(self, force: bool = False) -> None:
+        """Item 11: push each DUAL module's derived MODE to its node.
+
+        A dual generates until audio is wired into it, then it processes —
+        so its mode IS a function of the audio graph: a stored wire whose
+        destination is this instance means FX (1), nothing means GENERATE (0).
+
+        This exists because NOTHING else can tell a dual it has an input.
+        `audio_rewire`/`audio_disconnect` only re-point the SOURCE's `out`;
+        the destination node is never touched by a wire edit. So every site
+        that can change a wire's destination calls this.
+
+        It also emits the REACTIVE-INDICATOR tap (Cole, 07-24) so the card's
+        mode indicator flips the moment the wire lands — the same mechanism
+        the power stripe uses for a ":pwr" level-in, and for the same reason:
+        a shaper switching between generating and processing must never be an
+        invisible state change.
+        """
+        if not self.rack:
+            return
+        wires = self.graph_wires
+        if wires is None:
+            try:
+                wires = self.rack.audio_wires()
+            except Exception:  # noqa: BLE001
+                wires = []
+        fed = {w.get("to") for w in wires if w.get("to")}
+        for inst in self.rack.instances:
+            if inst.service or inst.module.kind != "dual":
+                continue
+            mode = 1 if inst.key in fed else 0
+            if not force and int(inst.settings.get("mode", 0)) == mode:
+                continue
+            inst.settings["mode"] = mode
+            # a DISABLED dual is a _bypass node with no `mode` control; the
+            # setting is stored and re-applied when set_enabled respawns it
+            if inst.node is not None and inst.enabled:
+                try:
+                    inst.node.set(mode=mode)
+                except Exception:  # noqa: BLE001
+                    pass
+            self._emit_midi_event({"kind": "level", "ep": f"{inst.key}:mode",
+                                   "on": bool(mode)})
 
     def _on_node_replaced(self, key: str) -> None:
         self.lfos.on_node_replaced(key)
@@ -948,6 +1002,9 @@ class SynthApp:
             # a drone ADDED while the transport is stopped spawns silent
             # (item 32); remove/move are no-ops for this sync
             self._sync_drone_run_state()
+            # a remove's splice-heal re-aims its feeders at ITS destination,
+            # which can put a dual into (or out of) FX mode (item 11)
+            self._sync_dual_modes()
             return result
 
     def graph_wire(self, action: str, src: str, dst: str | None = None) -> None:
@@ -1024,6 +1081,8 @@ class SynthApp:
             # every wire's src before its dst; with no claimed circuits
             # it degrades to the plain (cheap-pathed) reorder
             relay_mod.apply_audio(self)
+            self._sync_dual_modes()   # a wire landing on / leaving a dual IS
+                                      # its mode change (item 11)
 
     def swap_synth(self, key: str, new_type: str) -> None:
         """Swap a running instance's module type IN PLACE (the Instrument
@@ -1059,6 +1118,8 @@ class SynthApp:
             # a swap TO drone while the transport is stopped lands paused
             # (item 32)
             self._sync_drone_run_state()
+            # the fresh node came up at mode=0 even if the id is wired as FX
+            self._sync_dual_modes(force=True)
 
     def spawn_unconnected(self, key: str) -> str:
         """Add a module to the rack with its audio out parked on the null bus
@@ -1253,6 +1314,8 @@ class SynthApp:
                 relay_mod.apply_audio(self)
             except Exception:  # noqa: BLE001
                 pass
+            # a relay carrying audio INTO a dual just vanished (item 11)
+            self._sync_dual_modes()
 
     def set_relay(self, rid: str, closed=None) -> None:
         """The manual click. Last writer wins — a wired relay:ctl level

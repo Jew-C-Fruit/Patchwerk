@@ -169,12 +169,10 @@ class DrumMachine:
             action = AddAction.ADD_TO_TAIL
             if self.target != "master" and self.app.rack is not None:
                 try:
-                    # resolve the target's input bus at spawn time: effects
-                    # take hits on their in_bus, sources sum on their out bus
-                    inst = self.app.rack.find(self.target)
-                    out = (int(inst.settings["in_bus"])
-                           if inst.module.kind == "effect"
-                           else int(inst.settings.get("out", 0)))
+                    # resolve the target's input bus at spawn time — the same
+                    # rule as Rack._dst_bus: effects AND duals take hits on
+                    # their in_bus, plain sources sum on their out bus
+                    out = self.app.rack._dst_bus(self.target)
                     action = AddAction.ADD_TO_HEAD
                 except KeyError:
                     pass  # stale target after a patch switch → master

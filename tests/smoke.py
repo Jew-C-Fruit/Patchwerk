@@ -14,7 +14,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from synthbase.module import load_all_modules  # noqa: E402
+from synthbase.module import KINDS, load_all_modules  # noqa: E402
 from synthbase.midi import midi_to_freq  # noqa: E402
 
 
@@ -26,7 +26,14 @@ def main() -> int:
         print(f"FAIL  {fname}: {exc!r}")
         failures += 1
     for key, mod in sorted(registry.items()):
-        assert mod.kind in ("source", "effect")
+        assert mod.kind in KINDS
+        # kind predicates agree with the kind (item 11's dual is BOTH)
+        assert mod.generates == (mod.kind in ("source", "dual"))
+        assert mod.takes_audio_in == (mod.kind in ("effect", "dual"))
+        # anything that reads audio must actually declare an in_bus, and a
+        # plain source must not — the contract the dual kind widens, not drops
+        assert ("in_bus" in mod.synthdef.parameters) == mod.takes_audio_in, \
+            f"{key}: in_bus presence disagrees with kind {mod.kind!r}"
         for pname, p in mod.params.items():
             assert p.minimum <= p.default <= p.maximum, f"{key}.{pname} default out of range"
             mid = p.from_unit(0.5)
@@ -46,7 +53,7 @@ def main() -> int:
             if key not in registry:
                 print(f"FAIL  {patch_path.name}: unknown module {key!r}")
                 failures += 1
-            elif i == 0 and registry[key].kind != "source":
+            elif i == 0 and not registry[key].generates:
                 print(f"FAIL  {patch_path.name}: chain must start with a source")
                 failures += 1
         for cc, (key, pname) in (patch.get("bindings", {}).get("cc") or {}).items():

@@ -183,6 +183,12 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .mini .chip:hover { background: #3a3a38; }
   .mini .chip.static { cursor: default; }
+  /* item 11: the dual's mode readout. GEN is the resting state (plain chip);
+     FX means audio is wired in and the card is processing it — lit, in the
+     audio-wire colour, so the change is impossible to miss when it flips. */
+  .mini .chip.modeind { text-align: center; font-weight: 600;
+    letter-spacing: 0.5px; }
+  .mini .chip.modeind.fx { background: var(--audio); color: #fff; }
   .viz-sec { padding: 3px 10px 8px 14px; }
   canvas.vz { width: 100%; display: block; background: var(--plane);
     border: 1px solid var(--hairline); border-radius: 6px; }
@@ -4115,6 +4121,40 @@ function binSrcIds() {
 // sig "any": their IN accepts any of audio/notes/bin drags; their OUT has
 // no kind yet and refuses (the kind comes from the first wire INTO it).
 const RELAY_MAX = 9;
+// MODULE KINDS — mirrors synthbase/module.py. Item 11's "dual" is BOTH: it
+// generates, and it processes whatever is wired into it. Everything that used
+// to ask kind === "source" / "effect" asks one of these instead, so a dual is
+// never accidentally excluded from both branches of an if/else.
+const genKind = (m) => !!m && (m.kind === "source" || m.kind === "dual");
+const fxKind = (m) => !!m && (m.kind === "effect" || m.kind === "dual");
+
+// A dual is in FX mode exactly when an audio wire lands ON it — the same
+// derivation the backend makes (App._sync_dual_modes), so the seed the card
+// renders with and the live tap that follows can never disagree.
+function isFxWired(key) {
+  return ((state && state.wires) || []).some(w => w.to === key);
+}
+// the dual's mode readout. NOT clickable: the wire decides, so a click here
+// would be a lie. It still has to react instantly — see the "mode" branch of
+// the {"kind":"level"} handler.
+function rowMode(gid, fx) {
+  const row = document.createElement("div");
+  row.className = "mini";
+  row.innerHTML = `<label title="mode">mode</label>
+    <span class="chip static modeind"></span>`;
+  const chip = row.querySelector(".chip");
+  const sync = (isFx) => {
+    chip.textContent = isFx ? "FX" : "GEN";
+    chip.classList.toggle("fx", !!isFx);
+    chip.title = isFx ? "audio wired in — shaping it"
+                      : "nothing wired in — generating";
+  };
+  sync(fx);
+  chip.addEventListener("pointerdown", (e) => e.stopPropagation());
+  uiParam[gid + ".mode"] = (u, isFx) => sync(isFx);
+  return row;
+}
+
 const RELAY_SIG = {audio: "audio", notes: "ctl", binary: "bin", mod: "mod"};
 function relayIds() {
   return new Set(((state && state.relays) || []).map(r => r.id));
@@ -4215,7 +4255,9 @@ function connectAction(out, inn) {
     if (pi.relayCirc) to = pi.ep;   // circuit IN: stored verbatim server-side
     else {
       to = inn.node.gid === "master" ? "master" : inn.node.chainKey;
-      if (inn.node.mod && inn.node.mod.kind !== "effect") return null; // sources take no audio in
+      // plain sources take no audio in; a DUAL does (item 11 — the wire
+      // landing on its in_bus is exactly what puts it in FX mode)
+      if (inn.node.mod && !fxKind(inn.node.mod)) return null;
     }
     if (!from || !to || to === "drums") return null;
     if (from === "drums")   // drums route via set_drums (keys only, no relays)
@@ -4292,7 +4334,7 @@ function connectAction(out, inn) {
     return () => send({type: "ctl_wire", action: "add", from, to});
   }
   // ---- ctl ----
-  if (voiceIds().has(out.node.gid) && inn.node.mod && inn.node.mod.kind === "source" &&
+  if (voiceIds().has(out.node.gid) && inn.node.mod && genKind(inn.node.mod) &&
       inn.node.mod.params && "freq" in inn.node.mod.params && "gate" in inn.node.mod.params)
     return () => send({type: "set_voice_target", key: inn.node.chainKey,
                        voice: out.node.gid});
@@ -4350,7 +4392,7 @@ function spliceNewIntoWire(w, key, kind, wx, wy) {
   if (uiMode === "flex")
     fposMem["m:" + id] = [clampFx(flexSnap(wx - FLEX_W / 2)), clampFy(flexSnap(wy - 12))];
   send({type: "spawn_module", key});
-  if (kind === "effect" && fromKey) {
+  if ((kind === "effect" || kind === "dual") && fromKey) {
     if (fromKey === "drums") send({type: "set_drums", target: id});
     else send({type: "graph_wire", action: "add", from: fromKey, to: id});
   }
@@ -4372,7 +4414,7 @@ function spliceExistingIntoWire(w, node) {
   const wiresNow = (state && state.wires || []).map(v => ({...v}));
   const oldOut = wiresNow.find(v => v.from === myKey);
   send({type: "graph_wire", action: "add", from: myKey, to: toKey});
-  if (node.mod && node.mod.kind === "effect" && fromKey) {
+  if (fxKind(node.mod) && fromKey) {
     if (fromKey === "drums") send({type: "set_drums", target: myKey});
     else send({type: "graph_wire", action: "add", from: fromKey, to: myKey});
     if (oldOut) {  // heal the gap the card left behind
@@ -4420,7 +4462,7 @@ function labelSpliceAction(w, n) {
   if (!n || n === w.from.node || n === w.to.node) return null;
   if (w.sig === "audio") {
     if (n.montype === "wave") return () => spliceWaveIntoAudio(w, n);
-    if (n.chainKey && n.mod && n.mod.kind === "effect" && !n.mod.service)
+    if (n.chainKey && fxKind(n.mod) && !n.mod.service)
       return () => spliceExistingIntoWire(w, n);
     return null;
   }
@@ -4539,6 +4581,11 @@ function buildChainCard(mod) {
   // NEVER use the raw instance id as a type (v5 regression: broke scope/drone
   // card detection for suffixed instances)
   const mtype = mod.type || String(mod.key).split(".")[0];
+  // item 11: a DUAL card declares which mode it is in. The mode follows the
+  // WIRE, not a click, so this is never local UI state — it is seeded from
+  // state.wires and thereafter driven by the backend's "<key>:mode" level
+  // tap (REACTIVE-INDICATOR DOCTRINE).
+  if (mod.kind === "dual") rows.unshift(rowMode(gid, isFxWired(mod.key)));
   if (mtype === "audio_in")
     rows.push(rowDevSelect("input", ((state.devices || {}).inputs) || [],
       state.current_input,
@@ -4550,8 +4597,13 @@ function buildChainCard(mod) {
   // retarget its freq through the glide path; note_offs hold the last root
   if (isDrone) ports.push(["in", "ctl", "play"]);
   else if (mod.service) ports.push(["in", "ctl", "listen"]);
-  else if (mod.kind === "source") ports.push(["in", "ctl", "play"]);
-  else ports.push(["in", "audio", "in"]);
+  else {
+    // item 11: this if/else was mutually exclusive, so a source got ONE
+    // ctl-in and no audio-in. A DUAL needs BOTH — the ctl-in plays it as a
+    // generator, the audio-in is the gesture that turns it into an effect.
+    if (genKind(mod)) ports.push(["in", "ctl", "play"]);
+    if (fxKind(mod)) ports.push(["in", "audio", "in"]);
+  }
   if (!mod.service) ports.push(["out", "audio", "out"]);
   // the scope tap module IS the oscilloscope: an ordinary effect with real
   // IO handles (spawn/splice/wire it like any other), plus a live trace of
@@ -4562,7 +4614,7 @@ function buildChainCard(mod) {
   // waveform preview + live scope), generalized from the psines. Audio In
   // is an input (nothing to compute), drone/service cards keep their own
   // semantics, scope_tap IS a scope already.
-  const isGen = mod.kind === "source" && !mod.service
+  const isGen = genKind(mod) && !mod.service
     && !["audio_in", "drone", "scope_tap"].includes(mtype);
   // Instrument (item 2): voice-family instances render as ONE card type with
   // a voice dropdown; swap_synth changes the module under the same id/wires
@@ -4584,7 +4636,7 @@ function buildChainCard(mod) {
     // name (or its voice dropdown), so the line only cost height
     sub: "",
     fam: mod.family,
-    seed: mod.kind === "source" && !mod.service,
+    seed: genKind(mod) && !mod.service,
     vizHTML: isScope ? `<canvas class="vz" data-viz="scope" height="44"></canvas>`
       : isGen ? `<canvas class="vz" data-viz="gen" height="44"></canvas>` : null,
     headCheck: {
@@ -4709,7 +4761,7 @@ function buildArpCard() {
 // one card per mono voice (state.voices). The target chip cycles through
 // the playable sources; the target wire re-drags via set_voice_target.
 function playableSources() {
-  return (state.chain || []).filter(c => c.kind === "source" &&
+  return (state.chain || []).filter(c => genKind(c) &&
     c.params && c.params.freq && c.params.gate).map(c => c.key);
 }
 function buildVoiceCard(v) {
@@ -6179,7 +6231,7 @@ function rebuildGraph() {
   // this wire is not cuttable)
   for (let i = 0; i < voiceNodes.length; i++) {
     const target = nodes.get("m:" + voiceList[i].target) ||
-                   chainNodes.find(n => n.mod && n.mod.kind === "source") || null;
+                   chainNodes.find(n => genKind(n.mod)) || null;
     W(voiceNodes[i], "ctl", target, "ctl");
   }
   // audio: SERVER TRUTH — state.wires is the STORED graph (item 25), so
@@ -6385,16 +6437,21 @@ function renderPalette() {
   put("pulse_pad");
   put("audio_in");
   h4("psines");
-  ["power_sine_shaper", "power_sine_additive", "power_sine_blend"].forEach(k => put(k));
+  // power_shaper is the DUAL (item 11): it lives with the generators it
+  // shares its law with, because it generates until you wire audio into it
+  ["power_sine_shaper", "power_sine_additive", "power_sine_blend",
+   "power_shaper"].forEach(k => put(k));
   h4("drone");
   put("drone");
   // any source this layout doesn't know about still gets a slot — new
   // module files must never silently vanish from the palette
-  const extraSrc = avail.filter(x => x.kind === "source" && !used.has(x.key));
+  const extraSrc = avail.filter(x => genKind(x) && !used.has(x.key));
   if (extraSrc.length) { h4("other"); extraSrc.forEach(a => { modBtn(a); used.add(a.key); }); }
   h3("fx");
   const FX_SUBS = [["filters", "filter"], ["time & space", "time"],
-                   ["dirt", "dirt"], ["psines", "psine"],   // item 11: Power Shaper
+                   ["dirt", "dirt"], ["psines", "psine"],   // empty today:
+                   // item 11 moved Power Shaper to the DUAL kind, so it
+                   // lists under voices > psines. Kept for a future psine FX.
                    ["dynamics", "dyn"], ["pitch", "vox"]];
   for (const [label, fam] of FX_SUBS) {
     const members = avail.filter(x => x.kind === "effect" && x.family === fam
@@ -6403,7 +6460,7 @@ function renderPalette() {
     h4(label);
     members.forEach(a => { modBtn(a); used.add(a.key); });
   }
-  const extraFx = avail.filter(x => x.kind === "effect" && !used.has(x.key));
+  const extraFx = avail.filter(x => fxKind(x) && !used.has(x.key));
   if (extraFx.length) { h4("other"); extraFx.forEach(a => { modBtn(a); used.add(a.key); }); }
   h3("monitors");
   const scopeAv = avail.find(x => x.key === "scope_tap");
@@ -6721,6 +6778,12 @@ function onMidi(e) {
       }
       // cards key on the GID: chain modules are "m:<key>", players are bare
       const setter = uiParam[`m:${base}.pwr`] || uiParam[`${base}.pwr`];
+      if (setter) setter(0, on);
+    } else if (sub === "mode") {
+      // item 11: a wire landed on (or left) a dual, so it just changed
+      // between generating and processing. Nothing else announces this —
+      // a wire edit only re-points the SOURCE's out bus.
+      const setter = uiParam[`m:${base}.mode`];
       if (setter) setter(0, on);
     } else if (base === "transport") {
       if (state && state.transport) {

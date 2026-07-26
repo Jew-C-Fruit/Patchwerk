@@ -4772,7 +4772,7 @@ def main():
              "kind": "source", "family": "psine"},
             {"key": "echo", "name": "Echo", "kind": "effect",
              "family": "time"},
-            {"key": "power_shaper", "name": "Power Shaper", "kind": "effect",
+            {"key": "power_shaper", "name": "Power Shaper", "kind": "dual",
              "family": "psine"},
         ]
         # a SECOND client's view: no local history, relay OPEN, the stored
@@ -4847,7 +4847,14 @@ def main():
               in page.evaluate("window.__sent"),
               str(page.evaluate("window.__sent")))
 
-        # ---- item 11: Power Shaper is an FX, in the psine FX subsection --
+        # ================================================================
+        # SECTION 28 — item 11: Power Shaper is the DUAL-MODE card.
+        # ONE card that GENERATES, and acts as FX when audio is wired in
+        # (Cole, 07-24). Rewritten from the two-card FX shape #52 shipped.
+        # A dual is neither "source" nor "effect", so the regressions to
+        # guard are things falling through BOTH branches of an if/else:
+        # vanishing from the palette, and getting only one of its two ins.
+        # ================================================================
         pal27 = page.evaluate("""(() => ({
           btns: [...document.querySelectorAll('#palette button')]
                 .map(b => b.textContent),
@@ -4858,40 +4865,97 @@ def main():
         check("item 11: Power Shaper appears in the palette",
               "Power Shaper" in pal27["btns"], str(pal27["btns"]))
         fxi = pal27["order"].index("H3:fx")
-        after = pal27["order"][fxi:]
-        psi = next((i for i, e in enumerate(after) if e == "H4:psines"), -1)
-        check("…under a psines subsection INSIDE fx (not the voices one)",
-              psi >= 0 and after[psi + 1] == "BUTTON:Power Shaper",
-              str(after))
-        check("…while the GENERATOR psine stays under voices",
+        psi = next((i for i, e in enumerate(pal27["order"])
+                    if e == "H4:psines"), -1)
+        check("…under psines in VOICES — it generates until you wire it",
+              0 <= psi < fxi
+              and "BUTTON:Power Shaper" in pal27["order"][psi:fxi],
+              str(pal27["order"]))
+        check("…alongside the generator psine, which is unchanged",
               pal27["order"].index("BUTTON:Psine Waveshaper") < fxi,
               str(pal27["order"]))
+
+        dual = mod("power_shaper", "Power Shaper", "dual", "psine",
+                   params={"freq": param(), "p": param(), "drive": param(),
+                           "amp": param(), "mix": param()})
+        # --- GENERATE: nothing wired in ---------------------------------
         page.evaluate("(s) => __msg({type: 'state', ...s})", base_state(
-            [sg, mod("power_shaper", "Power Shaper", "effect", "psine",
-                     params={"p": param(), "drive": param(),
-                             "mix": param()})],
+            [sg, dual],
+            [{"from": "signal_gen", "to": "master"},
+             {"from": "power_shaper", "to": "master"}],
+            available=AVAIL27))
+        page.wait_for_timeout(400)
+        gen28 = page.evaluate("""(() => {
+          const n = nodes.get('m:power_shaper');
+          return n && {
+            hasAudioIn: !!n.ports.find(p => p.sig === 'audio'
+                                            && p.dir === 'in' && !p.quiet),
+            hasCtlIn: !!n.ports.find(p => p.sig === 'ctl'
+                                          && p.dir === 'in' && !p.quiet),
+            params: [...n.el.querySelectorAll('.mini label')]
+                      .map(l => l.textContent.replace(' ∿', '')),
+            hasGen: !!n.el.querySelector('canvas[data-viz="gen"]'),
+            mode: (n.el.querySelector('.chip.modeind') || {}).textContent,
+          };
+        })()""")
+        check("the dual card carries BOTH ins: ctl play AND audio",
+              bool(gen28) and gen28["hasAudioIn"] and gen28["hasCtlIn"],
+              str(gen28))
+        check("…exposes both modes' params (freq/amp + p/drive/mix)",
+              bool(gen28) and set(gen28["params"]) >=
+              {"freq", "p", "drive", "amp", "mix"}, str(gen28))
+        check("…renders the generator preview (it DOES generate)",
+              bool(gen28) and gen28["hasGen"], str(gen28))
+        check("…and reads GEN while nothing is wired into it",
+              bool(gen28) and gen28["mode"] == "GEN", str(gen28))
+
+        # --- FX: a source wired in --------------------------------------
+        page.evaluate("(s) => __msg({type: 'state', ...s})", base_state(
+            [sg, dual],
             [{"from": "signal_gen", "to": "power_shaper"},
              {"from": "power_shaper", "to": "master"}],
             available=AVAIL27))
         page.wait_for_timeout(400)
-        fx27 = page.evaluate("""(() => {
+        fx28 = page.evaluate("""(() => {
           const n = nodes.get('m:power_shaper');
           const sgN = nodes.get('m:signal_gen');
           return n && {
-            hasIn: !!n.ports.find(p => p.sig === 'audio' && p.dir === 'in'),
-            params: [...n.el.querySelectorAll('.mini label')]
-                      .map(l => l.textContent.replace(' ∿', '')),
             wired: !!wires.find(x => x.from.node === sgN && x.to.node === n),
-            noGen: !n.el.querySelector('canvas[data-viz="gen"]'),
+            mode: (n.el.querySelector('.chip.modeind') || {}).textContent,
+            lit: !!n.el.querySelector('.chip.modeind.fx'),
           };
         })()""")
-        check("Power Shaper card takes an audio IN and accepts a source",
-              bool(fx27) and fx27["hasIn"] and fx27["wired"], str(fx27))
-        check("…exposes p / drive / mix",
-              bool(fx27) and set(fx27["params"]) >= {"p", "drive", "mix"},
-              str(fx27))
-        check("…and renders no generator preview (it is an effect)",
-              bool(fx27) and fx27["noGen"], str(fx27))
+        check("a source wires INTO the dual (a plain source refuses this)",
+              bool(fx28) and fx28["wired"], str(fx28))
+        check("…and the card reads FX, lit, from state.wires alone",
+              bool(fx28) and fx28["mode"] == "FX" and fx28["lit"], str(fx28))
+
+        # --- REACTIVE-INDICATOR DOCTRINE --------------------------------
+        # THE POINT OF THIS BLOCK: the mode indicator must follow the
+        # BACKEND's tap, not a click and not the next state broadcast.
+        # A wire edit only re-points the SOURCE's out bus, so App's
+        # "<key>:mode" level tap is the only live signal there is — delete
+        # the _sync_dual_modes emit and these two checks fail.
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'power_shaper:mode', on: false}})")
+        page.wait_for_timeout(150)
+        check("a mode LEVEL tap flips the indicator to GEN with no rebuild",
+              page.evaluate("""(() => {
+                const c = nodes.get('m:power_shaper')
+                          .el.querySelector('.chip.modeind');
+                return c.textContent === 'GEN' && !c.classList.contains('fx');
+              })()"""))
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'power_shaper:mode', on: true}})")
+        page.wait_for_timeout(150)
+        check("…and back to FX, lit, on the next tap",
+              page.evaluate("""(() => {
+                const c = nodes.get('m:power_shaper')
+                          .el.querySelector('.chip.modeind');
+                return c.textContent === 'FX' && c.classList.contains('fx');
+              })()"""))
 
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()
