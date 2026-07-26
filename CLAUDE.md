@@ -273,6 +273,44 @@ sandboxes, against ONE `.git`. That is normal here, and it has its own rules.
   using it, and don't leave it on a branch. Probes load the page over HTTP and
   need no checkout — stage them to `/tmp` and run them from there.
 
+## `continuity/` has a safety net now — use it
+
+`continuity/` is the on-disk mirror of the living docs in the claude.ai
+"Patchwerk" project (the project is canonical; that folder is the copy).
+It is **gitignored**, so ordinary git cannot restore it — and
+`git clean -xdf` deletes ignored files outright. It was lost once, on
+07-25, and rebuilt from memory.
+
+**`continuity/bin/continuity-guard.sh` fixes that property.** Two
+restore-only nets, both refreshed automatically by a `post-commit` hook:
+
+1. `refs/continuity/snapshots` — an orphan history in the shared `.git`.
+   Survives `git clean -xdf`, `worktree prune`, worktree deletion, and
+   `rm -rf continuity/`. It is not on `refs/heads/*`, so the default push
+   refspec never publishes it — **the notes stay private.**
+2. `~/.patchwerk-continuity/` — outside the repo, so it survives `.git`
+   being destroyed or the checkout being deleted. Holds the current tree,
+   a bundle of the full history, and a copy of the tool itself.
+
+```bash
+continuity/bin/continuity-guard.sh status    # both nets + drift
+continuity/bin/continuity-guard.sh snapshot  # also runs post-commit
+continuity/bin/continuity-guard.sh restore   # bring it back
+continuity/bin/continuity-guard.sh verify    # prove the nets restore
+```
+
+**If `continuity/` is gone, the tool went with it** — bootstrap from the
+mirror's copy: `bash ~/.patchwerk-continuity/bin/continuity-guard.sh restore`.
+The hook is machine-local (`.git/hooks/`); on a fresh clone, reinstall it
+with `continuity-guard.sh install-hook`.
+
+Two things NOT to do. **Don't edit the mirror** — it is the disaster copy,
+and a third editable lineage is exactly what caused the 07-24/25 doc
+divergence. **Don't defeat the shrink guard with `--force` to make a
+warning go away**: a snapshot that faithfully replicates a deletion is not
+a backup, so a tree that has lost most of its files is refused and BOTH
+nets keep their last healthy state. Restore first, then diff.
+
 ## Landmines (learned the hard way)
 
 - scsynth crashers: `.clip()`, scaled `RecordBuf` sources, EnvGen-driven
