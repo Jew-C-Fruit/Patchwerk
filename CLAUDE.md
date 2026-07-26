@@ -241,6 +241,38 @@ them as Mac-only manual checks, not something CI or a cloud session can run.
 
 On the Mac, `python -m synthbase test` is the real proof.
 
+## Parallel sessions and the shared `.git`
+
+Several agent sessions work this repo at the same time, from different
+sandboxes, against ONE `.git`. That is normal here, and it has its own rules.
+
+- **NEVER run `git worktree prune` in this repo.** Each session registers its
+  worktree under its own sandbox mount path, and that path does not exist from
+  any other session's view — so **every worktree looks prunable to everyone
+  else**. On 2026-07-26 one prune destroyed four worktrees; the working files
+  survived, but three of them lost their branch ref and came back detached.
+  There is no safe time to run it while anyone else may be live.
+- **Lock a worktree the moment you create it** — a locked worktree is never
+  pruned, by you or by anyone else:
+
+      git worktree add .worktrees/<name> -b <branch>
+      git worktree lock .worktrees/<name> --reason 'session worktree — do not prune'
+
+- If a worktree is pruned anyway: rebuild `.git/worktrees/<name>/` by hand
+  (`commondir`, `gitdir`, `HEAD`), write a `locked` file, then re-checkout the
+  tree. Recover the branch ref from a reflog or a sibling clone if you can —
+  otherwise the commits are still reachable by hash, so look before you rebuild
+  the work.
+- **`git status` does not show another session's work.** Unpushed branches are
+  invisible to it. On first contact with the repo run
+  `git log --branches --not --remotes` and `git for-each-ref` — this has caught
+  a commit sitting unpushed for a day, and later two entire branches.
+- **Re-fetch and rebase before every branch and every merge.** `main` moves
+  under you mid-session, sometimes several times an hour.
+- **Don't check out in the shared working tree** while another session may be
+  using it, and don't leave it on a branch. Probes load the page over HTTP and
+  need no checkout — stage them to `/tmp` and run them from there.
+
 ## Landmines (learned the hard way)
 
 - scsynth crashers: `.clip()`, scaled `RecordBuf` sources, EnvGen-driven
@@ -284,6 +316,8 @@ aren't code-facing enough to belong here.
 
 ## Don'ts
 
+- **Don't run `git worktree prune`** — see the parallel-sessions rules above.
+  It looks like housekeeping and it deletes other people's worktrees.
 - Don't use sclang or .scd files — Python only, we talk straight to scsynth.
 - Don't add heavyweight wrapper abstractions; modules use supriya UGens
   directly. The base stays thin.
