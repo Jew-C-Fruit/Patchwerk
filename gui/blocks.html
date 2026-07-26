@@ -6904,8 +6904,10 @@ function onMidi(e) {
       }
       const setter = uiParam[`transport.${sub}`];
       if (setter) setter(0, on);
-      // card AND top bar are one state, for BOTH of the transport's
-      // level-ins — click was updating the card only
+      // card AND top bar are one state — but only run and click HAVE a
+      // top-bar element. accent is the third level-in and deliberately has
+      // none (Cole, 07-26), so it updates its card LED above and stops
+      // there. Don't "complete the pattern" — see REFERENCE.md §8.1.
       if (sub === "run") syncTopBarPlay(on);
       else if (sub === "click") syncTopBarClick(on);
     }
