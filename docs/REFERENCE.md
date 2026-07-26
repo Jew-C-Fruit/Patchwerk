@@ -544,7 +544,7 @@ Valid binary-wire destinations (`gates.is_toggle_dst`):
 | `<logic>:a`, `<logic>:b` | level-in (single-input) | the gate's two named inputs (legacy `:set`/`:reset` accepted, canonicalized to `:a`/`:b`) |
 | `<relay>:ctl` | level-in (single-input) | relay closed follows the level (last writer vs. manual click wins) |
 | `<relay>:1..9` | level-in | a binary circuit's in (lazy OR, §7) |
-| `transport:run` / `:click` / `:accent` | level-in | the GLOBAL transport's play state / audible click / downbeat accent follow |
+| `transport:run` / `:click` / `:accent` | level-in | the GLOBAL transport's play state / audible click / downbeat accent follow. All three drive a CARD indicator per the reactive-indicator doctrine; `run` and `click` also mirror to a top-bar control, `accent` has none — see §8.1 |
 | `<tonic-id>`, `<literal-id>` (bare deriver id) | **trig-in** | rising edge = commit now; suppresses the deriver's grid timer while wired |
 | `deck:rec` / `:play` / `:stop` / `:clear` | **trig-in** | rising edge presses the deck button once |
 | `transport:tap` | **trig-in** | rising edge = one tap-tempo tap (§8.1) |
@@ -751,6 +751,31 @@ Transport cards (`play`, `tempo`) are canvas VIEWS of the one global
 transport — presence only (`transport_cards` in state/presets); the
 binary endpoints `transport:run/click/accent/tap` belong to the global
 transport and survive card removal.
+
+**Card-vs-top-bar, and accent's deliberate asymmetry.** The transport has
+three binary LEVEL-ins (`run`, `click`, `accent`; `tap` is a trig-in).
+Where a control has both a card element and a top-bar element they are ONE
+state, and a `{"kind": "level"}` tap must drive both or the two disagree:
+
+| level-in | card indicator | top-bar element |
+| --- | --- | --- |
+| `run` | Play/Stop card | play button (`syncTopBarPlay`) |
+| `click` | click LED | click checkbox (`syncTopBarClick`) |
+| `accent` | accent LED | **none — by decision** |
+
+`click` was updating the card only, which was not merely cosmetic:
+`sendTransport()` reads the top bar's checkbox, so a stale box pushed the
+wrong click state back to the server on the next BPM nudge or meter change.
+Fixed on `feat/p11-dual-mode` (PENDING, not on `main`).
+
+**`accent` has no top-bar element at all** (Cole, 2026-07-26), so there is
+nothing for it to sync to and its handler branch correctly has no top-bar
+call. That is an INTENTIONAL asymmetry, not an outstanding bug — do not
+"complete the pattern" by adding one. The doctrine still binds accent's
+CARD indicator: it must react to logic input like every other. Should
+accent ever gain a top-bar control, it joins the rule above and needs its
+own sync plus a falling-edge test (the rising edge false-passes, because
+the preceding state render usually already set the element).
 
 **Boot state: a fresh launch comes up STOPPED (item 32).**
 `transport.running` defaults **False**, so a boot with no custom preset

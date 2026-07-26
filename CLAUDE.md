@@ -139,6 +139,28 @@ first three). Any new indicator is wired the same way — and a headless
 mock can only prove it reacts to a message we invented, so verify it on
 the rig with `tests/probe_live_gui.py`.
 
+**Where a control has BOTH a card and a top-bar element, they are ONE
+state** and a level tap must drive both. `run` has always done this
+(`syncTopBarPlay`); `click` did not — a logic-driven change lit the card
+LED and left the top bar reading the opposite, which was not merely
+cosmetic, since `sendTransport()` READS the checkbox and pushed the stale
+value back on the next BPM nudge. Fixed on `feat/p11-dual-mode` via
+`syncTopBarClick`, routing both call sites through one function so they
+cannot drift apart again.
+
+**`accent` is the deliberate exception (Cole, 2026-07-26).** The transport
+has THREE binary level-ins — `run`, `click`, `accent` — but accent has **no
+top-bar element at all**, so there is nothing to sync and no top-bar call
+in its branch of the handler. **This is an intentional asymmetry, not a
+missing feature: do not "fix" it** by adding a top-bar accent control. If
+accent ever gains one, it joins the rule above and needs its own
+`syncTopBar…` and a falling-edge test.
+
+The doctrine itself is untouched by that decision: **accent's CARD
+indicator must still react to logic input** exactly like the others. Only
+the top-bar mirror is absent, because there is no top-bar element to
+mirror to.
+
 ## Writing a new module (the main vibecoding activity)
 
 > ⚠ **PENDING, NOT YET ON `main` (2026-07-26).** The `"dual"` kind, the
