@@ -6598,7 +6598,7 @@ function onState() {
   if (sliderDrag !== "bpm") $("bpm").value = t.bpm ?? 100;
   $("bpm-v").textContent = Math.round(t.bpm ?? 100) + " bpm";
   $("meter").value = String(t.beats_per_bar ?? 4);
-  $("click-on").checked = !!t.click;
+  syncTopBarClick(t.click);
   syncTopBarPlay(t.running !== false);
   if (sliderDrag !== "vol") $("vol").value = state.volume;
   $("midi-ind").textContent = "midi: " +
@@ -6611,6 +6611,13 @@ function onState() {
 // follow LOGIC input, not just clicks (REACTIVE-INDICATOR DOCTRINE)
 function syncTopBarPlay(running) {
   $("play-btn").textContent = running ? "⏹" : "▶";
+}
+// …and so are the top bar's click checkbox and the transport card's click
+// LED. This one is not merely cosmetic: sendTransport() READS
+// $("click-on").checked, so a checkbox left stale by a logic-driven click
+// change pushes the wrong value back to the server on the next BPM nudge.
+function syncTopBarClick(on) {
+  $("click-on").checked = !!on;
 }
 
 // ---------- live message handlers ----------
@@ -6793,7 +6800,10 @@ function onMidi(e) {
       }
       const setter = uiParam[`transport.${sub}`];
       if (setter) setter(0, on);
-      if (sub === "run") syncTopBarPlay(on);   // card AND top bar are one state
+      // card AND top bar are one state, for BOTH of the transport's
+      // level-ins — click was updating the card only
+      if (sub === "run") syncTopBarPlay(on);
+      else if (sub === "click") syncTopBarClick(on);
     }
   } else if (e.kind === "ping_bound") {
     // server-side MIDI capture landed: update the card's chip in place

@@ -3446,6 +3446,25 @@ def main():
             ".querySelectorAll('.mini')].find(x =>"
             " (x.querySelector('label')||{}).title === 'click');"
             " return r.querySelector('.onoff').classList.contains('on'); })()"))
+        # …and the TOP BAR checkbox with it. `run` had this sync from the
+        # start; `click` did not, so a logic-driven click change lit the card
+        # and left the top bar reading the opposite. Not just cosmetic:
+        # sendTransport() READS $("click-on").checked, so the stale checkbox
+        # pushes the wrong click state back on the next BPM nudge.
+        check("…and ticks the TOP BAR click checkbox with it",
+              page.evaluate("document.getElementById('click-on').checked"))
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'transport:click', on: false}})")
+        page.wait_for_timeout(60)
+        clk_off = page.evaluate("""(() => {
+          const r = [...nodes.get('ttempo').el.querySelectorAll('.mini')]
+            .find(x => (x.querySelector('label')||{}).title === 'click');
+          return {led: r.querySelector('.onoff').classList.contains('on'),
+                  bar: document.getElementById('click-on').checked};
+        })()""")
+        check("…and both clear together on the falling edge",
+              clk_off == {"led": False, "bar": False}, str(clk_off))
 
         # ---- tempo slider: the top bar's 40–220 mapping ----------------
         page.evaluate("nodes.get('ttempo').el.scrollIntoView("
