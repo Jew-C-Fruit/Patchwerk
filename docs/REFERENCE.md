@@ -6,18 +6,35 @@
 > re-verify each section against the source it cites, update the stamp
 > below, and prune anything the code no longer does. Section numbering is
 > stable on purpose — the release-specific graphical user manual (a
-> separate, image-rich document) cross-references these section numbers,
-> so renumber only at a major restructure. When this doc and the code
-> disagree, the code wins and this doc has a bug: fix it here.
+> separate, image-rich document) is being written against these section
+> numbers, so renumber only at a major restructure. When this doc and the
+> code disagree, the code wins and this doc has a bug: fix it here.
 >
-> **Verified against:** `main` @ `71bd089` (v2.0 "Wavetable" pre-release
-> line), 2026-07-25. First written against `eb360ef` and re-verified
+> **The user manual is IN PROGRESS — it is not published yet.** Section
+> numbers here were frozen in PR #45 so it could cite them, and it is
+> being drafted on the `docs/manual-scaffold` branch: 17 chapters plus
+> `DESIGN.md`, `FIGURES.md` and a headless `capture.py`. Its cross-
+> references into this file are tracked as `XREF-TODO` anchors and are
+> **not yet resolved**, so nothing outside this repo should link to a
+> manual section by number yet. Until it lands, THIS file is the only
+> reference — a pointer here to "the manual" is a statement of intent,
+> not of something a reader can go and open.
+>
+> **Verified against:** `main` @ `1020d20` (v2.0 "Wavetable" pre-release
+> line), 2026-07-26. First written against `eb360ef` and re-verified
 > forward through PRs #37–#44: Batch B blocks polish, P4 mod-handle
 > linkage, the item-20 top-margin REVERT (#40), tidy-into-frame (#41),
 > M-default graphical cards (#42), the relay tweaks (#43) that added 1:1
 > contacts and the `mod` circuit plane, and the wire fan-nesting rule
 > (#44). #40–#44 are GUI-only and change nothing this doc specifies
 > outside §13, which defers UI geometry to `docs/BLOCKS_SPEC.md`.
+>
+> Re-verified 2026-07-26 through PRs #45–#53 and the item-32 merge:
+> the T latch (#47) is now specified in §5.4; §8.1–8.2 carry item 32's
+> stopped boot and the drone-pause INVARIANT, and §12.3 the
+> resume-vs-preset play-state asymmetry; the test inventory in Appendix A
+> was corrected — `check_real.py` is a HEADLESS Playwright suite that runs
+> in CI, not a live-rig-only check.
 > **The relay-audio and effects sections were revised with P1** — item 25
 > (relay audio circuits became permanent lagged-gate synths; `state.wires`
 > now broadcasts the stored graph) and item 11 (the new `power_shaper`
@@ -521,13 +538,29 @@ react to LOGIC input exactly as to a click).
 ### 5.4 Logic gates
 
 `logic`, `logic.2`, … — one card, an op dropdown: `AND | OR | NOR |
-XOR | SR latch`. EVERY op exposes exactly two single-input endpoints
-`:a`/`:b` (the shape never changes across op swaps, so wires never
-drop). NOR with one wired leg acts as NOT (an unwired in reads lo).
+XOR | SR latch | T latch`. EVERY op exposes exactly two single-input
+endpoints `:a`/`:b` (the shape never changes across op swaps, so wires
+never drop). NOR with one wired leg acts as NOT (an unwired in reads lo).
 SR latch: `:a` = SET, `:b` = RESET, reset wins; the latch state starts
 lo entering AND leaving SR. Bare-id destinations are invalid. Presets:
 (id, op) persist; op `NOT` migrates to `NOR`; a legacy `switches` list
 is ignored (the Switch node died — Relay replaced it).
+
+**T latch** (`"T latch"`) is the toggle: a RISING edge at `:a` flips the
+output, `:b` is RESET and wins exactly as SR's does (an edge arriving
+while held in reset is EATEN, not queued). It is the only op that is
+edge-triggered rather than combinational, so it settles in two phases —
+the combinational net reaches a fixpoint with T latches HOLDING (a
+toggle re-evaluated every iteration would flip forever and never
+converge), then rising edges are sampled ONCE per real edge. The outer
+pass then re-settles, which is what lets a toggle propagate into what it
+feeds: **chained T latches divide by two per stage, one stage per outer
+iteration.** Each gate remembers the level last sampled at `:a`, so a
+steady hi is distinguishable from an edge, and attaching a wire whose
+source is ALREADY hi is not an edge — the same rule every trig-in
+follows. Unwiring `:a` forgets that sample, so the next source to land
+there starts edge-fresh. `a_prev` is runtime state and is not persisted;
+a T latch reloads lo with no sampled level.
 
 ---
 
@@ -696,12 +729,32 @@ transport — presence only (`transport_cards` in state/presets); the
 binary endpoints `transport:run/click/accent/tap` belong to the global
 transport and survive card removal.
 
+**Boot state: a fresh launch comes up STOPPED (item 32).**
+`transport.running` defaults **False**, so a boot with no custom preset
+populates the Play/Stop card and the top bar as stopped (both read
+`running !== false`, so no GUI change was needed) and nothing
+transport-driven — drums, clocks, the arp grid, drones — sounds until
+play is actually triggered. The default control plane and the shipped
+patches' `notes_to` bindings are untouched by this, so the rig is still
+immediately hand-playable: `midi → gen → master out` stays intact.
+
 ### 8.2 What stopping the transport does
 
 Position freezes; the arp parks (live notes pass through); clocks stop
 firing; drum sequencer idles; deriver grid timers idle; deck replay
 skips firing (and releases anything sounding); every enabled drone
 node pauses. Play resumes all of it on the same grid.
+
+**Drone silence is an INVARIANT, not a `set_transport` side effect
+(item 32).** Drones are gateless, so "silent while stopped" cannot be
+enforced only where the transport changes — a drone spawned while
+stopped would sound immediately. `app._sync_drone_run_state()` pauses or
+unpauses every ENABLED drone node to match `transport.running`, and
+EVERY path that creates, replaces or re-enables a drone node calls it:
+patch build (`_build_from`), `edit_chain` add, `swap_synth`,
+`set_enabled`, and the legacy `_ensure_legacy_drone` pair. Disabled
+instances are skipped — bypass pausing stays `rack.set_enabled`'s job.
+Any future path that can produce a live drone node must call it too.
 
 ### 8.3 Drum machine (`drums.py`)
 
@@ -985,11 +1038,21 @@ canvas layout lives client-side in localStorage and survives). On boot,
 ctl wires, restores voice targets and drums target, then deletes the
 file. A resumed boot never auto-opens a browser.
 
+**Play state: resume carries it, named presets deliberately do NOT
+(item 32).** The `resume` block records `running`, and it is applied
+LAST — after the graph is rebuilt — so the drone walk (§8.2) sees the
+finished rack. Named presets (§12.2) carry no play state at all, and
+that asymmetry is the point: loading a preset mid-performance can
+neither stop nor start the rig. A pre-item-32 resume file, which has no
+`running` key, resumes PLAYING — which is what it was when written.
+
 ---
 
 ## 13. The GUI (`gui/blocks.html`)
 
-One self-contained page (no build step), served at `/`. Everything it
+One self-contained page (no build step), served at `/` and at `/blocks`
+(an alias kept for bookmarks — the same file, not a second UI). It is
+the ONLY page served; there is no `/legacy` route. Everything it
 shows derives from `state` + the event stream (§11.2); everything it
 does is protocol messages — the backend is the only authority. Cards on
 a block grid (§2.6) with gutter-routed subway wires; the full UI design
@@ -1041,11 +1104,18 @@ derivation, graph/ctl bookkeeping, instance ids, multi-voice,
 tonic→drone, keyshift lanes/progression, tap-closure, snip-heal),
 `tests/test_looper.py` (deck timing, take pairing), plus unit suites
 (`test_deriver`, `test_gate`, `test_lfo`, `test_ping`, `test_power_sine`,
-`test_threshold`, `test_transport`), and the Playwright suites
-`gui_check8.py` + `check_blocks.py` (needs `requirements-dev.txt` +
-`playwright install chromium`). Live-rig only (Mac, real audio):
-`check_real.py`, `test_mixed_sources.py`, `diag_*.py`, `hear_check.py`,
-`probe_*.py`. On the Mac, `python -m synthbase test` is the real proof.
+`test_threshold`, `test_transport`), and the THREE Playwright suites
+`gui_check8.py` + `check_blocks.py` + `check_real.py` (needs
+`requirements-dev.txt` + `playwright install chromium`). All three are
+HEADLESS and run in CI — `check_real.py` replays a captured real-rig
+state broadcast into `blocks.html` through the mock websocket and needs
+no server and no audio, despite the fixture coming off Cole's live rig.
+CI runs 9 Python + 3 Playwright suites; `test_power_sine.py` exists but
+is NOT wired into `ci.yml`, so run it by hand.
+Live-rig only (Mac, real audio — these talk to a running
+`python -m synthbase gui` over websocket): `test_mixed_sources.py`,
+`diag_*.py`, `hear_check.py`, `probe_*.py`.
+On the Mac, `python -m synthbase test` is the real proof.
 New checks are written failing-first against broken behavior.
 
 ---

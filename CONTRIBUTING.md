@@ -9,7 +9,8 @@ clones it.
 - **New modules** — the easiest and most encouraged path. A module is one
   small Python file in `modules/`.
 - **Bug fixes / engine work** — `synthbase/` (the engine + control plane).
-- **GUI work** — `gui/flex.html` + `synthbase/app.py` / `synthbase/server.py`.
+- **GUI work** — `gui/blocks.html` + `synthbase/app.py` / `synthbase/server.py`.
+  (`gui/legacy/` holds archived earlier pages — unserved, don't edit them.)
 - **Docs** — this repo's docs lag the code more often than either of us
   would like.
 

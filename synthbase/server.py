@@ -1,4 +1,8 @@
-"""Web GUI server: serves gui/index.html and a websocket control channel.
+"""Web GUI server: serves gui/blocks.html and a websocket control channel.
+
+blocks.html is the ONLY page served — at "/" and at "/blocks" (an alias kept
+for bookmarks). The earlier pages are archived under gui/legacy/, unserved
+and unmaintained; there is no /legacy route.
 
 Protocol (JSON messages):
 
@@ -10,6 +14,30 @@ Protocol (JSON messages):
     {"type": "set_volume", "volume": 0.8}
     {"type": "note_on", "note": 60} / {"type": "note_off", "note": 60}
     {"type": "all_notes_off"}
+    {"type": "sustain", "on": true}
+        (GLOBAL pedal — the arp latch plus every mono voice. Global by
+         doctrine, not wire-defined, like panic and the transport.)
+    {"type": "set_transpose", "semitones": 0}   (GLOBAL pitch reference)
+    {"type": "edit_chain", "action": "add"|"remove"|"move",
+     "key": "lowpass.2", "index": 3}
+        (linear-chain edit; runs in an executor since it rebuilds nodes.
+         Wires survive — removal splice-heals A->X->B to A->B.)
+    {"type": "set_looper", "action": "rec"|"play"|"stop"|"clear",
+     "bars": 4, "level": 1.0, "overdub": true}
+        (the Loop Deck, §9. A "position" key from old clients is accepted
+         and IGNORED — pre/post is decided by wiring, not by a field.)
+    {"type": "scope", "key": "scope.2"}
+        (poll one scope for a capture. A capture BLOCKS — server sync plus
+         a ~46 ms record window — so it runs as a background task and is
+         COALESCED PER KEY: one capture in flight per scope, and a poll for
+         a key already capturing is dropped. Replies {"type": "scope_data"}
+         to the REQUESTING socket only, not broadcast.)
+    {"type": "save_preset", "name": "..."} /
+    {"type": "load_preset", "name": "..."} /
+    {"type": "delete_preset", "name": "..."}
+        (named presets carry no transport play state by design, so loading
+         one mid-performance can neither stop nor start the rig. Only the
+         .resume.json restart block carries "running" — see item 32.)
     {"type": "select_patch", "patch": "demo"}
     {"type": "set_devices", "input": "MacBook Pro Microphone", "output": null}
     {"type": "set_midi", "port": "CP88/CP73 Port1", "enabled": true}
@@ -51,14 +79,16 @@ Protocol (JSON messages):
          {"type": "deriver", "id", ...} for the card histogram + scale
          readout)
     {"type": "spawn_logic"} / {"type": "remove_logic", "id": "logic.2"}
-    {"type": "set_logic", "id": "logic", "op": "AND"|"OR"|"NOR"|"XOR"|"SR latch"}
+    {"type": "set_logic", "id": "logic",
+     "op": "AND"|"OR"|"NOR"|"XOR"|"SR latch"|"T latch"}
         (the BINARY plane: ONE hi/lo signal kind — sources own levels,
          edges derive from level changes; trig-ins fire on RISING edges.
          Binary wires ride ctl_wires, kind inferred from the source
          (button/clock/threshold/logic, binary relay circuits). Logic ins
          are ALWAYS the two single-input endpoints "<id>:a"/"<id>:b"
-         for every op (SR latch: a=set, b=reset; NOR with one wired leg
-         acts as NOT; occupied ins steal; legacy :set/:reset remapped).
+         for every op (SR latch: a=set, b=reset; T latch: a=toggle on
+         RISING edge, b=reset and wins; NOR with one wired leg acts as
+         NOT; occupied ins steal; legacy :set/:reset remapped).
          Other dsts: "<key>:pwr", "arp:pwr", "drums:pwr" (level follows),
          "deck:rec|play|stop|clear" + deriver ids (rising edge fires),
          relay circuit ins + "relay:ctl". Level changes emit
@@ -134,6 +164,44 @@ Protocol (JSON messages):
     {"type": "state", ...full snapshot...}       (on connect and after changes)
     {"type": "meters", "out": [l, r], "in": x}   (~15 Hz)
     {"type": "error", "message": "..."}
+    {"type": "param", "key": "lowpass.2", "name": "cutoff", ...}
+        (a param moved from somewhere OTHER than the sending client — MIDI
+         CC, an LFO, a preset load — so knobs track without a full state
+         round-trip. The originating socket is excluded.)
+    {"type": "beat", "bar": b, "beat": n, ...}   (transport tick)
+    {"type": "tonic", ...}      (every 4th meter tick, ~5 Hz — the legacy
+                                 header strip: first deriver's normalized
+                                 weights + root)
+    {"type": "deriver", "id", ...}
+        (~5 Hz per tonic deriver: weights/scores/leading/confidence/scale
+         for the card histogram + scale readout)
+    {"type": "midi", "event": {...}}    (raw MIDI in, for the monitors)
+    {"type": "scope_data", ...}
+        (one scope capture, sent ONLY to the socket that polled for it)
+
+  server -> client EVENT TAPS — the note/binary/monitor plane. Each is a
+  {"kind": ...} envelope, routed by the GUI to whichever monitor is local
+  to that path (or to the global feed when the monitor is unwired):
+    "tap"                  one per SOURCE FIRE, tagged {"src": <node id>} —
+                           one per fire, NOT one per outgoing edge
+    "key" / "voiced"       raw controller input / post-voicing notes
+    "keyshift"             a key shifter's lane output
+    "tonic_out"            a deriver's amber TONIC out
+    "loop_note" / "looper" deck replay notes / deck transport state
+    "gate"                 a logic gate's output level changed (LED)
+    "level"                {"ep", "on"} — the REACTIVE-INDICATOR tap. State
+                           applied inside the gate settle pass does not
+                           broadcast, so the backend emits this itself; it
+                           is what makes the power stripe, the Play/Stop
+                           card and the click/accent LEDs react to LOGIC
+                           input and not merely to clicks.
+    "ping" / "ping_bound"  a trigger fired / a ping endpoint was bound
+    "cc" / "bend" / "sustain"    MIDI controller traffic
+    "drum_step"            the 16-step drum machine's position
+
+    EVERY silencing path must close its open notes AND their taps (panic,
+    arp stop, deck stop, rebuilds, record-window exits): an unpaired "on"
+    is both a stuck note and a stuck monitor bar.
 """
 
 from __future__ import annotations
