@@ -1,0 +1,23 @@
+{
+  "name": "transport-tap",
+  "patch": "pad_space",
+  "note": "Item 37 §3.3. A momentary button wired to transport:tap, fired four times ~0.5 s apart. The rig audibly speeds up; the point of RECORDING it is that today nothing in the message stream says so, which is what Phase 2 asserts against.",
+  "steps": [
+    {"do": "mark", "label": "setup"},
+    {"do": "spawn", "type": "spawn_button", "as": "b"},
+    {"do": "send", "msg": {"type": "set_button", "id": "$b", "latch": false}},
+    {"do": "wire", "from": "$b", "to": "transport:tap"},
+    {"do": "mark", "label": "taps"},
+    {"do": "send", "msg": {"type": "fire_button", "id": "$b"}, "poke": false},
+    {"do": "wait", "s": 0.5},
+    {"do": "send", "msg": {"type": "fire_button", "id": "$b"}, "poke": false},
+    {"do": "wait", "s": 0.5},
+    {"do": "send", "msg": {"type": "fire_button", "id": "$b"}, "poke": false},
+    {"do": "wait", "s": 0.5},
+    {"do": "send", "msg": {"type": "fire_button", "id": "$b"}, "poke": false},
+    {"do": "wait", "s": 0.3},
+    {"do": "mark", "label": "settled"},
+    {"do": "poke"},
+    {"do": "restore"}
+  ]
+}
