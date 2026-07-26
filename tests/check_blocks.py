@@ -606,6 +606,27 @@ def main():
               trig == {"dir": "in", "quiet": True, "label": "trigger"},
               str(trig))
 
+        # a deriver COMMIT is a pulse on a BARE id ("tonic"), and its
+        # trigger-in carries no `ep` at all — so the endpoint→element lookup
+        # has to fall back to "the card's only binary in", not an ep match.
+        page.evaluate(
+            "() => { __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'tonic', on: true, pulse: true}});"
+            " __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'tonic', on: false, pulse: true}}); }")
+        page.wait_for_timeout(40)
+        check("a bare-id deriver commit lights its trigger row",
+              page.evaluate("""(() => {
+                const p = nodes.get('tonic').ports.find(q => q.sig === 'bin');
+                return !!p.rowEl && p.rowEl.classList.contains('tapflash');
+              })()"""))
+        page.wait_for_timeout(220)
+        check("…and clears after PULSE_MS",
+              page.evaluate("""(() => {
+                const p = nodes.get('tonic').ports.find(q => q.sig === 'bin');
+                return !p.rowEl.classList.contains('tapflash');
+              })()"""))
+
         # trigger cards are SMALL (Cole, 2026-07-22): both opt into the
         # XS class since GUI pass B and measure into 4.5x4.5
         for gid in ("button", "clock"):
@@ -1761,6 +1782,33 @@ def main():
         })()""")
         check("collapsing returns to the mini strip (not hidden)",
               dk3["mini"] and 40 <= dk3["h"] <= 52, str(dk3))
+
+        # ---- deck buttons react to LOGIC input (trig-in PULSE taps) -----
+        # All four are momentary. Both edges are injected back-to-back with
+        # NO delay, because that is the shape the engine actually emits and
+        # the case that renders nothing if the pulse is treated as a level.
+        for ep_sub, data_a in (("rec", "record"), ("stop", "stop"),
+                               ("play", "play"), ("clear", "clear")):
+            page.evaluate(
+                "(s) => { __msg({type: 'midi', event:"
+                " {kind: 'level', ep: 'deck:' + s, on: true, pulse: true}});"
+                " __msg({type: 'midi', event:"
+                " {kind: 'level', ep: 'deck:' + s, on: false, pulse: true}});"
+                " }", ep_sub)
+            page.wait_for_timeout(30)
+            lit = page.evaluate(
+                "(a) => { const b = nodes.get('deck').el.querySelector("
+                " '.deckbtns button[data-a=\"' + a + '\"]');"
+                " return !!b && b.classList.contains('tapflash'); }", data_a)
+            # deck:rec -> data-a="record" is the one name that does NOT match;
+            # miss it and the handler silently no-ops on the button that
+            # matters most
+            check(f"deck:{ep_sub} pulse lights button[data-a={data_a}]", lit)
+            page.wait_for_timeout(200)   # let it decay before the next one
+        check("…and the deck buttons are clear again after PULSE_MS",
+              page.evaluate(
+                  "[...nodes.get('deck').el.querySelectorAll('.deckbtns"
+                  " button')].every(b => !b.classList.contains('tapflash'))"))
 
         # ================================================================
         # 15 — stepped integer sliders replace numeric cycle-chips (item 5)
@@ -3465,6 +3513,22 @@ def main():
         })()""")
         check("…and both clear together on the falling edge",
               clk_off == {"led": False, "bar": False}, str(clk_off))
+        # ACCENT is deliberately asymmetric (Cole, 07-26): its card LED reacts
+        # like click's, but there is NO top-bar accent control and one is not
+        # being added. Asserted so the asymmetry is recorded as a decision
+        # rather than rediscovered as a bug — if a control is ever added, this
+        # check is the reminder that its sync belongs in the level handler.
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'transport:accent', on: false}})")
+        page.wait_for_timeout(60)
+        check("accent's card LED reacts, and it has no top-bar control",
+              page.evaluate("""(() => {
+                const r = [...nodes.get('ttempo').el.querySelectorAll('.mini')]
+                  .find(x => (x.querySelector('label')||{}).title === 'accent');
+                return !r.querySelector('.onoff').classList.contains('on')
+                       && !document.getElementById('accent-on');
+              })()"""))
 
         # ---- tempo slider: the top bar's 40–220 mapping ----------------
         page.evaluate("nodes.get('ttempo').el.scrollIntoView("
@@ -3574,6 +3638,104 @@ def main():
               {"type": "set_transport", "click": False} in leds19["sent"]
               and {"type": "set_transport", "accent": False}
               in leds19["sent"], str(leds19))
+
+        # ---- {"kind":"transport"}: settings changed off-broadcast ------
+        # THE REPORTED BUG: a logic wire into transport:tap moved the BPM and
+        # told no client, so the rig audibly ran at 232 while every number on
+        # screen still said 100. The engine now emits the full settings
+        # payload on a real change; this is the GUI half.
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'transport', bpm: 232, beats_per_bar: 4, downbeat: 0,"
+            "  click: true, accent: true, running: true}})")
+        page.wait_for_timeout(80)
+        bpm19 = page.evaluate("""(() => {
+          const n = nodes.get('ttempo');
+          const row = [...n.el.querySelectorAll('.mini')].find(
+            x => (x.querySelector('label')||{}).title === 'tempo');
+          return {card: row.querySelector('.v').textContent,
+                  bar: document.getElementById('bpm-v').textContent,
+                  slider: document.getElementById('bpm').value,
+                  model: (state.transport||{}).bpm};
+        })()""")
+        check("a transport event moves the CARD's tempo readout",
+              bpm19["card"] == "232 bpm", str(bpm19))
+        check("…and the top bar's number and slider with it",
+              bpm19["bar"] == "232 bpm" and bpm19["slider"] == "220",
+              str(bpm19))
+        check("…and the local model, so the next rebuild agrees",
+              bpm19["model"] == 232, str(bpm19))
+
+        # a bpm-only change must NOT rebuild — taps arrive in fast bursts
+        page.evaluate("window.__rebuilds = 0;"
+                      " (() => { const f = window.rebuildGraph;"
+                      " window.rebuildGraph = function () {"
+                      " window.__rebuilds++; return f.apply(this, arguments);"
+                      " }; })()")
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'transport', bpm: 150, beats_per_bar: 4, downbeat: 0,"
+            "  click: true, accent: true, running: true}})")
+        page.wait_for_timeout(80)
+        check("a bpm-only transport event does not rebuild the graph",
+              page.evaluate("window.__rebuilds") == 0,
+              str(page.evaluate("window.__rebuilds")))
+        # …but a METER change must, since the card's step-slider detents and
+        # the metronome strip are derived at card-build time
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'transport', bpm: 150, beats_per_bar: 3, downbeat: 0,"
+            "  click: true, accent: true, running: true}})")
+        page.wait_for_timeout(300)
+        check("a meter change DOES rebuild (detents + strip re-derive)",
+              page.evaluate("window.__rebuilds") >= 1
+              and page.evaluate(
+                  "nodes.get('ttempo').el"
+                  ".querySelectorAll('.metrostrip i').length") == 3)
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st19b)
+        page.wait_for_timeout(400)
+
+        # ---- transport:tap — a PULSE, not a level ----------------------
+        # A trig-in tap has ZERO duration: on:true and on:false are emitted
+        # back-to-back from one settle pass and land in the same tick. Both
+        # halves are injected here with NO delay between them, because that
+        # is the dead-on-arrival case — a test that injects only the on:true
+        # half passes even against a plain level setter that renders nothing.
+        page.evaluate(
+            "() => { __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'transport:tap', on: true, pulse: true}});"
+            " __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'transport:tap', on: false, pulse: true}});"
+            " }")
+        page.wait_for_timeout(40)
+        check("a tap PULSE leaves the tempo row visibly lit (both edges sent)",
+              page.evaluate("""(() => {
+                const n = nodes.get('ttempo');
+                const p = n.ports.find(q => q.ep === 'transport:tap');
+                return !!p.rowEl && p.rowEl.classList.contains('tapflash');
+              })()"""))
+        page.wait_for_timeout(220)   # past PULSE_MS
+        check("…and clears itself afterwards (it is momentary)",
+              page.evaluate("""(() => {
+                const n = nodes.get('ttempo');
+                const p = n.ports.find(q => q.ep === 'transport:tap');
+                return !p.rowEl.classList.contains('tapflash');
+              })()"""))
+        # a STEADY tap on the same card must still behave as a level — the
+        # `pulse` branch is additive, it must not swallow the existing path
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'transport:click', on: false}})")
+        page.wait_for_timeout(60)
+        check("a steady level tap is unaffected by the pulse branch",
+              page.evaluate("""(() => {
+                const r = [...nodes.get('ttempo').el.querySelectorAll('.mini')]
+                  .find(x => (x.querySelector('label')||{}).title === 'click');
+                return !r.querySelector('.onoff').classList.contains('on')
+                       && !document.getElementById('click-on').checked;
+              })()"""))
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st19b)
+        page.wait_for_timeout(400)
 
         # ---- quiet endpoint handles + payload wires --------------------
         eps19 = page.evaluate("""(() => {

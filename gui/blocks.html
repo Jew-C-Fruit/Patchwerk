@@ -375,6 +375,13 @@
     box-shadow: 0 0 9px color-mix(in srgb, var(--bin) 75%, transparent); }
   .metrostrip i.pulse { animation: metropulse .18s ease; }
   @keyframes metropulse { 30% { transform: scale(1.45); } }
+  /* a TRIG-in fired (deck buttons, transport:tap, deriver commits): the
+     momentary press indication, stretched to PULSE_MS by flashEl(). In the
+     binary colour because that is what drove it — a logic wire. Works on a
+     .mini row and on a deck button alike, so one rule covers every anchor. */
+  .tapflash { background: color-mix(in srgb, var(--bin) 26%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bin) 70%, transparent);
+    border-radius: 3px; }
   .pingpad:hover { filter: brightness(1.25); }
   .pingpad.pulse { animation: pingpulse .22s ease; }
   @keyframes pingpulse { 30% { text-shadow: 0 0 9px var(--bin); transform: scale(1.35); } }
@@ -5597,6 +5604,53 @@ function pulseBin(id) {
   binFlash.set(id, performance.now() + PULSE_MS);
   schedulePulseDecay();
 }
+// The same stretcher, for a DOM element rather than a wire-canvas LED.
+// A trig-in tap has ZERO duration: the engine emits on:true and on:false
+// back-to-back from one settle pass, so both land in the same tick. Setting
+// and clearing inside one frame renders nothing at all — implemented-looking
+// and dead on arrival. PULSE_MS is shared with the LED path deliberately, so
+// a press reads the same length wherever it shows.
+const elFlash = new Map();   // element -> pending clear timer
+function flashEl(el) {
+  if (!el) return;
+  el.classList.add("tapflash");
+  clearTimeout(elFlash.get(el));
+  elFlash.set(el, setTimeout(() => {
+    el.classList.remove("tapflash");
+    elFlash.delete(el);
+  }, PULSE_MS));
+}
+// WHICH element a pulse lights. Note this answers only "where", never
+// "is it momentary" — that is the event's `pulse` flag. Everything here is
+// a generic lookup for the same reason: a hardcoded set of flashing
+// endpoints goes stale the first time a trig-in is added, which is exactly
+// the rot that left three of four indicators tapless.
+const DECK_BTN = {rec: "record", stop: "stop", play: "play", clear: "clear"};
+function pulseTarget(base, sub) {
+  if (base === "deck" && DECK_BTN[sub]) {
+    // TRAP: the endpoint names do NOT match the DOM ("rec" vs
+    // data-a="record"), and all four deck ports share ONE rowEl (the whole
+    // button container), so the generic port lookup below cannot tell the
+    // buttons apart. This one has to be a querySelector.
+    const n = nodes.get("deck");
+    return n && n.el.querySelector(
+      `.deckbtns button[data-a="${DECK_BTN[sub]}"]`);
+  }
+  // Everything else: the port that OWNS the endpoint knows its own anchor.
+  // This is why "transport:tap" needs no special case even though its card
+  // gid is "ttempo" — the port carries the ep, so the card id never matters.
+  const ep = sub ? `${base}:${sub}` : base;
+  for (const n of nodes.values()) {
+    const p = (n.ports || []).find(q => q.ep === ep && q.rowEl);
+    if (p) return p.rowEl;
+  }
+  // Deriver commits arrive as a BARE id ("tonic.2") and their trigger-in
+  // carries no ep at all — it is the card's only binary in.
+  const dn = nodes.get(base);
+  const dp = dn && (dn.ports || []).find(
+    q => q.sig === "bin" && q.dir === "in" && q.rowEl);
+  return dp ? dp.rowEl : null;
+}
 function schedulePulseDecay() {
   if (pulseTimer) return;
   pulseTimer = setTimeout(() => {
@@ -6607,6 +6661,44 @@ function onState() {
   rebuildGraph();
 }
 
+// {"kind":"transport"} — the transport's settings changed OUTSIDE the
+// broadcast path. The case that mattered: a logic wire into "transport:tap"
+// moves the BPM, and nothing told any client — the rig audibly ran at 232
+// while every number on screen still said 100. Mirrors the deck's
+// {"kind":"looper"} idiom: merge into the local model, then refresh the same
+// surfaces onState would have.
+function onTransportEvent(e) {
+  if (!state) return;
+  const {kind, ...rest} = e;
+  const before = state.transport || {};
+  const t = state.transport = {...before, ...rest};
+  const bpm = t.bpm ?? 100;
+  // never fight the user's own drag — the same guard onState uses
+  if (sliderDrag !== "bpm") $("bpm").value = bpm;
+  $("bpm-v").textContent = Math.round(bpm) + " bpm";
+  $("meter").value = String(t.beats_per_bar ?? 4);
+  syncTopBarClick(t.click);
+  syncTopBarPlay(t.running !== false);
+  // the Tempo/Click card's own slider + the click/accent LEDs
+  const setT = uiParam["ttempo.tempo"];
+  if (setT && sliderDrag !== "ttempo.tempo")
+    setT((Math.min(220, Math.max(40, bpm)) - 40) / 180,
+         Math.round(bpm) + " bpm");
+  for (const p of ["click", "accent"]) {
+    const s = uiParam[`transport.${p}`];
+    if (s) s(0, !!t[p]);
+  }
+  const sr = uiParam["transport.run"];
+  if (sr) sr(0, t.running !== false);
+  // A meter or downbeat change re-derives the card's step-slider detents AND
+  // the metronome strip, which are built at card-build time — that needs the
+  // rebuild onState would have done. A bpm-only change (tap tempo, the whole
+  // point of this event) must NOT rebuild: taps arrive in fast bursts.
+  if ((t.beats_per_bar ?? 4) !== (before.beats_per_bar ?? 4) ||
+      (t.downbeat | 0) !== (before.downbeat | 0))
+    rebuildGraph();
+}
+
 // top bar ↔ Play/Stop card are two views of ONE global state — both must
 // follow LOGIC input, not just clicks (REACTIVE-INDICATOR DOCTRINE)
 function syncTopBarPlay(running) {
@@ -6721,6 +6813,8 @@ function onMidi(e) {
       state.looper = {...state.looper, ...rest};
       updateDeckCard(nodes.get("deck"));
     }
+  } else if (e.kind === "transport") {
+    onTransportEvent(e);
   } else if (e.kind === "keyshift") {
     // a shifter's active key moved (progression step landed) — update chip
     const k = (state && state.keyshifts || []).find(x => x.id === e.id);
@@ -6775,7 +6869,17 @@ function onMidi(e) {
     const [base, , sub] = [String(e.ep).split(":")[0], null,
                            String(e.ep).split(":")[1] || ""];
     const on = !!e.on;
-    if (sub === "pwr") {
+    // MOMENTARY vs STEADY is carried by the event, NOT inferred from the
+    // endpoint name. The engine knows the split (GateManager._is_trig_dst)
+    // and puts it on the wire as `pulse`; a receiver that kept its own list
+    // of "these flash" would go stale the first time a trig-in is added.
+    // `pulse` is ABSENT on steady taps, so this whole branch is additive.
+    if (e.pulse) {
+      // The trailing on:false is deliberately IGNORED. It exists so the
+      // stream stays honest for anything replaying paired edges; acting on
+      // it here would clear the flash in the same tick that set it.
+      if (on) flashEl(pulseTarget(base, sub));
+    } else if (sub === "pwr") {
       // keep the local state model in step so the next rebuild agrees
       if (base === "arp" && state && state.arp) state.arp.enabled = on;
       else if (base === "drums" && state && state.drums) state.drums.enabled = on;
