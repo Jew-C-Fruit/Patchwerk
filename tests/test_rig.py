@@ -6,9 +6,10 @@ Item 37 Phase 1. Everything here is the half of `tests/rig.py` and
 `tests/transcript.py` that does NOT need a machine with audio on it: the
 transcript round-trip, the normaliser Phase 2 will diff through, the
 stuck-note walker, the scenario grammar, port resolution, scsynth
-discovery, and — the one that will actually catch a regression — that
-the driver's spawn/remove table still matches the message types
-`synthbase/server.py` dispatches.
+discovery, the scsynth-hygiene rules (kill by exact name; readiness is
+the ready LINE plus a bound socket, never the device list), and — the one
+that will actually catch a regression — that the driver's spawn/remove
+table still matches the message types `synthbase/server.py` dispatches.
 
 The live half (boot, teardown, virtual MIDI round-trip) is
 `tests/probe_rig_ws.py`, and it is Mac-only by nature.
@@ -201,6 +202,53 @@ def test_port_and_discovery(monkey=None):
               env["PATH"][:120])
 
 
+def test_scsynth_hygiene():
+    """Kill by EXACT name, and treat readiness as two signals, not one."""
+    src = (REPO / "tests" / "rig.py").read_text()
+    calls = re.findall(r'\[\s*"(?:pkill|pgrep)"[^\]]*\]', src)
+    check("the driver does kill/list scsynth by process name", bool(calls),
+          str(calls))
+    check("NO pkill/pgrep uses -f — a loose pattern matches the driver's own "
+          "command line and it kills itself",
+          all('"-f"' not in c for c in calls), str(calls))
+    check("every scsynth kill/list is anchored with -x",
+          all('"-x"' in c for c in calls), str(calls))
+
+    check("readiness is scsynth's own ready LINE, not its device list",
+          R.SCSYNTH_READY == "SuperCollider 3 server ready"
+          and R.SCSYNTH_DEVICES == "Number of Devices"
+          and R.SCSYNTH_READY != R.SCSYNTH_DEVICES)
+    check("scsynth_check reports both signals plus the udp socket, separately",
+          {"ready", "devices", "udp"} <= set(
+              re.findall(r'"(\w+)":', src[src.index("def scsynth_check"):
+                                          src.index("def _diagnose")])))
+    check("scsynth_alive() answers a list without raising",
+          isinstance(R.scsynth_alive(), list))
+    p = R.free_udp_port()
+    check("free_udp_port() hands back a real, free port",
+          1024 < p < 65536 and not R.udp_held(p), str(p))
+
+    # _diagnose must name the fault, not just report a hang. Feed it each
+    # verdict rather than spawning a server — CI has no audio either way.
+    real = R.scsynth_check
+    try:
+        R.scsynth_check = lambda *a, **k: {
+            "ready": False, "devices": True, "udp": False, "stale": 0,
+            "seconds": 15.0, "tail": "SC_AudioDriver: sample rate = 48000"}
+        stalled = R._diagnose(8765, "/tmp/x.log")
+        check("devices-but-not-ready is named as the CoreAudio stall",
+              "never starts one" in stalled and "NOT a stale process" in stalled
+              and "silent=True" in stalled, stalled)
+        R.scsynth_check = lambda *a, **k: {
+            "ready": True, "devices": True, "udp": True, "stale": 2,
+            "seconds": 1.0, "tail": "SuperCollider 3 server ready"}
+        healthy = R._diagnose(8765, "/tmp/x.log")
+        check("a healthy scsynth points the finger above it",
+              "fault is above it" in healthy and "cleared" in healthy, healthy)
+    finally:
+        R.scsynth_check = real
+
+
 def test_ids_in():
     check("ids_in reads a list of dicts",
           R.ids_in({"buttons": [{"id": "button"}, {"id": "button.2"}]},
@@ -332,6 +380,7 @@ def main():
     test_id_normalisation_edges()
     test_unpaired_notes()
     test_port_and_discovery()
+    test_scsynth_hygiene()
     test_ids_in()
     test_spawn_table_matches_the_protocol()
     test_scenario_grammar()

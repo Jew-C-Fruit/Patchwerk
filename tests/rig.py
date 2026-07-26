@@ -165,6 +165,151 @@ def ids_in(state: dict, section: str) -> set:
     return {x for x in out if x is not None}
 
 
+# -- scsynth hygiene ----------------------------------------------------------
+#
+# Boot must be idempotent from a DIRTY machine. A driver that only works on a
+# clean one is not a driver — so every boot clears stale servers first, every
+# teardown makes sure the next boot does not inherit ours, and a boot that
+# fails says WHICH signal was missing instead of hanging.
+
+#: scsynth's own readiness line. Device enumeration is NOT readiness — that is
+#: exactly the trap that made a stalled scsynth read as "boots fine standalone"
+#: (it prints its device list, then stalls inside CoreAudio device start and
+#: never prints this). Two signals, both required: this line, and a bound UDP
+#: socket on its port.
+SCSYNTH_READY = "SuperCollider 3 server ready"
+SCSYNTH_DEVICES = "Number of Devices"
+
+
+def scsynth_alive() -> list[int]:
+    """PIDs of running scsynth processes, by EXACT name."""
+    r = subprocess.run(["pgrep", "-x", "scsynth"], capture_output=True, text=True)
+    return [int(x) for x in r.stdout.split() if x.strip().isdigit()]
+
+
+def kill_scsynth(timeout: float = 4.0) -> int:
+    """Clear stale scsynth servers. Returns how many were alive.
+
+    ⚠ **`-x`, never `-f`.** supriya spawns
+    `/Applications/SuperCollider.app/Contents/Resources/scsynth`, so a
+    `pkill -f scsynth` pattern matches that — and ALSO matches this driver's
+    own shell command line, and any editor, log tail or grep that happens to
+    contain the word. A `-f` kill here is a driver that kills itself.
+    `run.sh` gets this right (`pkill -x scsynth`); so does this.
+    """
+    pids = scsynth_alive()
+    if not pids:
+        return 0
+    subprocess.run(["pkill", "-x", "scsynth"], capture_output=True)
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if not scsynth_alive():
+            return len(pids)
+        time.sleep(0.2)
+    subprocess.run(["pkill", "-9", "-x", "scsynth"], capture_output=True)
+    time.sleep(0.3)
+    return len(pids)
+
+
+def udp_held(p: int) -> bool:
+    """Is anything holding a UDP socket on this port? (readiness signal 2)"""
+    r = subprocess.run(["lsof", "-nP", f"-iUDP:{p}"],
+                       capture_output=True, text=True)
+    return bool(r.stdout.strip())
+
+
+def free_udp_port() -> int:
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.bind(("127.0.0.1", 0))
+    p = s.getsockname()[1]
+    s.close()
+    return p
+
+
+def scsynth_check(timeout: float = 15.0, kill_first: bool = True) -> dict:
+    """Can scsynth start an audio device on this machine RIGHT NOW?
+
+    Spawns a bare scsynth — no supriya, no Patchwerk — on a fresh UDP port
+    and reports BOTH readiness signals separately, because they fail apart:
+    a machine where audio cannot start still enumerates devices happily.
+
+    Returns {"ready", "devices", "udp", "stale", "seconds", "tail"}.
+    `ready=False, devices=True` is the CoreAudio device-start stall.
+    """
+    sc = find_scsynth()
+    if sc is None:
+        return {"ready": False, "devices": False, "udp": False, "stale": 0,
+                "seconds": 0.0, "tail": "scsynth not found"}
+    stale = kill_scsynth() if kill_first else len(scsynth_alive())
+    p = free_udp_port()
+    t0 = time.monotonic()
+    proc = subprocess.Popen([str(sc), "-u", str(p), "-i", "0", "-o", "2"],
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, bufsize=1)
+    lines: list[str] = []
+    ready = devices = False
+    try:
+        import selectors
+        sel = selectors.DefaultSelector()
+        sel.register(proc.stdout, selectors.EVENT_READ)
+        while time.monotonic() - t0 < timeout and not ready:
+            if not sel.select(0.3):
+                continue
+            line = proc.stdout.readline()
+            if not line:
+                break
+            lines.append(line.rstrip())
+            if SCSYNTH_DEVICES in line:
+                devices = True
+            if SCSYNTH_READY in line:
+                ready = True
+        sel.close()
+    finally:
+        udp = udp_held(p) if ready else False
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        kill_scsynth()
+    return {"ready": ready, "devices": devices, "udp": udp, "stale": stale,
+            "seconds": round(time.monotonic() - t0, 1),
+            "tail": "\n".join(lines[-6:])}
+
+
+def _diagnose(p: int, log: str) -> str:
+    """Why the boot failed, in the two signals that actually distinguish it.
+
+    `Server().boot()` blocks with NO timeout on the CoreAudio stall, so
+    without this every environment fault presents as an indistinguishable
+    hang. The driver times out on its own and then says which signal was
+    missing.
+    """
+    chk = scsynth_check()
+    out = [""]
+    if chk["stale"]:
+        out.append(f"  stale scsynth cleared before this check: {chk['stale']}")
+    out.append(f"  bare scsynth: devices={'yes' if chk['devices'] else 'NO'} "
+               f"ready={'yes' if chk['ready'] else 'NO'} "
+               f"udp={'yes' if chk['udp'] else 'NO'}  ({chk['seconds']}s)")
+    if chk["devices"] and not chk["ready"]:
+        out.append("  -> scsynth enumerates CoreAudio devices and never starts "
+                   "one. This is NOT a stale process and NOT a Patchwerk "
+                   "regression: audio cannot start in this session at all. "
+                   "Everything above the rack still works — boot the driver "
+                   "with silent=True (tests/silent_rig.py).")
+    elif not chk["devices"]:
+        out.append("  -> bare scsynth produced no device list either; check "
+                   "the SuperCollider install.")
+    else:
+        out.append("  -> bare scsynth IS healthy, so the fault is above it: "
+                   f"read {log}.")
+    if chk["tail"]:
+        out.append("  scsynth said:\n    " + chk["tail"].replace("\n", "\n    "))
+    return "\n".join(out)
+
+
 # -- process ------------------------------------------------------------------
 
 async def is_up(p: int | None = None, timeout: float = 2.0) -> bool:
@@ -187,15 +332,25 @@ async def boot(patch: str = "pad_space", p: int | None = None,
     Callers should check `is_up()` first: this always starts a NEW rig, and
     on the default port run.sh reaps any existing one first.
 
+    Boot is IDEMPOTENT FROM A DIRTY STATE: any stale scsynth is cleared by
+    exact name first (`kill_scsynth`), the wait is bounded by this driver's
+    own timeout rather than `Server().boot()`'s absent one, and a failure is
+    reported as the two readiness signals in `_diagnose` — so an environment
+    fault never presents as an indistinguishable hang.
+
     `args` are extra `synthbase gui` flags — `["--hw-buffer", "512"]`,
-    `["--out-device", "MacBook Pro Speakers"]`, `["--no-midi"]`. They matter
-    more than they look: a hardware buffer or device the machine will not
-    take makes scsynth hang inside CoreAudio with an EMPTY log, which is why
-    `_boot_hint` reads an empty log as a symptom rather than as no news.
+    `["--out-device", "MacBook Pro Speakers"]`, `["--no-midi"]`.
     """
     p = p or rig_port()
     args = list(args or [])
     t0 = time.monotonic()
+    if not silent:
+        # A server left holding the audio device (or its UDP port) makes the
+        # next boot fail in a way that reads as environmental. Clear it, and
+        # SAY that we did — a silent kill hides how dirty the machine was.
+        stale = kill_scsynth()
+        if stale:
+            print(f"[rig] cleared {stale} stale scsynth process(es) before boot")
     if silent:
         # tests/silent_rig.py: the real server over an engine-less SynthApp.
         # No scsynth, no audio device — the control plane only.
@@ -213,7 +368,7 @@ async def boot(patch: str = "pad_space", p: int | None = None,
             cwd=str(REPO), env=child_env(), capture_output=True, text=True)
         if r.returncode != 0:
             raise RuntimeError(f"run.sh failed:\n{r.stdout}\n{r.stderr}"
-                               + _boot_hint(log))
+                               + _boot_hint(log) + _diagnose(p, log))
         pid = int(PIDFILE.read_text().strip()) if PIDFILE.exists() else None
         how, proc = "run.sh", None
     else:
@@ -226,35 +381,34 @@ async def boot(patch: str = "pad_space", p: int | None = None,
     while time.monotonic() - t0 < BOOT_TIMEOUT:
         if proc is not None and proc.poll() is not None:
             raise RuntimeError(f"rig exited {proc.returncode} — tail {log}:\n"
-                               + _tail(log) + _boot_hint(log))
+                               + _tail(log) + _boot_hint(log)
+                               + ("" if silent else _diagnose(p, log)))
         if await is_up(p):
             return {"how": how, "pid": pid, "log": log, "args": args,
                     "seconds": round(time.monotonic() - t0, 1), "proc": proc}
         await asyncio.sleep(0.4)
+    # OUR timeout, not Server().boot()'s (it has none on this failure mode).
     if proc is not None:
         _reap(proc.pid)
+    if not silent:
+        kill_scsynth()          # do not leave the mess for the next boot
     raise RuntimeError(f"no 200 from port {p} in {BOOT_TIMEOUT:.0f}s — "
-                       f"tail {log}:\n" + _tail(log) + _boot_hint(log))
+                       f"tail {log}:\n" + _tail(log) + _boot_hint(log)
+                       + ("" if silent else _diagnose(p, log)))
 
 
 def _boot_hint(log: str) -> str:
     """An EMPTY boot log is a symptom, not an absence of one.
 
     The rig prints nothing until scsynth answers, so a zero-byte log means
-    the process is still inside `Server().boot()` — scsynth started, printed
-    its device list, and its CoreAudio driver never came up. Seen on this Mac
-    2026-07-26: `scsynth` stops after "SC_AudioDriver: sample rate = ..." and
-    never reaches "SuperCollider 3 server ready", intermittently, after a run
-    of start/SIGKILL cycles. Nothing in Patchwerk can fix that; the escapes
-    are to wait for CoreAudio to settle, or to boot with an explicit
-    `--out-device` / `--hw-buffer`.
+    the process is still inside `Server().boot()`, which blocks with no
+    timeout of its own. `_diagnose` then says whether scsynth itself can
+    start an audio device at all.
     """
     try:
         if Path(log).stat().st_size == 0:
             return ("\n  (the log is EMPTY: the rig never got past "
-                    "Server().boot() — scsynth's audio driver did not start. "
-                    "Wait for CoreAudio to settle, or pass "
-                    "args=['--out-device', '<device>'] / ['--hw-buffer', '512'].)")
+                    "Server().boot(), which has no timeout of its own.)")
     except OSError:
         pass
     return ""
@@ -389,9 +543,16 @@ class Rig:
             print("[rig] WARNING — restore left drift:", self.drift())
 
     async def shutdown(self) -> None:
-        """Stop a rig THIS driver booted. Never touches one we attached to."""
+        """Stop a rig THIS driver booted. Never touches one we attached to.
+
+        Teardown has to be good enough that the NEXT boot does not inherit
+        the mess: the rig process goes first, and if its scsynth outlives it
+        (a killed parent does not always take the server with it) that gets
+        cleared too, by exact name.
+        """
         if not self.booted:
             return
+        silent = self.booted.get("how") == "silent"
         proc = self.booted.get("proc")
         if proc is not None:
             _reap(proc.pid)
@@ -399,6 +560,10 @@ class Rig:
             _reap(int(self.booted["pid"]))
             if PIDFILE.exists():
                 PIDFILE.unlink(missing_ok=True)
+        if not silent:
+            await asyncio.sleep(0.4)      # give it the chance to go quietly
+            if kill_scsynth():
+                print("[rig] scsynth outlived its rig — cleared it")
         self.booted = None
 
     # -- reader ---------------------------------------------------------------
@@ -889,6 +1054,33 @@ async def _cmd_status(args) -> int:
     return 0
 
 
+async def _cmd_doctor(args) -> int:
+    """Can this machine start audio at all? Answer before blaming the code."""
+    p = args.port or rig_port()
+    print(f"scsynth:        {find_scsynth() or 'NOT FOUND'}")
+    alive = scsynth_alive()
+    print(f"scsynth alive:  {alive or 'none'}")
+    print(f"rig on {p}:     {'UP' if await is_up(p) else 'down'}")
+    if await is_up(p):
+        print("  (a rig is running — not probing scsynth under it)")
+        return 0
+    chk = await asyncio.to_thread(scsynth_check)
+    print(f"stale cleared:  {chk['stale']}")
+    print(f"device list:    {'yes' if chk['devices'] else 'NO'}")
+    print(f"server ready:   {'yes' if chk['ready'] else 'NO'}   "
+          f"({chk['seconds']}s)")
+    print(f"udp bound:      {'yes' if chk['udp'] else 'NO'}")
+    if chk["tail"]:
+        print("  " + chk["tail"].replace("\n", "\n  "))
+    if chk["ready"]:
+        print("\nAudio can start. A rig failure is above scsynth.")
+        return 0
+    print("\nAudio CANNOT start in this session — scsynth enumerates devices "
+          "and never starts one.\nUse silent=True / --silent: the control "
+          "plane, the level taps and the transcript all still work.")
+    return 1
+
+
 async def _cmd_midi(args) -> int:
     """Prove the virtual port round-trips through the REAL router."""
     p = args.port or rig_port()
@@ -939,11 +1131,13 @@ def main(argv=None) -> int:
                     help="boot tests/silent_rig.py (no engine, no audio, no MIDI)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status")
+    sub.add_parser("doctor")
     sub.add_parser("midi")
     p_play = sub.add_parser("play")
     p_play.add_argument("scenario")
     args = ap.parse_args(argv)
-    fn = {"status": _cmd_status, "midi": _cmd_midi, "play": _cmd_play}[args.cmd]
+    fn = {"status": _cmd_status, "doctor": _cmd_doctor,
+          "midi": _cmd_midi, "play": _cmd_play}[args.cmd]
     return asyncio.run(fn(args))
 
 
