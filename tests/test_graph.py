@@ -1364,6 +1364,102 @@ def test_swap_persistence_shape():
     app2.transport.shutdown()
 
 
+def test_relay_gate_synths():
+    """Item 25: a claimed audio circuit is a PERMANENT lagged-gate synth —
+    wires stay stored verbatim, sources write the circuit's own in-bus,
+    the gate synth writes the out-wire's bus, open/close moves ONLY the
+    gate param, and the state broadcast carries the STORED wires."""
+    app = make_engine_app()
+    rid = app.spawn_relay()
+    ep = f"{rid}:1"
+    app.graph_wire("add", "pluck", ep)
+    app.graph_wire("add", ep, "echo")
+
+    rec = app.relay_audio.circuits.get(ep)
+    check("gate synth spawned for the claimed circuit",
+          rec is not None and rec["node"] is not None
+          and rec["bus"] is not None)
+    check("gate spawns matching the relay (open = gate 0)",
+          rec["node"].kw.get("gate") == 0.0)
+    inst = app.rack.find("pluck")
+    check("source writes the circuit's own in-bus (open or closed)",
+          int(inst.settings["out"]) == int(rec["bus"]))
+    check("gate synth writes the out-wire's bus",
+          rec["node"].kw.get("out") == app.rack._dst_bus("echo"))
+
+    node_before = rec["node"]
+    app.set_relay(rid, closed=True)
+    check("closing = gate param 1.0, same node (no respawn)",
+          rec["node"].kw.get("gate") == 1.0 and rec["node"] is node_before)
+    check("closing rewires nothing (source stays on the circuit bus)",
+          int(inst.settings["out"]) == int(rec["bus"]))
+    app.set_relay(rid, closed=False)
+    check("opening = gate param 0.0", rec["node"].kw.get("gate") == 0.0)
+
+    ws = app._wires_state()
+    check("wires broadcast carries stored endpoints verbatim",
+          {"from": "pluck", "to": ep} in ws
+          and {"from": ep, "to": "echo"} in ws)
+    check("…and no resolved duplicate",
+          {"from": "pluck", "to": "echo"} not in ws)
+
+    # a rebuild keeps the (engine-level) gate + re-points the fresh source
+    app._build_from({"chain": [("pluck", {}), ("chorus", {}), ("echo", {})]},
+                    "mock")
+    check("gate record survives a rack rebuild",
+          app.relay_audio.circuits.get(ep) is rec)
+    check("rebuild re-points the fresh source at the circuit in-bus",
+          int(app.rack.find("pluck").settings["out"]) == int(rec["bus"]))
+    check("rebuild re-points the gate at the fresh dst bus",
+          rec["node"].kw.get("out") == app.rack._dst_bus("echo"))
+
+    # unclaiming (no wire touches the circuit) releases the gate
+    app.graph_wire("remove", ep)
+    app.graph_wire("remove", "pluck")
+    check("kind forgotten + gate released once unclaimed",
+          app.relays[rid].kinds.get(1) is None
+          and ep not in app.relay_audio.circuits)
+    app.transport.shutdown()
+
+
+def test_relay_chain_and_engine_swap():
+    """Item 25 lifecycle: circuit→circuit chaining buses correctly, and a
+    stop() clears the manager per the #16 landmine (per-server synthdef
+    registration — the NEXT engine re-receives defs and respawns)."""
+    app = make_engine_app()
+    r1 = app.spawn_relay()
+    r2 = app.spawn_relay()
+    app.graph_wire("add", "pluck", f"{r1}:1")
+    app.graph_wire("add", f"{r1}:1", f"{r2}:2")
+    app.graph_wire("add", f"{r2}:2", "echo")
+    rec1 = app.relay_audio.circuits[f"{r1}:1"]
+    rec2 = app.relay_audio.circuits[f"{r2}:2"]
+    check("chained circuits: gate 1 writes gate 2's in-bus",
+          rec1["node"].kw.get("out") == int(rec2["bus"]))
+    check("chained circuits: gate 2 writes the real dst bus",
+          rec2["node"].kw.get("out") == app.rack._dst_bus("echo"))
+    # a would-be loop THROUGH circuits is refused at add (stored-wire walk)
+    try:
+        app.graph_wire("add", "echo", f"{r1}:1")
+        check("cycle through circuits refused", False)
+    except ValueError:
+        check("cycle through circuits refused", True)
+    # engine swap: manager forgets server objects; registration is per
+    # server OBJECT so a fresh engine re-receives the synthdef
+    app.relay_audio.clear()
+    app.relay_audio.reset()
+    check("clear() empties the circuit records",
+          app.relay_audio.circuits == {})
+    check("reset() forgets the registered server",
+          app.relay_audio._registered_server is None)
+    relay_mod = sys.modules["synthbase.relay"]
+    relay_mod.apply_audio(app)   # what _reapply_graph_wires runs on boot
+    rec1b = app.relay_audio.circuits.get(f"{r1}:1")
+    check("apply_audio respawns gates against the (new) server",
+          rec1b is not None and rec1b["node"] is not None)
+    app.transport.shutdown()
+
+
 def main():
     test_wires_derivation()
     test_graph_wire_bookkeeping()
@@ -1393,6 +1489,8 @@ def main():
     test_tonic_drone()
     test_swap_synth()
     test_swap_persistence_shape()
+    test_relay_gate_synths()
+    test_relay_chain_and_engine_swap()
     print(f"\n{'PASS' if not FAILURES else 'FAIL'} — {len(FAILURES)} failures")
     return 1 if FAILURES else 0
 

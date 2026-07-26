@@ -268,9 +268,15 @@ On the Mac, `python -m synthbase test` is the real proof.
   not just threading a constant.
 - Engine rebuilds invalidate server-side registration: `set_devices` makes a
   NEW scsynth, so anything holding "already sent to the server" state must
-  track the server OBJECT, not a boolean (the LFO and threshold managers do;
-  any future manager that sends synthdefs or registers OSC callbacks must
-  too).
+  track the server OBJECT, not a boolean (the LFO, threshold and relay-audio
+  managers do; any future manager that sends synthdefs or registers OSC
+  callbacks must too).
+- A relay circuit's stored wires are the truth on EVERY plane. Item 25 made
+  the audio plane match the mod plane: a claimed audio circuit is a permanent
+  lagged-gate synth, `state.wires` broadcasts the STORED graph (endpoints
+  verbatim), and open/close moves a gate param — never the wiring. Anything
+  that resolves relay hops away before broadcasting them re-breaks the
+  second-client render this fixed.
 
 `docs/TROUBLESHOOTING.md` has the complementary, symptom-indexed list —
 runtime/hardware gotchas (sample rate, Bluetooth, MIDI controllers) that
