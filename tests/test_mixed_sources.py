@@ -9,6 +9,12 @@ removes audio_in and restores state.
 import asyncio, json, sys
 import aiohttp
 
+# Read by tests/smoke.py's CI-wiring check. This suite needs `python -m
+# synthbase gui` actually running with real audio on 127.0.0.1:8765, which
+# no CI runner has — it is a Mac-only manual check (CLAUDE.md). The reason
+# lives here rather than in an allowlist so it cannot outlive the file.
+CI_EXEMPT = "needs a live server + real audio on :8765 — Mac-only manual check"
+
 URL = "http://127.0.0.1:8765/ws"
 
 

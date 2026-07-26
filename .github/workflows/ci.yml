@@ -47,6 +47,12 @@ jobs:
       - name: Transport card tests
         run: python tests/test_transport.py
 
+      # pure Python (no server, no numpy) — it guards the power-sine
+      # coefficient law against a silent refactor. It existed and passed
+      # for its whole life without any job running it.
+      - name: Power-sine coefficient law
+        run: python tests/test_power_sine.py
+
       # the REACTIVE-INDICATOR net: every binary endpoint the gate settle
       # pass drives must emit its own tap. Without this, all four
       # _emit_level calls could be deleted and every suite above stayed
