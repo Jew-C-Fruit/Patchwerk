@@ -243,6 +243,12 @@ def write_resume(app) -> None:
                               for vid, v in app.voices.items()},
             "drums_target": (app.drums.target
                              if getattr(app, "drums", None) else None),
+            # item 32: fresh boots default STOPPED, so a ⟳ restart has to
+            # carry the play state across explicitly. RESUME ONLY — named
+            # presets never touch running (the transport snapshot above
+            # deliberately excludes it), so loading one mid-performance
+            # cannot stop or start the rig.
+            "running": bool(app.transport.running),
         }
     RESUME_PATH.write_text(json.dumps(data, indent=2))
 
@@ -323,4 +329,13 @@ def apply_resume(app) -> bool:
             app.set_drums(target=r["drums_target"])
         except Exception:  # noqa: BLE001
             pass
+    # item 32: restore the pre-restart play state LAST — after the graph,
+    # because set_transport(playing=...) walks the rack's drone instances
+    # to pause/unpause them. A resume file written before item 32 has no
+    # "running" key: it came from a running-by-default build, so it
+    # resumes PLAYING.
+    try:
+        app.set_transport(playing=bool(r.get("running", True)))
+    except Exception:  # noqa: BLE001
+        pass
     return True

@@ -431,6 +431,9 @@ class SynthApp:
             self._ensure_legacy_drone()
         self._reapply_graph_wires()
         self._restart_midi()
+        # a rebuild spawns every node UNPAUSED — a stopped transport has to
+        # re-silence the drones (item 32)
+        self._sync_drone_run_state()
 
     def _make_voices(self, patch: dict) -> None:
         """(Re)create every mono voice against the fresh rack, keeping ids
@@ -925,6 +928,9 @@ class SynthApp:
                 self.patch["chain"] = [
                     (i.key, {}) for i in self.rack.instances if not i.service
                 ]
+            # a drone ADDED while the transport is stopped spawns silent
+            # (item 32); remove/move are no-ops for this sync
+            self._sync_drone_run_state()
             return result
 
     def graph_wire(self, action: str, src: str, dst: str | None = None) -> None:
@@ -1033,6 +1039,9 @@ class SynthApp:
             self.lfos.on_node_replaced(key)      # re-map surviving dests
             if self.graph_wires is not None:
                 relay_mod.apply_audio(self)
+            # a swap TO drone while the transport is stopped lands paused
+            # (item 32)
+            self._sync_drone_run_state()
 
     def spawn_unconnected(self, key: str) -> str:
         """Add a module to the rack with its audio out parked on the null bus
@@ -1642,6 +1651,30 @@ class SynthApp:
         for w in ({"from": "arp", "to": "tonic"}, {"from": "tonic", "to": did}):
             if w not in self.ctl_wires:
                 self.ctl_wires.append(w)
+        # enabling the drone while the transport is STOPPED must not make a
+        # sound — it comes up paused and unpauses on play (item 32)
+        self._sync_drone_run_state()
+
+    def _sync_drone_run_state(self) -> None:
+        """Pause/unpause every ENABLED drone node to match transport.running.
+
+        Drones are gateless — they sound the moment their node runs — so a
+        stopped transport is the only thing that silences them. Item 32
+        (fresh boots come up STOPPED) turns that into a standing invariant
+        rather than a set_transport side effect: every path that creates,
+        replaces or re-enables a drone node while the transport is stopped
+        must land it PAUSED (patch build/reload, edit_chain add, swap_synth,
+        set_enabled, the legacy compat pair). DISABLED instances are skipped
+        — bypass pausing belongs to rack.set_enabled and must not be undone
+        here."""
+        running = self.transport.running
+        for inst in (self.rack.instances if self.rack else []):
+            if inst.type != "drone" or inst.node is None or not inst.enabled:
+                continue
+            try:
+                (inst.node.unpause if running else inst.node.pause)()
+            except Exception:  # noqa: BLE001
+                pass
 
     def set_transport(self, bpm=None, beats_per_bar=None, click=None, accent=None,
                       playing=None, downbeat=None) -> None:
@@ -1652,13 +1685,7 @@ class SynthApp:
             if not playing and self.arp:
                 self.arp._safe_all_off() if hasattr(self.arp, "_safe_all_off") else None
             # transport stop/start pauses every drone instance
-            for inst in (self.rack.instances if self.rack else []):
-                if inst.type != "drone" or inst.node is None or not inst.enabled:
-                    continue
-                try:
-                    (inst.node.unpause if playing else inst.node.pause)()
-                except Exception:  # noqa: BLE001
-                    pass
+            self._sync_drone_run_state()
         if bpm is not None:
             self.transport.set_bpm(bpm)
         if beats_per_bar is not None:
@@ -1792,6 +1819,9 @@ class SynthApp:
         with self._lock:
             if self.rack:
                 self.rack.set_enabled(key, enabled)
+                # rack enable UNPAUSES the node — a drone re-enabled while
+                # the transport is stopped must land back paused (item 32)
+                self._sync_drone_run_state()
 
     def set_volume(self, volume: float) -> None:
         with self._lock:
