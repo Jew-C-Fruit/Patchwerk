@@ -265,6 +265,39 @@ def test_level_ins_tap_in_both_directions():
         got = taps_for(drive(app, ep, events), ep)
         check(f"{ep} taps hi then lo",
               [e["on"] for e in got] == [True, False])
+        check(f"{ep} is NOT marked pulse (it holds a level)",
+              all("pulse" not in e for e in got))
+    teardown(app)
+
+
+def test_every_tap_declares_its_shape():
+    """The momentary/steady split rides the EVENT, not a list the
+    receiver keeps.
+
+    This is the hazard the item 11 session caught in review before
+    building against it: a trig-in's hi and lo land in the same tick, so
+    a receiver that routes the pair through a plain level setter renders
+    nothing at all — implemented-looking and dead on arrival. It can only
+    do better if the event says so, and it must not have to infer it from
+    the endpoint name, because that inference is a hardcoded list that
+    rots the first time a trig-in is added.
+
+    So: `pulse` is present exactly on the endpoints _is_trig_dst calls
+    trig, and absent on every other. Derived from the manager's own
+    predicate, so the two cannot drift."""
+    app = fat_app()
+    events = []
+    app.on_midi_event = lambda e: events.append(dict(e))
+    wrong = []
+    for ep in applied_endpoints(app):
+        got = taps_for(drive(app, ep, events), ep)
+        want = app.gates._is_trig_dst(ep)
+        if not got or any(bool(e.get("pulse")) != want for e in got):
+            wrong.append(f"{ep} (trig={want})")
+    check("every tap's pulse flag matches _is_trig_dst", not wrong)
+    if wrong:
+        print("      shape disagrees with the engine's own predicate: "
+              + ", ".join(wrong))
     teardown(app)
 
 
@@ -287,8 +320,12 @@ def test_trig_ins_tap_only_on_a_real_edge():
           taps_for(events, "deck:play") == [])
     events.clear()
     app.button_down(bid)                       # lo → hi: the real edge
+    got = taps_for(events, "deck:play")
     check("the rising edge emits one hi/lo pulse",
-          [e["on"] for e in taps_for(events, "deck:play")] == [True, False])
+          [e["on"] for e in got] == [True, False])
+    check("both halves carry the pulse tag (zero-duration: the receiver "
+          "must stretch, not set)",
+          bool(got) and all(e.get("pulse") is True for e in got))
     teardown(app)
 
 
@@ -387,8 +424,10 @@ def test_transport_tap():
     # ...and the tap BUTTON itself blips, whether or not the tempo moved
     events.clear()
     app.fire_button(bid)
+    tap_taps = taps_for(events, "transport:tap")
     check("a tap edge pulses transport:tap for the GUI",
-          [e["on"] for e in taps_for(events, "transport:tap")] == [True, False])
+          [e["on"] for e in tap_taps] == [True, False]
+          and all(e.get("pulse") is True for e in tap_taps))
 
     # a tap that changes nothing (first of a sequence / out-of-range gap)
     # must still blip the button but must NOT claim a settings change
@@ -436,14 +475,17 @@ def test_deck_buttons():
         got = drive(app, ep, events)
         check(f"{ep} presses the deck once",
               presses == [{"action": action}])
+        taps = taps_for(got, ep)
         check(f"{ep} pulses its button for the GUI",
-              [e["on"] for e in taps_for(got, ep)] == [True, False])
+              [e["on"] for e in taps] == [True, False]
+              and all(e.get("pulse") is True for e in taps))
     teardown(app)
 
 
 def main():
     test_every_applied_endpoint_taps()
     test_level_ins_tap_in_both_directions()
+    test_every_tap_declares_its_shape()
     test_trig_ins_tap_only_on_a_real_edge()
     test_dispatch_is_fully_covered()
     test_transport_tap()

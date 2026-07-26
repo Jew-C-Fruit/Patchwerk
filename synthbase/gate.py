@@ -476,28 +476,48 @@ class GateManager:
         except Exception:  # noqa: BLE001
             pass
 
-    def _emit_level(self, endpoint: str, on: bool) -> None:
-        """Announce that a LEVEL-IN drove its target (REACTIVE-INDICATOR
+    def _emit_level(self, endpoint: str, on: bool, pulse: bool = False) -> None:
+        """Announce that a binary in drove its target (REACTIVE-INDICATOR
         DOCTRINE, Cole 07-24): the GUI's power stripes, transport play/stop
         and click/accent lights must react to LOGIC input exactly as they
         react to a click. These applications happen deep in the settle pass
         (app.set_enabled / set_transport), which deliberately do NOT
         broadcast state — so without this event the indicator would stay
-        stale until the next unrelated broadcast."""
+        stale until the next unrelated broadcast.
+
+        `pulse` marks the tap as MOMENTARY — a trig-in firing, with no
+        level to hold. The flag is carried on the EVENT rather than left
+        for the GUI to infer from the endpoint name, and that is
+        load-bearing: a receiver that has to keep its own list of which
+        endpoints flash is a list that rots the first time a trig-in is
+        added, which is the exact failure this whole doctrine exists to
+        prevent. Dispatch on the flag, never on the name. Absent (not
+        False) on steady taps, so a steady event stays byte-identical to
+        what clients already parse."""
         try:
-            self.app._emit_midi_event({"kind": "level", "ep": str(endpoint),
-                                       "on": bool(on)})
+            ev = {"kind": "level", "ep": str(endpoint), "on": bool(on)}
+            if pulse:
+                ev["pulse"] = True
+            self.app._emit_midi_event(ev)
         except Exception:  # noqa: BLE001
             pass
 
     def _pulse_level(self, endpoint: str) -> None:
         """A TRIG-IN fired. Its indicator is MOMENTARY — there is no level
         to hold — so announce the pulse the binary plane itself uses: hi,
-        then lo. Both can land inside one frame; the GUI's pulse stretcher
-        is what guarantees the lit frame, exactly as it does for the
-        {"kind": "gate"} LEDs."""
-        self._emit_level(endpoint, True)
-        self._emit_level(endpoint, False)
+        then lo, BOTH tagged `pulse`.
+
+        The two land in the same tick, always: this pulse has zero real
+        duration. A receiver that routes it through a plain level setter
+        therefore renders NOTHING — it sets on, then immediately off,
+        inside one frame, and the fix looks implemented while being dead
+        on arrival. The `pulse` tag is the instruction not to do that:
+        stretch it (blocks.html's pulseBin/PULSE_MS decay idiom, which
+        already exists for the {"kind": "gate"} LEDs) and ignore the
+        trailing lo. The lo is still sent so the stream stays honest for
+        anything replaying or analysing paired edges."""
+        self._emit_level(endpoint, True, pulse=True)
+        self._emit_level(endpoint, False, pulse=True)
 
     def state(self) -> dict:
         return {"logics": [g.settings() for g in self.logics.values()]}
