@@ -246,6 +246,12 @@ def write_resume(app) -> None:
             "poly_sizes": {vid: getattr(v, "voices", 1)
                            for vid, v in app.voices.items()
                            if getattr(v, "policy", "") == "poly"},
+            # item 29: a drone voice's POWER is the only thing that makes it
+            # audible, so it has to come back with the patch
+            "drone_powers": {vid: bool(getattr(app, "_drone_powers", {})
+                                       .get(vid, False))
+                             for vid, v in app.voices.items()
+                             if getattr(v, "policy", "") == "hold"},
             "drums_target": (app.drums.target
                              if getattr(app, "drums", None) else None),
             # item 32: fresh boots default STOPPED, so a ⟳ restart has to
@@ -327,12 +333,19 @@ def apply_resume(app) -> bool:
                 # back as a poly voice, not as another mono one
                 if vid.split(".")[0] == "poly":
                     app.spawn_poly(int(poly_sizes.get(vid, 8)))
+                elif vid.split(".")[0] == "hold":
+                    app.spawn_drone_voice()   # item 29
                 else:
                     app.spawn_voice()
             except Exception:  # noqa: BLE001
                 pass
         try:
             app.set_voice_target(tgt, vid)
+        except Exception:  # noqa: BLE001
+            pass
+    for vid, on in (r.get("drone_powers") or {}).items():
+        try:
+            app.set_drone_power(vid, bool(on))
         except Exception:  # noqa: BLE001
             pass
     if r.get("drums_target") and getattr(app, "drums", None):

@@ -76,6 +76,18 @@ Protocol (JSON messages):
          ctl-wire destination exactly like a mono voice.)
     {"type": "set_poly_voices", "id": "poly", "voices": 8}   (1..16; notes
          sounding on slots that go away are closed)
+    {"type": "spawn_drone_voice"}                       (item 29: a DRONE
+         voice, ids "hold", "hold.2", ... — last-note priority, NO gate from
+         the note stream, an empty held set HOLDS the last root. Its TONE in
+         is an ordinary ctl-wire destination; its POWER in is the binary
+         level-in "<id>:pwr". Removed with remove_voice. The id type is
+         "hold", not "drone", because "drone" is a module type and a ctl
+         node sharing an id with a rack instance would shadow it.)
+    {"type": "set_drone_power", "id": "hold", "on": true}    (POWER: hold the
+         target source's gate open. The effective gate is this AND
+         transport.running — item 32's invariant. Emits
+         {"kind": "level", "ep": "hold:pwr", "on": …} from BOTH routes, so
+         the card indicator reacts to logic input as well as to a click.)
     {"type": "spawn_tonic"} / {"type": "remove_tonic", "id": "tonic.2"}
     {"type": "set_tonic", "id": "tonic", "every": "1 bar", "octave": 2,
      "memory": 6.0, "bass": 0.06, "listening": "triadic", "deck_feed": false}
@@ -95,7 +107,8 @@ Protocol (JSON messages):
          for every op (SR latch: a=set, b=reset; T latch: a=toggle on
          RISING edge, b=reset and wins; NOR with one wired leg acts as
          NOT; occupied ins steal; legacy :set/:reset remapped).
-         Other dsts: "<key>:pwr", "arp:pwr", "drums:pwr" (level follows),
+         Other dsts: "<key>:pwr", "arp:pwr", "drums:pwr",
+         "<drone voice>:pwr" (level follows),
          "deck:rec|play|stop|clear" + deriver ids (rising edge fires),
          relay circuit ins + "relay:ctl". Level changes emit
          {"kind": "gate", "id", "on"} taps for the GUI LEDs.)
@@ -351,6 +364,12 @@ class GuiServer:
             await self._broadcast_state()
         elif t == "set_poly_voices":
             self.synth.set_poly_voices(m["id"], int(m["voices"]))
+            await self._broadcast_state()
+        elif t == "spawn_drone_voice":
+            self.synth.spawn_drone_voice()
+            await self._broadcast_state()
+        elif t == "set_drone_power":
+            self.synth.set_drone_power(m["id"], bool(m["on"]))
             await self._broadcast_state()
         elif t == "remove_voice":
             self.synth.remove_voice(m["id"])

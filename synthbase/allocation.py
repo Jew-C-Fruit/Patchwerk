@@ -18,7 +18,8 @@ policy rather than a fourth implementation.
 
   ``MonoLatest``  1 slot, gate, release on empty   — Mono Voice
   ``Poly``        N slots, gate, steal oldest      — Poly Voice   (item 10)
-  ``Hold``        1 slot, no gate, hold on empty   — Drone        (item 29)
+  ``Hold``        1 slot, no gate, hold on empty   — Drone        (item 29;
+                  its gate is POWER, a separate axis from the note stream)
 
 Slots and satellites
 --------------------
@@ -396,9 +397,17 @@ class Allocation:
     def target_key(self, key: str) -> None:
         if key == self._target_key:
             return
+        self._before_retarget()
         self._release()
         self._target_key = key
         self._lease()
+        self.refresh()
+
+    def _before_retarget(self) -> None:
+        """Last chance to leave the OLD target in a sane state. A no-op for
+        the gated policies (the caller has already all_off'd them); ``Hold``
+        closes the gate it was holding open, or re-aiming a drone strands
+        the source it left sounding."""
 
     def _lease(self) -> None:
         if self.rack is None:
@@ -429,6 +438,39 @@ class Allocation:
         satellites outlive their allocation and drone on."""
         self.all_off()
         self._release()
+
+    def rebind(self, rack: Any) -> None:
+        """Re-lease against a FRESH rack after a rebuild.
+
+        Pools live on the rack, so a rebuild takes every pool and satellite
+        with it. An allocation the app keeps across rebuilds (item 29's
+        drone sinks) must be handed the new rack or it writes into a dead
+        one forever — the old ``_DroneSink`` read ``app.rack`` on every note
+        and so never noticed. Allocations the app REBUILDS per rack
+        (mono/poly, via ``_make_voices``) never call this.
+
+        Hand the OLD slots back rather than dropping them. Both app paths
+        that replace ``app.rack`` tear the old one down first, and teardown
+        disposes every pool — but "someone else will free it" is exactly the
+        assumption the 07-26 satellite leak was made of, and an unreleased
+        satellite is a synth still running with nothing left that knows about
+        it. Releasing is correct on its own terms and harmless twice: a
+        disposed pool has already nulled the nodes.
+        """
+        if rack is self.rack:
+            return
+        self._release()
+        self.rack = rack
+        self._lease()
+        self.refresh()
+
+    def refresh(self) -> None:
+        """Re-assert whatever this allocation is holding onto its slots.
+
+        A no-op for the gated policies: their state IS the note stream, and
+        a rebuild legitimately starts them silent. ``Hold`` overrides it —
+        a drone's whole point is that it survives.
+        """
 
     # -- pitch ----------------------------------------------------------------
 
@@ -693,14 +735,32 @@ class Hold(Allocation):
     What makes a drone a drone (item 29): notes steer ``freq`` through the
     synthdef's own Lag/glide path, releasing the sounding root falls back to
     the newest still-held note, and an EMPTY held set HOLDS the last root.
-    The on/off switch is the module's bypass, not the note stream — so this
-    policy never touches ``gate``.
+    The on/off switch is never the note stream: for the ``drone`` MODULE it
+    is that module's bypass, and for the drone CARD it is POWER, below.
 
-    Item 29 swaps ``app._DroneSink`` for this and gives it a card. One
-    difference to settle there: ``_DroneSink`` aims at the raw MIDI pitch and
-    ignores global transpose/bend, where this honours both like every other
-    allocation. Construct with ``transpose``/``bend`` left at 0 for identical
-    behaviour.
+    POWER (item 29). ``Hold`` never gates from the NOTE stream, but a drone
+    aimed at an ordinary playable source still has to open that source's
+    envelope or it is silent forever. That is the card's POWER input, and it
+    is a separate axis: ``set_gate_open()``. On a GATELESS target (the
+    ``drone`` module itself, which sounds while its node runs) there is
+    nothing to open, so it is skipped rather than faked — writing a ``gate``
+    the synthdef doesn't have would put a phantom param in ``inst.settings``
+    and into the broadcast state.
+
+    PITCH REFERENCE (item 29, settled). ``_DroneSink`` aimed at the raw MIDI
+    pitch and honoured neither global transpose nor bend. This follows
+    TRANSPOSE and ignores BEND, deliberately:
+
+    * transpose is a KEY CHANGE — a standing redefinition of what a note
+      number means, and the global-vs-wired doctrine names it as global. A
+      deriver hands the drone a raw note number while the voice sounding the
+      melody applies transpose, so a drone that ignores it sits exactly
+      `transpose` semitones away from everything else. That was a bug, not a
+      behaviour.
+    * bend is a MOMENTARY gesture on what you are PLAYING, and a drone is
+      the fixed reference you play against. Bending the reference with the
+      melody leaves every interval unchanged, which silently cancels the
+      wheel in precisely the patches that have a drone in them.
     """
 
     policy = "hold"
@@ -709,7 +769,58 @@ class Hold(Allocation):
     def __init__(self, rack: Any, target_key: str) -> None:
         self._held: list[int] = []       # ordered; last = the sounding root
         self._root: int | None = None
+        self.gate_open = False           # POWER, not the note stream
         super().__init__(rack, target_key)
+
+    # -- power ----------------------------------------------------------------
+
+    def _target_has_gate(self) -> bool:
+        try:
+            inst = self.rack.find(self._target_key)
+        except Exception:  # noqa: BLE001 — mid-rebuild / no rack
+            return False
+        return "gate" in getattr(inst, "settings", {})
+
+    def set_gate_open(self, open_: bool) -> None:
+        """Hold the target's envelope open (POWER), or let it release."""
+        self.gate_open = bool(open_)
+        self._write_gate()
+
+    def _write_gate(self) -> None:
+        if not self._target_has_gate():
+            return
+        slot = self._slot()
+        if slot is not None:
+            slot.set(gate=1 if self.gate_open else 0)
+
+    def refresh(self) -> None:
+        """Re-assert root + power after a rebuild or a retarget.
+
+        Item 32's invariant in allocation terms: a rebuild spawns every node
+        fresh (and every satellite at ``gate=0``), so a drone that was
+        sounding has to be told again — same class as playable sources
+        having to spawn ``gate=0``."""
+        if self._root is not None:
+            slot = self._slot()
+            if slot is not None:
+                slot.set(freq=self._freq(self._root))
+        self._write_gate()
+
+    def _before_retarget(self) -> None:
+        # release the source we were holding open before letting go of its
+        # slot — otherwise the old target drones on with nothing aimed at it
+        if self.gate_open and self._target_has_gate():
+            slot = self._slot()
+            if slot is not None:
+                slot.set(gate=0)
+
+    def dispose(self) -> None:
+        # a drone's gate is held OPEN — removing the card without closing it
+        # leaves the target sounding with nothing left to switch it off
+        self.set_gate_open(False)
+        super().dispose()
+
+    # -- policy ---------------------------------------------------------------
 
     def _aim(self, note: int) -> None:
         slot = self._slot()
@@ -737,12 +848,14 @@ class Hold(Allocation):
             self._aim(self._held[-1])
 
     def set_bend(self, semitones: float) -> None:
-        self.bend = semitones
-        if self._root is not None:
-            self._aim(self._root)
+        """Deliberately inert — see PITCH REFERENCE above. ``self.bend``
+        stays 0.0 so ``_freq`` is unaffected."""
 
     def all_off(self) -> None:
-        self._held.clear()   # hold the current root
+        # panic/rebuild/arp-stop silences the note stream, NOT the drone: it
+        # has no note to close (no gate came from a note) and holds its root.
+        # POWER is the off switch, exactly as bypass was.
+        self._held.clear()
 
 
 #: policy name -> class, for state/protocol round-tripping
