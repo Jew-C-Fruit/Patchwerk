@@ -34,7 +34,10 @@
 > says, the pending behaviour is called out in a blockquote naming the
 > branch, so nobody builds against something that is not there yet. Open as
 > of 2026-07-26: item 11's `dual` kind (`feat/p11-dual-mode`) in §2.2 and
-> §10.3/§10.3.1. Clear each marker as its branch merges.
+> §10.3/§10.3.1; item 10's allocation framework and poly voices
+> (`feat/p2-poly-voice`) in §4.1 and §4.3.1 — that one is additionally **not
+> live-verified**, headless-green only. Clear each marker as its branch
+> merges.
 >
 > Re-verified 2026-07-26 through PRs #45–#53 and the item-32 merge:
 > the T latch (#47) is now specified in §5.4; §8.1–8.2 carry item 32's
@@ -362,6 +365,7 @@ grammar: plain ids, plus `":"` suffixes for lane-like sub-endpoints —
 | Arpeggiator | `arp` (singleton) | yes | yes | note-pool layer (§4.4); disabled = pass-through |
 | Loop Deck | `deck` (singleton) | yes (replay) | yes (record) | the MIDI looper (§9) |
 | Mono voices | `voice`, `voice.2`, … | — (drives audio) | yes | each drives one playable source's `freq`/`gate` (§4.3) |
+| Poly voices | `poly`, `poly.2`, … | — (drives audio) | yes | **PENDING (§4.3.1)** — N notes at once on ONE target source, oldest stolen when full |
 | Estimator deriver | `tonic`, `tonic.2`, … | yes (mono root) | yes (evidence) | scale-aware root estimation (§4.5) |
 | Literal deriver | `literal`, `literal.2`, … | yes (mono) | yes | deterministic extract×place (§4.5) |
 | Drone instances | `drone`, `drone.2`, … (module instances) | no | yes (mono, single-input) | ctl note-sink retargeting the drone module's `freq` (§4.7) |
@@ -394,7 +398,10 @@ A→X→B to A→B, but only when unambiguous (exactly 1 in and 1 out;
 keyshift heals per lane; binary/ping wires never heal). Removing a
 voice/relay/binary source drops all its wires.
 
-### 4.3 Mono voices (`MonoVoice`, midi.py)
+### 4.3 Allocation: mono voices, poly voices and drone (`MonoVoice`, midi.py)
+
+**On `main` this section is mono voices only.** The allocation framework
+below — and with it poly — is PENDING; see §4.3.1.
 
 Last-note-priority mono: a held-note stack; `note_on` re-aims the target
 source's `freq` and sets `gate=1`; releasing the sounding note falls
@@ -407,6 +414,71 @@ voices spawn aimed at the first playable source and arrive **unwired**.
 Each voice has one target (`set_voice_target` re-aims; it resurrects a
 voice whose target was removed). A rebuild re-creates voices, keeping
 ids and stored targets where the module still exists.
+
+#### 4.3.1 The allocation framework and poly voices — PENDING, not on `main`
+
+> Item 10, built on the local-only branch **`feat/p2-poly-voice`** @
+> `d10b907`; unmerged and unpushed. The backlog anticipated the rename of
+> this section to **Allocation** (backlog item 2).
+>
+> ⚠ **NOT LIVE-VERIFIED. Do not treat this as working audio.** All 13
+> headless suites pass, including the new `tests/test_allocation.py` (521
+> lines), but nothing here has been through a real scsynth with real
+> hardware. `supriya.Server().boot()` fails from the sandbox shell —
+> identically on plain `main`, so that is ENVIRONMENTAL, not a regression
+> this branch introduced. The poly path still needs a pass on the Mac
+> (`python -m synthbase test` is the real proof) before anyone trusts it
+> for audio.
+
+Three things turn a stream of note events into sound, and each used to
+carry its own copy of the answer. They differ on **exactly one axis — the
+allocation policy**: how many notes may sound at once, which sounding note
+a new note displaces, and what an empty held set means. Everything else
+(transpose, bend, the `on_voiced` tap, retargeting) is shared, so the
+policy is a subclass and the rest is the base:
+
+| Policy | Slots | Gate | Empty held set | Is |
+| --- | --- | --- | --- | --- |
+| `MonoLatest` | 1 | yes | release | Mono Voice (§4.3) |
+| `Poly` | N (1–16) | yes | release | **Poly Voice** (item 10) |
+| `Hold` | 1 | **no** | **holds the last root** | Drone (§4.7) |
+
+`Poly` steals the OLDEST sounding note when full. A steal closes the gate
+and reopens it across a scheduled ~12 ms gap (`STEAL_GAP`): a gate is
+level-triggered, so setting `gate=1` while already 1 does not restrike the
+envelope, and the stolen note would otherwise inherit its predecessor's
+envelope position. This also makes item 29 (drone as an allocation) the
+third policy rather than a fourth implementation.
+
+**Slots and satellites.** An allocation does not own a synth — it LEASES
+SLOTS from the target source's `VoicePool`. **Slot 0 is the target
+instance's own node**, driven through `rack.set_params` exactly as the mono
+voice always drove it, so a lone voice on a lone source is byte-for-byte
+the old behaviour and the card's freq/gate readout keeps moving. **Slots ≥
+1 are SATELLITES**: real scsynth synths cloned from the instance's
+settings, writing to the SAME out bus — extra sources sum (§3), so the bus
+doctrine gives polyphony for free. One card, N voices.
+
+That one mechanism fixes both halves of item 10. Poly leases N slots on one
+target; and a SECOND mono voice aimed at a source that already has one now
+leases slot 1 instead of stomping slot 0 — which is why `voice` and
+`voice.2` could always spawn but never sound as distinct voices (both
+called `set_params` on the same node, so each note-off cut the other's
+held note).
+
+`PER_VOICE_PARAMS = ("freq", "gate")` are never mirrored from the target
+onto satellites, or every satellite would collapse onto slot 0's pitch and
+gate. Every OTHER param change is mirrored, since N nodes sit behind one
+card. Satellites are DERIVED state, re-cloned whenever the target's node
+identity changes (bypass, hot reload, rack rebuild) or the server object is
+replaced — per the "track the server OBJECT, not a boolean" landmine.
+
+**Protocol** (both on the branch only):
+
+| Message | Fields | Effect |
+| --- | --- | --- |
+| `spawn_poly` | `voices` (default 8) | a poly voice `poly`, `poly.2`, … — N notes at once on ONE target, stealing the oldest when full. A ctl-wire destination exactly like a mono voice, and removed with `remove_voice`. |
+| `set_poly_voices` | `id`, `voices` (1–16, `MAX_POLY_VOICES`) | resize; notes sounding on slots that go away are closed |
 
 ### 4.4 Arpeggiator (`arp.py`)
 

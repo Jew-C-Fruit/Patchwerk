@@ -38,7 +38,10 @@ before its dst. Wires survive rebuilds; removal splice-heals A→X→B to A→B.
 routing. Node vocabulary: `keys` (all controllers enter here; never a
 destination), `arp`, `deck` (the MIDI looper: keys→deck records raw,
 arp→deck records voiced, deck→X replays), mono voices (`voice`,
-`voice.2`, ...; each drives one target source), tonic derivers (`tonic.N`:
+`voice.2`, ...; each drives one target source), POLY voices (`poly`,
+`poly.2`, ...; N notes at once on ONE target, oldest stolen when full —
+**pending on `feat/p2-poly-voice`, not on main, and not live-verified**;
+see the satellite landmine below), tonic derivers (`tonic.N`:
 notes in → ctl THRU out + amber TONIC out; tonic outs land only on drone
 instances' tonic-ins), and key shifters (`keyshift.N` with four isolated
 LANES — endpoint grammar `"keyshift.2:3"` = lane 3; lane k in → shift →
@@ -411,6 +414,33 @@ nets keep their last healthy state. Restore first, then diff.
   track the server OBJECT, not a boolean (the LFO, threshold and relay-audio
   managers do; any future manager that sends synthdefs or registers OSC
   callbacks must too).
+- **SATELLITE VOICES ARE NOT `Instance`s** (item 10, pending on
+  `feat/p2-poly-voice`, not live-verified). A poly voice leases SLOTS from
+  its target's `VoicePool`: slot 0 is the target instance's own node, but
+  **slots ≥ 1 are satellites — real scsynth synths with no `Instance`, no
+  card and no state entry**, cloned from the target's settings onto the same
+  out bus. Every loop that walks `rack.instances` is therefore blind to
+  them, and that is the whole hazard: **anything that moves, pauses,
+  rewires, re-params or frees a target node must reach its pool too**, or
+  satellites are left behind as audible garbage nothing on screen can stop.
+  The paths that already do, and the failure each one prevents:
+  - `reorder_for_wires` → `pool.reposition()` — else a satellite writes its
+    bus AFTER the effect that reads it, and only the extra voices sound dry.
+  - `set_enabled` → `pool.set_paused()` — else bypass silences the card
+    while the satellites keep playing.
+  - `set_param`/`set_params` → `pool.mirror()` — else a knob moves one voice
+    of N. `PER_VOICE_PARAMS = ("freq", "gate")` are deliberately NOT
+    mirrored: mirroring those collapses every satellite onto slot 0's pitch
+    and gate.
+  - `audio_rewire` and the null-bus park → mirror `out` — else rewiring
+    moves the card and strands the satellites on the old bus.
+  - `remove_instance` and `teardown` → `pool.dispose()` — else the
+    satellites outlive the card and drone on, with no card left to stop them.
+
+  Satellites are DERIVED state: re-clone them whenever the target's node
+  identity changes (bypass, hot reload, rack rebuild) or the server object is
+  replaced — the same rule as the entry above. **When you add a path that
+  touches a target node, assume you owe the pool a call.**
 - A relay circuit's stored wires are the truth on EVERY plane. Item 25 made
   the audio plane match the mod plane: a claimed audio circuit is a permanent
   lagged-gate synth, `state.wires` broadcasts the STORED graph (endpoints
