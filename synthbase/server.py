@@ -70,6 +70,12 @@ Protocol (JSON messages):
          card: swap the instance's module type IN PLACE — same id, buses,
          wires, node order; shared params carry over, the rest reset)
     {"type": "spawn_voice"} / {"type": "remove_voice", "id": "voice.2"}
+    {"type": "spawn_poly", "voices": 8}                 (a POLY voice:
+         "poly", "poly.2", ... — N notes at once on ONE target source,
+         stealing the oldest when full. Removed with remove_voice, and a
+         ctl-wire destination exactly like a mono voice.)
+    {"type": "set_poly_voices", "id": "poly", "voices": 8}   (1..16; notes
+         sounding on slots that go away are closed)
     {"type": "spawn_tonic"} / {"type": "remove_tonic", "id": "tonic.2"}
     {"type": "set_tonic", "id": "tonic", "every": "1 bar", "octave": 2,
      "memory": 6.0, "bass": 0.06, "listening": "triadic", "deck_feed": false}
@@ -339,6 +345,12 @@ class GuiServer:
             await self._broadcast_state()
         elif t == "spawn_voice":
             self.synth.spawn_voice()
+            await self._broadcast_state()
+        elif t == "spawn_poly":
+            self.synth.spawn_poly(int(m.get("voices", 8)))
+            await self._broadcast_state()
+        elif t == "set_poly_voices":
+            self.synth.set_poly_voices(m["id"], int(m["voices"]))
             await self._broadcast_state()
         elif t == "remove_voice":
             self.synth.remove_voice(m["id"])

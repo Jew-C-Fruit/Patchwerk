@@ -79,6 +79,7 @@ class Rack:
         self.instances: list[Instance] = []
         self.mapped: set[tuple[str, str]] = set()   # (key, param) driven by LFOs
         self.on_node_replaced = None                 # callback(key) after respawn/re-enable
+        self.voice_pools: dict[str, Any] = {}        # target key -> allocation.VoicePool
         self._tail_router = None                     # bus->hardware bypass when the chain ends on a summed source
         self._null_bus = None                        # persistent silent bus: "disconnected" outputs park here
 
@@ -176,6 +177,9 @@ class Rack:
             )
 
     def teardown(self) -> None:
+        for pool in list(self.voice_pools.values()):
+            pool.dispose()
+        self.voice_pools = {}
         if self._null_bus is not None:
             try:
                 self._null_bus.free()
@@ -229,6 +233,9 @@ class Rack:
 
     def remove_instance(self, key: str) -> None:
         inst = self.find(key)
+        pool = self.voice_pools.pop(inst.key, None)
+        if pool is not None:
+            pool.dispose()   # else the satellites outlive the card and drone on
         if inst.node is not None:
             inst.node.free()
         if inst.bus_group is not None:
@@ -365,6 +372,7 @@ class Rack:
             return  # LFO drives this param; value is stored for later restore
         if inst.enabled or inst.module.kind == "source":  # paused sources accept sets
             inst.node.set(**{name: value})
+        self._mirror_pool(key, {name: value})
 
     def set_params(self, key: str, **values: float) -> None:
         inst = self.find(key)
@@ -373,6 +381,17 @@ class Rack:
         live = {k: v for k, v in values.items() if (key, k) not in self.mapped}
         if live and (inst.enabled or inst.module.kind == "source"):
             inst.node.set(**live)
+        self._mirror_pool(key, live)
+
+    def _mirror_pool(self, key: str, values: dict) -> None:
+        """Push a target's param change onto its satellite voices.
+
+        A poly voice is N nodes behind ONE card, so a knob turn has to reach
+        all of them. The pool drops `freq`/`gate` — those ARE the voice.
+        """
+        pool = self.voice_pools.get(key)
+        if pool is not None and values:
+            pool.mirror(values)
 
     def set_enabled(self, key: str, enabled: bool) -> None:
         """Toggle a module in the running chain.
@@ -388,6 +407,9 @@ class Rack:
         server = self.engine.server
         if inst.module.kind == "source":
             (inst.node.unpause if enabled else inst.node.pause)()
+            pool = self.voice_pools.get(inst.key)
+            if pool is not None:
+                pool.set_paused(not enabled)  # satellites follow the bypass
         elif enabled:
             inst.node = server.add_synth(
                 inst.module.synthdef,
@@ -453,6 +475,14 @@ class Rack:
                 ordered.append(i)
         seq = iter(ordered)
         self.instances = [i if i.service else next(seq) for i in self.instances]
+        self._reposition_pools()
+
+    def _reposition_pools(self) -> None:
+        """Satellite voices aren't Instances, so a reorder leaves them behind —
+        re-seat each one just before its target or it writes its bus after the
+        effect that reads it."""
+        for pool in list(self.voice_pools.values()):
+            pool.reposition()
 
     def audio_rewire(self, src_key: str, dst_key: str) -> None:
         """Point src's audio out at dst's input bus, live, and reorder the
@@ -463,6 +493,7 @@ class Rack:
         if src.node is None:
             return
         src.node.set(out=bus)
+        self._mirror_pool(src.key, {"out": bus})  # satellites follow the rewire
         try:
             if dst_key == "master":
                 src.node.move(self.engine.root_group, AddAction.ADD_TO_TAIL)
@@ -489,6 +520,7 @@ class Rack:
         src.settings["out"] = bus
         if src.node is not None:
             src.node.set(out=bus)
+        self._mirror_pool(src.key, {"out": bus})  # park satellites too
 
     def audio_wires(self) -> list[dict]:
         """Derive current audio wiring from settings: map each effect's

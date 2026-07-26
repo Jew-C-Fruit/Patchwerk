@@ -241,6 +241,11 @@ def write_resume(app) -> None:
             "mod_wires": [dict(w) for w in getattr(app, "mod_wires", [])],
             "voice_targets": {vid: getattr(v, "target_key", None)
                               for vid, v in app.voices.items()},
+            # item 10: a poly voice also needs its SIZE back, or it restores
+            # as an 8-voice default whatever you set it to
+            "poly_sizes": {vid: getattr(v, "voices", 1)
+                           for vid, v in app.voices.items()
+                           if getattr(v, "policy", "") == "poly"},
             "drums_target": (app.drums.target
                              if getattr(app, "drums", None) else None),
             # item 32: fresh boots default STOPPED, so a ⟳ restart has to
@@ -312,12 +317,18 @@ def apply_resume(app) -> bool:
             app.mod_wire("add", w.get("from"), w.get("to"))
         except Exception:  # noqa: BLE001
             pass
+    poly_sizes = r.get("poly_sizes") or {}
     for vid, tgt in (r.get("voice_targets") or {}).items():
         if not tgt:
             continue
         if vid != "voice" and vid not in app.voices:
             try:
-                app.spawn_voice()
+                # the id's TYPE is the policy — a saved "poly.2" must come
+                # back as a poly voice, not as another mono one
+                if vid.split(".")[0] == "poly":
+                    app.spawn_poly(int(poly_sizes.get(vid, 8)))
+                else:
+                    app.spawn_voice()
             except Exception:  # noqa: BLE001
                 pass
         try:

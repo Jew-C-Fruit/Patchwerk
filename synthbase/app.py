@@ -33,6 +33,7 @@ from .transport import TapTempo, Transport, _click
 from .audio_devices import list_audio_devices
 from .engine import Engine
 from .master import MasterSection
+from .allocation import MAX_POLY_VOICES, Allocation, MonoLatest, Poly
 from .midi import MidiRouter, MonoVoice
 from .midi import list_inputs as _list_midi_inputs
 from .module import load_all_modules
@@ -281,8 +282,14 @@ class SynthApp:
         self.reloader: Reloader | None = None
         # v5: multiple mono voices, id -> MonoVoice. "voice" is the primary;
         # spawned ones are "voice.2", "voice.3", ... (self.voice = primary).
-        self.voices: dict[str, MonoVoice] = {}
+        # item 10: POLY voices ("poly", "poly.2", ...) live in the same dict.
+        # Both are Allocations with one note-sink interface, so every global
+        # fan-out below (sustain, transpose, bend, panic, ctl wiring, state)
+        # treats them alike; the POLICY is read off the id's type, per the
+        # instance-id doctrine — type_of("poly.2") == "poly".
+        self.voices: dict[str, Allocation] = {}
         self._voice_targets: dict[str, str | None] = {"voice": None}  # id -> override
+        self._poly_sizes: dict[str, int] = {}   # poly id -> voice count
         self.arp: Arpeggiator | None = None
         self._arp_settings: dict = {}  # persists across patch switches
         self.transport = Transport()
@@ -350,7 +357,7 @@ class SynthApp:
 
     # primary-voice accessor (lots of code — and tests — talk to "the voice")
     @property
-    def voice(self) -> MonoVoice | None:
+    def voice(self) -> Allocation | None:
         return self.voices.get("voice")
 
     @voice.setter
@@ -435,17 +442,31 @@ class SynthApp:
         # re-silence the drones (item 32)
         self._sync_drone_run_state()
 
+    def _new_allocation(self, vid: str, target: str) -> Allocation:
+        """Build the allocation a voice id calls for. The id's TYPE is the
+        policy: "voice[.n]" -> mono-latest, "poly[.n]" -> poly."""
+        if type_of(vid) == "poly":
+            v = Poly(self.rack, target, voices=self._poly_sizes.get(vid, 8))
+        else:
+            v = MonoLatest(self.rack, target)
+        v.transpose = self._transpose
+        v.on_voiced = self._emit_voiced
+        return v
+
     def _make_voices(self, patch: dict) -> None:
-        """(Re)create every mono voice against the fresh rack, keeping ids
-        and stored target overrides where the target module still exists."""
+        """(Re)create every voice against the fresh rack, keeping ids and
+        stored target overrides where the target module still exists."""
         bindings = patch.get("bindings", {})
         if "voice" not in self._voice_targets:
             self._voice_targets["voice"] = None
         for v in self.voices.values():
             # a rebuild silences the old rack — close each old voice's open
-            # "voiced" segment so note rolls don't pin a stuck bar
-            if getattr(v, "_sounding", None) is not None:
-                self._emit_voiced(v._sounding, False)
+            # "voiced" segments so note rolls don't pin a stuck bar. all_off()
+            # is the policy's own closure path, so a poly closes all N.
+            try:
+                v.all_off()
+            except Exception:  # noqa: BLE001 — old rack is already gone
+                pass
         self.voices = {}
         guess = self._guess_voice_target()
         for vid, override in self._voice_targets.items():
@@ -464,10 +485,7 @@ class SynthApp:
             target = target or guess
             if not target:
                 continue
-            v = MonoVoice(self.rack, target)
-            v.transpose = self._transpose
-            v.on_voiced = self._emit_voiced
-            self.voices[vid] = v
+            self.voices[vid] = self._new_allocation(vid, target)
 
     def _reapply_graph_wires(self) -> None:
         """After ANY rebuild the rack comes up linear; re-impose the user's
@@ -844,10 +862,7 @@ class SynthApp:
                     if inst.module.kind == "source" and "gate" in inst.settings \
                             and "freq" in inst.settings:
                         for vid in missing:
-                            v = MonoVoice(self.rack, inst.key)
-                            v.transpose = self._transpose
-                            v.on_voiced = self._emit_voiced
-                            self.voices[vid] = v
+                            self.voices[vid] = self._new_allocation(vid, inst.key)
                             self._voice_targets[vid] = inst.key
 
             elif action == "remove":
@@ -1073,33 +1088,54 @@ class SynthApp:
             if v is None:
                 if voice != "voice" and voice not in self._voice_targets:
                     raise RuntimeError(f"no voice {voice!r} to retarget")
-                v = MonoVoice(self.rack, inst.key)   # revive the dead voice
-                v.transpose = self._transpose
-                v.on_voiced = self._emit_voiced
+                v = self._new_allocation(voice, inst.key)  # revive the dead voice
                 self.voices[voice] = v
             else:
                 v.all_off()  # silence the old target before switching
                 v.target_key = inst.key
             self._voice_targets[voice] = inst.key
 
-    # -- multiple mono voices ----------------------------------------------------
+    # -- multiple voices: mono and poly ------------------------------------------
+
+    def _spawn_allocation(self, kind: str, size: int | None = None) -> str:
+        if not self.rack:
+            raise RuntimeError("no rack running")
+        target = self._guess_voice_target()
+        if not target:
+            raise ValueError("no note-playable source to aim a voice at")
+        vid = alloc_id(kind, self.voices.keys() | self._voice_targets.keys())
+        if size is not None:
+            self._poly_sizes[vid] = max(1, min(int(size), MAX_POLY_VOICES))
+        self.voices[vid] = self._new_allocation(vid, target)
+        self._voice_targets[vid] = None
+        return vid
 
     def spawn_voice(self) -> str:
         """Add another mono voice ("voice.2", ...). It arrives unwired —
-        patch keys/arp/deck into it — aimed at the first playable source."""
+        patch keys/arp/deck into it — aimed at the first playable source.
+
+        Two mono voices on the SAME target used to stomp each other (both
+        set freq/gate on the one node, so either one's note-off cut the
+        other's held note). Each now leases its own slot from the target's
+        voice pool, so they sound as genuinely distinct voices whether or
+        not you give them separate sources."""
         with self._lock:
-            if not self.rack:
-                raise RuntimeError("no rack running")
-            target = self._guess_voice_target()
-            if not target:
-                raise ValueError("no note-playable source to aim a voice at")
-            vid = alloc_id("voice", self.voices.keys() | self._voice_targets.keys())
-            v = MonoVoice(self.rack, target)
-            v.transpose = self._transpose
-            v.on_voiced = self._emit_voiced
-            self.voices[vid] = v
-            self._voice_targets[vid] = None
-            return vid
+            return self._spawn_allocation("voice")
+
+    def spawn_poly(self, voices: int = 8) -> str:
+        """Add a POLY voice ("poly", "poly.2", ...): N notes at once on ONE
+        target source, stealing the oldest when full."""
+        with self._lock:
+            return self._spawn_allocation("poly", size=voices)
+
+    def set_poly_voices(self, vid: str, voices: int) -> None:
+        """Resize a poly voice. Notes on slots that go away are closed."""
+        with self._lock:
+            v = self.voices.get(vid)
+            if not isinstance(v, Poly):
+                raise KeyError(f"no poly voice {vid!r}")
+            v.set_voices(voices)
+            self._poly_sizes[vid] = v.voices
 
     def remove_voice(self, vid: str) -> None:
         with self._lock:
@@ -1107,10 +1143,12 @@ class SynthApp:
                 raise ValueError("the primary voice cannot be removed")
             v = self.voices.pop(vid, None)
             self._voice_targets.pop(vid, None)
+            self._poly_sizes.pop(vid, None)
             if v is None:
                 raise KeyError(f"no voice {vid!r}")
             try:
-                v.all_off()
+                v.dispose()  # close its notes AND hand the slots back, or the
+                             # satellites outlive the card and drone on
             except Exception:  # noqa: BLE001
                 pass
             self.ctl_wires = [w for w in self.ctl_wires
@@ -1918,7 +1956,11 @@ class SynthApp:
                 ),
                 "boot_note": self.engine.boot_note if self.engine else None,
                 "voice_target": self.voice.target_key if self.voice else None,
-                "voices": [{"id": vid, "target": v.target_key}
+                # one entry per ALLOCATION, mono or poly. `policy` tells the
+                # GUI which card to draw; `slots` is how many notes it can
+                # sound at once (always 1 for mono-latest).
+                "voices": [{"id": vid, "target": v.target_key,
+                            "policy": v.policy, "slots": v.voices}
                            for vid, v in self.voices.items()],
                 "tonics": [d.settings() for d in self.tonics.values()],
                 "literals": [d.settings() for d in self.literals.values()],
