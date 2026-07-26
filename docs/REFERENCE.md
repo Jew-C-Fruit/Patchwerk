@@ -35,9 +35,11 @@
 > branch, so nobody builds against something that is not there yet. Open as
 > of 2026-07-26: item 11's `dual` kind (`feat/p11-dual-mode`) in §2.2 and
 > §10.3/§10.3.1; item 10's allocation framework and poly voices
-> (`feat/p2-poly-voice`) in §4.1 and §4.3.1 — that one is additionally **not
-> live-verified**, headless-green only. Clear each marker as its branch
-> merges.
+> (`feat/p2-poly-voice`) in §4.1, §4.3.1 and §11.3, with its GUI half
+> (`feat/p11-dual-mode`) in §13.1 — item 10 is additionally **not
+> live-verified**, headless-green only; and the `transport` event plus the
+> `pulse` field on `level` (`feat/p3-reactive-taps`) in §11.2. Clear each
+> marker as its branch merges.
 >
 > Re-verified 2026-07-26 through PRs #45–#53 and the item-32 merge:
 > the T latch (#47) is now specified in §5.4; §8.1–8.2 carry item 32's
@@ -1135,10 +1137,34 @@ sender (its UI already updated); structural changes broadcast to all.
 `sustain`, `tap` (src, note, on — §2.3), `voiced` (note, on, [deck]),
 `loop_note` (beat, note, on — deck viz feed), `looper` (full deck
 settings on state change), `drum_step` (step), `gate` (id, on — every
-binary level change), `level` (ep, on — level-in applications, §5.3),
-`ping` (src — rising-edge pulse anims), `ping_bound` (id, binding —
+binary level change), `level` (ep, on, [pulse] — level-in applications,
+§5.3), `ping` (src — rising-edge pulse anims), `ping_bound` (id, binding —
 button pairing landed), `tonic_out` (id, root name), `keyshift` (id,
 active).
+
+> ⚠ **PENDING (`feat/p3-reactive-taps`, GUI half on `feat/p11-dual-mode`)
+> — one new kind and one new field.**
+>
+> **`transport`** — the transport's SETTINGS changed; the settings ride
+> along, mirroring `looper` exactly, so a client updates without a full
+> state round-trip. It exists because a logic wire into
+> `transport:run|click|accent`, or an edge on `transport:tap`, moves
+> transport state with nothing else to announce it — tap tempo could take
+> the BPM to 232 while the GUI still displayed the old value.
+>
+> **`pulse` on `level`** — marks a tap as MOMENTARY: a trig-in firing, with
+> no level to hold. It is `true` on pulse taps and **ABSENT (not `false`)
+> on steady ones**, so a steady event stays byte-identical to what existing
+> clients already parse.
+>
+> **Receivers must dispatch on the flag, never on the endpoint name.** This
+> is the load-bearing part, not a stylistic preference: a receiver that
+> keeps its own list of which endpoints flash is a list that rots the first
+> time a trig-in is added, and something drawn from a stale list is exactly
+> the silently-wrong indicator the reactive-indicator doctrine (§5.3)
+> exists to prevent. The flag is carried on the EVENT so no receiver has to
+> know the endpoint vocabulary. If you find yourself writing
+> `if (ep === "transport:tap" || ep === …)`, that is the rot returning.
 
 ### 11.3 The `state` snapshot (`app.state()`)
 
@@ -1156,6 +1182,15 @@ verbatim — §6.1), `drums_target`, `arp`, `transport`,
 `transport_cards`, `drone` (legacy shape), `drums`, `looper`, `lfos`,
 `thresholds`, `logics`, `relays`, `presets`, `available` (palette:
 key/name/kind/family, sources first), `module_errors`.
+
+> ⚠ **PENDING (`feat/p2-poly-voice`) — `voices[]` gains two fields.** Each
+> entry becomes `{id, target, policy, slots}`: there is ONE entry per
+> ALLOCATION, mono or poly alike. `policy` is the allocation policy
+> (`mono-latest`, `poly`, and `hold` once item 29 lands) and tells the GUI
+> which card to draw; `slots` is how many notes that allocation can sound at
+> once, and is always 1 for `mono-latest`. **The card reads the policy off
+> this field and never guesses it from the id** — which is what lets item
+> 29's `hold` policy arrive as a label and nothing else. See §4.3.1.
 
 ---
 
@@ -1232,6 +1267,40 @@ changes via the `level`/`gate` events, not only to clicks (§5.3).
 Headless GUI checks: `tests/gui_check8.py` (current; earlier
 `gui_check*.py` are kept snapshots) and `tests/check_blocks.py` drive
 the page with Playwright against mock state — no server needed.
+
+### 13.1 The allocation cards (Mono Voice / Poly Voice) — PENDING
+
+> Item 10's GUI half, on the local-only branch **`feat/p11-dual-mode`**
+> (unmerged). The engine half is §4.3.1 on `feat/p2-poly-voice`, and is
+> **not live-verified**.
+
+**ONE card renders both policies** (`buildVoiceCard`). The policy is read
+off the server's `state.voices[]` entry (§11.3) and **never guessed from
+the id** — which is the whole reason item 29's `hold` policy will need a
+label here and nothing else. Ports are identical either way: notes in,
+drive out. Both carry a static `±2 st` bend chip and a `target` chip that
+cycles through the playable sources.
+
+A poly allocation additionally gets a **1–16 step slider** (`POLY_SIZES`,
+mirroring `MAX_POLY_VOICES` in `allocation.py`), labelled "N notes".
+Shrinking it closes whatever was sounding on the slots that go away. The
+default `voice` is permanent; every spawned allocation, mono or poly,
+removes with `remove_voice`.
+
+**There is deliberately NO "voices sounding" indicator.** One would need a
+tap from `Poly`, and nothing yet proves that tap fires — shipping an
+indicator on an unverified tap is precisely the failure the
+reactive-indicator doctrine (§5.3) exists to prevent. When it is wanted it
+rides a `{"kind": "level", "ep": "<poly id>:active"}` tap, added *with* its
+test.
+
+**Palette placement — easy to get wrong.** Mono Voice and Poly Voice sit
+under the palette section headed **`allocation`**, NOT `voices`. There is a
+separate `voices` section, and it holds the playable SOURCE MODULES. The
+two are different things: `allocation` spawns note-routing nodes on the
+control plane, `voices` spawns audio-generating modules. Spawn buttons are
+`{"type": "spawn_voice"}` and `{"type": "spawn_poly", "voices": 8}` (8 is
+the engine's own default; the card's slider retunes it).
 
 ---
 
