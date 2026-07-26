@@ -5138,6 +5138,137 @@ def main():
                 return c.textContent === 'FX' && c.classList.contains('fx');
               })()"""))
 
+        # ================================================================
+        # SECTION 29 — item 10: the Poly Voice card.
+        # ONE card type, two allocation POLICIES. The policy arrives on the
+        # state entry and must never be inferred from the id — item 29 adds
+        # a third ("hold") and this card should need only a label for it.
+        # ================================================================
+        VOICES29 = [
+            {"id": "voice", "target": "signal_gen",
+             "policy": "mono-latest", "slots": 1},
+            {"id": "poly", "target": "signal_gen",
+             "policy": "poly", "slots": 8},
+        ]
+        page.evaluate("posMem = {};")
+        page.evaluate("(s) => __msg({type: 'state', ...s})", base_state(
+            [sg], [{"from": "signal_gen", "to": "master"}],
+            available=AVAIL27, voices=VOICES29))
+        page.wait_for_timeout(500)
+
+        pal29 = page.evaluate("""(() => ({
+          order: [...document.querySelectorAll('#palette h3, #palette button')]
+                   .map(e => e.tagName + ':' + e.textContent),
+        }))()""")
+        ai = pal29["order"].index("H3:allocation")
+        check("item 10: a Poly Voice palette button sits beside Mono Voice",
+              pal29["order"][ai + 1] == "BUTTON:Mono Voice"
+              and pal29["order"][ai + 2] == "BUTTON:Poly Voice",
+              str(pal29["order"][ai:ai + 4]))
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("""() => [...document.querySelectorAll('#palette button')]
+          .find(b => b.textContent === 'Poly Voice').click()""")
+        page.wait_for_timeout(120)
+        check("…and spawns one with the engine's default of 8",
+              {"type": "spawn_poly", "voices": 8}
+              in page.evaluate("window.__sent"),
+              str(page.evaluate("window.__sent")))
+
+        card29 = page.evaluate("""(() => {
+          const title = (g) => {
+            const n = nodes.get(g);
+            return n && n.el.querySelector('.title').textContent;
+          };
+          const p = nodes.get('poly'), m = nodes.get('voice');
+          const row = [...p.el.querySelectorAll('.mini.stepped')].find(
+            x => (x.querySelector('label')||{}).title === 'voices');
+          const portsOf = (n) => n.ports.filter(q => !q.quiet)
+            .map(q => [q.dir, q.sig, q.label]);
+          return {
+            poly: title('poly'), mono: title('voice'),
+            hasStep: !!row,
+            dets: row && row.querySelectorAll('.det').length,
+            v: row && row.querySelector('.v').textContent,
+            polyPorts: portsOf(p), monoPorts: portsOf(m),
+            // the mono card must be untouched by any of this
+            monoStep: [...m.el.querySelectorAll('.mini.stepped')].length,
+            kill: !!p.el.querySelector('.kill'),
+            // DELIBERATELY no "voices sounding" indicator — see the card
+            // comment. Asserted so its absence reads as a decision, not a
+            // gap someone helpfully fills with an untested tap.
+            leds: p.el.querySelectorAll('.onoff, .gled, .led').length,
+          };
+        })()""")
+        check("a poly entry titles its card Poly Voice",
+              card29["poly"] == "Poly Voice", str(card29))
+        check("…and a mono-latest entry still says Mono Voice",
+              card29["mono"] == "Mono Voice", str(card29))
+        check("…with a stepped 1–16 control seeded from `slots`",
+              card29["hasStep"] and card29["dets"] == 16
+              and card29["v"] == "8 notes", str(card29))
+        check("…identical ports to mono: notes in, drive out",
+              card29["polyPorts"] == [["in", "ctl", "notes"],
+                                      ["out", "ctl", "drive"]]
+              and card29["polyPorts"] == card29["monoPorts"], str(card29))
+        check("…and the mono card gains no step slider from this",
+              card29["monoStep"] == 0, str(card29))
+        check("…carries a kill affordance (the default 'voice' does not)",
+              card29["kill"], str(card29))
+        check("…and deliberately has NO sounding indicator",
+              card29["leds"] == 0, str(card29))
+        # The seed must track `slots`, not the engine's default. Asserting it
+        # only at slots=8 passes against a hardcoded index of 7 — verified:
+        # that mutation went green until this second value existed.
+        page.evaluate("(s) => __msg({type: 'state', ...s})", base_state(
+            [sg], [{"from": "signal_gen", "to": "master"}],
+            available=AVAIL27,
+            voices=[VOICES29[0], {**VOICES29[1], "slots": 3}]))
+        page.wait_for_timeout(400)
+        check("…and that seed FOLLOWS slots (3, not the default 8)",
+              page.evaluate("""(() => {
+                const row = [...nodes.get('poly').el
+                  .querySelectorAll('.mini.stepped')].find(
+                    x => (x.querySelector('label')||{}).title === 'voices');
+                return row && row.querySelector('.v').textContent;
+              })()""") == "3 notes")
+        page.evaluate("(s) => __msg({type: 'state', ...s})", base_state(
+            [sg], [{"from": "signal_gen", "to": "master"}],
+            available=AVAIL27, voices=VOICES29))
+        page.wait_for_timeout(400)
+
+        # Resizing it. Stepped sliders are DRAG-driven — a bare click applies
+        # nothing by design (§15) — so this uses the same pointer idiom, and
+        # a drag of -4 detents from slot 8 must land on exactly 4 notes.
+        page.evaluate("window.__sent.length = 0")
+        sent29 = page.evaluate("""(() => {
+          const p = nodes.get('poly');
+          const row = [...p.el.querySelectorAll('.mini.stepped')].find(
+            x => (x.querySelector('label')||{}).title === 'voices');
+          const track = row.querySelector('.track');
+          const zs = parseFloat(world.style.zoom) || 1;
+          const per = (track.offsetWidth || 1) / 15;   // 16 detents → 15 gaps
+          const ev = (type, x) => track.dispatchEvent(new PointerEvent(type,
+            {pointerId: 11, clientX: x, clientY: 0, bubbles: true}));
+          ev('pointerdown', 500);
+          for (let s = 1; s <= 8; s++)
+            ev('pointermove', 500 - (4 * per * zs) * s / 8);
+          ev('pointerup', 500 - 4 * per * zs);
+          return window.__sent.filter(m => m.type === 'set_poly_voices');
+        })()""")
+        check("dragging the control sends set_poly_voices for THIS id",
+              bool(sent29) and all(m["id"] == "poly" for m in sent29)
+              and all(1 <= m["voices"] <= 16 for m in sent29), str(sent29))
+        check("…and a 4-detent drag down from 8 lands on exactly 4 notes",
+              bool(sent29) and sent29[-1]["voices"] == 4, str(sent29))
+
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("() => nodes.get('poly').el.querySelector('.kill').click()")
+        page.wait_for_timeout(120)
+        check("…and the kill sends remove_voice, same as a spawned mono",
+              {"type": "remove_voice", "id": "poly"}
+              in page.evaluate("window.__sent"),
+              str(page.evaluate("window.__sent")))
+
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()
 

@@ -4771,9 +4771,16 @@ function playableSources() {
   return (state.chain || []).filter(c => genKind(c) &&
     c.params && c.params.freq && c.params.gate).map(c => c.key);
 }
+// 1..MAX_POLY_VOICES, mirroring synthbase/allocation.py's cap
+const POLY_SIZES = Array.from({length: 16}, (_, i) => i + 1);
 function buildVoiceCard(v) {
   const gid = v.id;
   const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
+  // item 10: ONE card, two allocation POLICIES. The policy is read off the
+  // server's state.voices[] entry, never guessed from the id — item 29's
+  // "hold" policy then needs a label here and nothing else. Ports are
+  // identical either way: notes in, drive out.
+  const poly = v.policy === "poly";
   const rows = [
     rowChip({gid}, "bend", {text: "±2 st", static: true}),
     rowChip({gid}, "target", {
@@ -4787,8 +4794,27 @@ function buildVoiceCard(v) {
       },
     }),
   ];
-  return addCard({gid, name: "Mono Voice" + suffix, short: "Voice" + suffix,
+  if (poly)
+    // how many notes it holds at once; the engine steals the OLDEST when
+    // full, so shrinking this closes whatever was sounding on the slots
+    // that go away
+    rows.push(rowStepSlider({gid}, "voices", {
+      values: POLY_SIZES,
+      index: Math.max(0, Math.min(POLY_SIZES.length - 1, (v.slots | 0) - 1)),
+      text: (n) => n + (n === 1 ? " note" : " notes"),
+      onPick: (n) => send({type: "set_poly_voices", id: gid, voices: n}),
+    }));
+  // DELIBERATELY NO "voices sounding" indicator. One would need a tap from
+  // Poly, and nothing yet proves that tap fires — shipping an indicator on
+  // an unverified tap is the exact failure the reactive-taps work spent the
+  // day closing. When it is wanted it rides a
+  // {"kind":"level","ep":"<poly id>:active"} tap, added with its test.
+  return addCard({gid,
+                  name: (poly ? "Poly Voice" : "Mono Voice") + suffix,
+                  short: (poly ? "Poly" : "Voice") + suffix,
                   sub: "", fam: "ctl", rows,
+                  // the default mono "voice" is permanent; every spawned
+                  // allocation, mono or poly, removes with remove_voice
                   kill: gid === "voice" ? null
                     : () => send({type: "remove_voice", id: gid}),
                   ports: [["in", "ctl", "notes"], ["out", "ctl", "drive"]]});
@@ -6457,6 +6483,9 @@ function renderPalette() {
   };
   h3("allocation");
   btn("Mono Voice", FAMILY.ctl, () => send({type: "spawn_voice"}));
+  // item 10: same family, different policy — N notes at once on ONE target
+  // source. 8 is the engine's own default; the card's step slider retunes it.
+  btn("Poly Voice", FAMILY.ctl, () => send({type: "spawn_poly", voices: 8}));
   h3("control");
   btn("LFO ∿", FAMILY.service, () => send({type: "spawn_lfo"}));
   btn("Key Shifter", FAMILY.ctl, () => send({type: "spawn_keyshift"}));
