@@ -10,8 +10,13 @@ python3 packaging/build.py all
 ```
 
 Nothing in `synthbase/` is touched. The only file outside `packaging/` that
-this branch changes is `.gitignore` (three lines: `build/`,
+this branch changes is `.gitignore` (two lines: `build/` and
 `packaging/.cache/`).
+
+**Base: `main` @ `1b40248`.** This branch carries only its own two commits —
+it does not depend on items 10, 29, reactive-taps or the Phase 1 rig work,
+none of which are on `main`. See "Dependencies for the merge captain" at the
+end.
 
 ---
 
@@ -390,3 +395,49 @@ parallel session's live server.) So:
   (`ppid == 1`), i.e. the leftovers of a Patchwerk that crashed;
 * **shutdown** kills only servers that appeared **after we started**;
   anything pre-existing is somebody else's and stays up.
+
+---
+
+## Dependencies for the merge captain
+
+**Base: `main` @ `1b40248`.** This branch was originally cut when `main` was
+at `009600d`; that was rewound, so a rebase carried seven commits belonging to
+items 10, 29 and reactive-taps as if they were mine. Rebased onto current
+`main` with `--onto`; it applied without conflict, and the branch is now
+honestly two commits touching `packaging/` plus two lines of `.gitignore`.
+
+**It needs nothing unmerged.** Verified against `1b40248`:
+
+| what the launcher uses | on `main`? |
+| --- | --- |
+| `synthbase.audio_devices.list_audio_devices` (naming devices in a remedy) | yes |
+| `python -m synthbase gui <patch> --port N --no-browser` | yes |
+| `synthbase/ modules/ patches/ gui/ presets/ docs/` (payload) | yes |
+
+`packaging/payload/boot_core.py` is **stdlib-only** and imports nothing from
+the app. `launcher.py` has exactly one app import, the one in the table, and
+it is wrapped so a failure degrades to generic wording.
+
+**Explicitly NOT dependencies, despite being discussed in this file:**
+
+* **Item 37 / `tests/rig.py`** — `boot_core.py` is a LIFT of its proven parts
+  (discovery, two-signal readiness, exact-name process control, bounded boot),
+  not an import; a shipped app must not depend on `tests/`. The convergence
+  debt runs the other way: when item 37 lands, `rig.py` should import from
+  `boot_core` and delete its copies.
+* **Item 38 / `synthbase/audio_session.py`** — deliberately not imported.
+  Device selection stays theirs.
+
+**One thing the captain should know, because it is cross-branch.** On `main`,
+`engine.py`'s last-resort fallback is `input_bus_channel_count=0,
+input_device=None` — `-i 0` with no `-H`, the exact variant item 38 measured
+as still failing (10.5 s on this Mac). So a packaged Patchwerk built from
+`main` alone can fail to boot audio on a machine whose default device will not
+start, and the installer surfaces that as a remedy page rather than fixing it.
+**Sequencing item 38 before or with this branch removes that class of
+failure**; this branch is correct either way and needs no change when it
+lands, beyond rebuilding the DMG.
+
+Packaging is otherwise **agnostic to what else merges**: `build.py` copies
+whatever `synthbase/`, `modules/` and `gui/` are present, so items 10, 29,
+reactive-taps and dual-mode need no packaging changes to ship.
