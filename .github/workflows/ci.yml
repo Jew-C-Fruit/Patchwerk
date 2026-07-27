@@ -53,6 +53,39 @@ jobs:
       - name: Audio session / device fallback tests
         run: python tests/test_audio_session.py
 
+      # pure Python (no server, no numpy) — it guards the power-sine
+      # coefficient law against a silent refactor. It existed and passed
+      # for its whole life without any job running it.
+      - name: Power-sine coefficient law
+        run: python tests/test_power_sine.py
+
+      # the REACTIVE-INDICATOR net: every binary endpoint the gate settle
+      # pass drives must emit its own tap. Without this, all four
+      # _emit_level calls could be deleted and every suite above stayed
+      # green — the GUI checks never import synthbase. This is Phase 0 of
+      # continuity/ai-control-build-plan.md, which names the file
+      # tests/test_events.py; it landed here first, as test_reactive.py.
+      - name: Reactive-indicator tests
+        run: python tests/test_reactive.py
+
+      # items 10 and 29 — the allocation framework (mono/poly/hold policies,
+      # slot leasing, stealing) and the drone-as-Hold card. Added by the BATCH
+      # MERGE, not by either originating branch: both were written against a
+      # base where nothing required a CI entry, and the rule requiring one
+      # arrives in THIS commit. Neither branch was wrong alone. Note
+      # test_allocation.py pins all three leak fixes, so it must be referenced
+      # rather than dropped.
+      - name: Allocation framework tests
+        run: python tests/test_allocation.py
+
+      - name: Drone allocation tests
+        run: python tests/test_drone_alloc.py
+
+      # item 37 Phase 1. CI-safe by its own docstring — no rig, no scsynth,
+      # no MIDI, no net — so it gets a job rather than an exemption.
+      - name: Rig driver + transcript tests
+        run: python tests/test_rig.py
+
   gui-checks:
     name: GUI checks (headless Playwright)
     runs-on: ubuntu-latest
