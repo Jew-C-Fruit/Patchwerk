@@ -46,6 +46,13 @@ WHAT THIS ASSERTS THAT NOTHING IN THE REPO DID BEFORE
    only readings where those differ count as evidence. A matrix that is green
    but uninformative FAILS here — see `NO EVIDENCE` in the report.
 
+7. **One proof per DRIVER.** Where two events legitimately drive the same
+   surface, each must move it ALONE, asserted in its own pass with the other
+   withheld. A surface whose second driver masks its first one going dead is
+   bug C's shape exactly; redundancy is only redundancy while both paths
+   still work. See DRIVERS below for the measurement that forced this and
+   for the repair that was rejected.
+
 PENDING ROWS ARE ASSERTED, NOT SKIPPED
 ======================================
 
@@ -140,20 +147,64 @@ def _port_row(gid, ep):
             f" return p && p.rowEl || null; }})()")
 
 
+#: Which event kinds a surface is expected to follow. DEFAULT is the level
+#: tap alone; a row lists more only when the contract genuinely gives the
+#: surface a second driver.
+#:
+#: WHY THIS EXISTS. `{"kind":"transport"}` (reactive-taps handoff 1.2)
+#: refreshes the same surfaces the `transport:*` level taps drive, and the
+#: engine emits it 0.0-0.1 ms BEFORE the tap — same settle pass, same tick
+#: (measured: 8.5346 vs 8.5347 on the falling edge). So a probe straddling
+#: only the tap reads a surface the transport handler has already moved,
+#: every time, on both edges: ten rows reporting "none informative". The
+#: guard was RIGHT to refuse them.
+#:
+#: The suggested repair was to open the probe window before BOTH events.
+#: That was measured and REJECTED. It turns all ten green — and it still
+#: turns them green with the entire `transport:*` branch of the level
+#: handler DELETED from blocks.html, because the transport handler alone
+#: moves all five surfaces. A row named "follows the rising edge" would be
+#: asserting a causal fact it no longer tests: exactly the green-but-
+#: worthless reading the coincidence rule exists to refuse.
+#:
+#: So two legitimate drivers get two independent proofs. Each is replayed
+#: with the OTHER driver's events withheld, which RESTORES attribution
+#: rather than abandoning it. This is not a workaround for the collision —
+#: it is the same bug class the suite was built for. A surface whose second
+#: driver masks its first one going dead is bug C's shape exactly;
+#: redundancy is only redundancy while both paths still work, and nothing
+#: asserted that until now.
+#:
+#: Narrowing the transport handler in blocks.html to dodge the collision was
+#: also considered and rejected: handoff 1.2 asks for that refresh, so
+#: removing it would be changing the code to fit the test.
+DRIVERS_DEFAULT = ("level",)
+
+#: For the `transport` driver, which field of the event payload each
+#: endpoint's surface must follow. One event carries all three, so exactly
+#: the field that changed yields an informative reading — attribution falls
+#: out of the payload instead of having to be inferred.
+TRANSPORT_FIELD = {"transport:run": "running", "transport:click": "click",
+                   "transport:accent": "accent"}
+
 MATRIX = [
     # ---- steady level-ins ---------------------------------------------------
     dict(ep="transport:run", mode="level", status="live",
+         drivers=("level", "transport"),
          surface="Play/Stop card",
          js="(() => { const n = nodes.get('tplay');"
             " return n ? n.el.classList.contains('playing') : null; })()"),
     dict(ep="transport:run", mode="level", status="live",
+         drivers=("level", "transport"),
          surface="top bar #play-btn",
          js="(() => { const e = document.getElementById('play-btn');"
             " return e ? e.textContent === '\\u23f9' : null; })()"),
 
     dict(ep="transport:click", mode="level", status="live",
+         drivers=("level", "transport"),
          surface="Tempo card click LED", js=_row_led("ttempo", "click")),
     dict(ep="transport:click", mode="level", status="pending",
+         drivers=("level", "transport"),
          owner="feat/p11-dual-mode — syncTopBarClick(), already written there",
          surface="top bar #click-on",
          js="(() => { const e = document.getElementById('click-on');"
@@ -163,6 +214,7 @@ MATRIX = [
     # element exists, so there is nothing to mirror. A row asserting a
     # top-bar accent control would be asserting a fiction — do not add one.
     dict(ep="transport:accent", mode="level", status="live",
+         drivers=("level", "transport"),
          surface="Tempo card accent LED", js=_row_led("ttempo", "accent")),
 
     dict(ep="drums:pwr", mode="level", status="live",
@@ -351,20 +403,32 @@ def dom_plane() -> None:
           f"{'silent' if t.header.get('silent') else 'live'} rig) ---")
 
     with sync_playwright() as pw:
-        browser, rp = R.open_replay(pw)
-        obs = _observe(rp, t)
-        _report_matrix(obs, t)
-        check("no page errors during replay", not rp.errors,
-              "; ".join(rp.errors[:3]))
-        browser.close()
+        # One pass per DRIVER, each on its own page. A driver's pass withholds
+        # the other drivers' events so a surface's movement is attributable;
+        # every withheld event is probed in its own pass, so nothing is
+        # excused. See DRIVERS for why the alternative was rejected.
+        by_driver = {}
+        for driver in sorted({d for r in MATRIX
+                              for d in r.get("drivers", DRIVERS_DEFAULT)}):
+            browser, rp = R.open_replay(pw)
+            by_driver[driver] = _observe(rp, t, driver)
+            check(f"no page errors replaying the {driver!r} driver", not rp.errors,
+                  "; ".join(rp.errors[:3]))
+            browser.close()
+        _report_matrix(by_driver, t)
 
-        # The observability check and the relay cross-plane check each want
-        # their own page: they replay segments, not the whole transcript.
-        browser, rp = R.open_replay(pw)
-        check_observable_bpm(rp, t)
-        browser.close()
+        # The relay pass is the FULL-FIDELITY one — nothing withheld, the
+        # recording exactly as recorded. It is the only pass that proves the
+        # real interleaving renders, so the unqualified page-error check
+        # belongs to it rather than to a withholding pass.
         browser, rp = R.open_replay(pw)
         check_relay_gate(rp, t)
+        check("no page errors replaying the recording UNWITHHELD",
+              not rp.errors, "; ".join(rp.errors[:3]))
+        browser.close()
+
+        browser, rp = R.open_replay(pw)
+        check_observable_bpm(rp, t)
         browser.close()
 
         dense = R.FIXTURES / "transcript_board_dense.jsonl"
@@ -429,47 +493,80 @@ def check_dense_board(rp: R.ReplayPage, t: Transcript) -> None:
     check("dense board: no card overflows its box", not over, str(over[:3]))
 
 
-def _observe(rp: R.ReplayPage, t: Transcript) -> list[R.Observation]:
-    """Walk the transcript, probing every matched surface around each tap.
+def _rows_for(driver: str) -> list[dict]:
+    return [r for r in MATRIX
+            if driver in r.get("drivers", DRIVERS_DEFAULT)]
+
+
+def _observe(rp: R.ReplayPage, t: Transcript, driver: str) -> list[R.Observation]:
+    """Walk the transcript probing ONE driver, with the others withheld.
 
     The probe pair straddles the injection — before and after, with nothing
-    else fed in between. That window is the only place a tap's effect is
-    attributable to the tap: this scenario pokes a full `state` broadcast at
-    the end of each phase, and a probe taken after one reads a board that
+    else fed in between. That window is the only place an event's effect is
+    attributable to that event: this scenario pokes a full `state` broadcast
+    at the end of each phase, and a probe taken after one reads a board that
     `onState` has just re-synced from scratch.
+
+    A straddling window is necessary but not sufficient once a surface has
+    two drivers 0.1 ms apart, which is why `driver` exists — see DRIVERS.
+    Every event withheld here is probed in the OTHER pass, so no handler
+    escapes assertion; that reciprocity is the whole licence for withholding.
     """
+    rows = _rows_for(driver)
     by_ep: dict[str, list[dict]] = {}
-    for row in MATRIX:
+    for row in rows:
         by_ep.setdefault(row["ep"], []).append(row)
     obs: list[R.Observation] = []
     pending_pre: dict = {}
 
+    probed = driver
+    # Withhold the OTHER drivers of these same surfaces, and nothing else.
+    # `owned` is the level-tap side: only the endpoints this driver also
+    # drives are withheld, so every unrelated tap stays in the stream and the
+    # board is still built by real traffic rather than a thinned fiction.
+    colliding = {"transport"} if driver == "level" else set()
+    owned = {r["ep"] for r in rows} if driver == "transport" else set()
+
+    def skip(ev):
+        if ev.get("kind") in colliding:
+            return True
+        return ev.get("kind") == "level" and str(ev.get("ep")) in owned
+
     def on_event(page, ev, i, mark, when):
-        if ev.get("kind") != "level":
+        if ev.get("kind") != probed:
             return
-        rows = by_ep.get(str(ev.get("ep")))
-        if not rows:
-            return
+        if probed == "level":
+            hit = by_ep.get(str(ev.get("ep")))
+            if not hit:
+                return
+            want = {r["surface"]: bool(ev.get("on")) for r in hit}
+        else:
+            # One transport event carries every field; each row reads its own.
+            hit = [r for r in rows if TRANSPORT_FIELD.get(r["ep"]) in ev]
+            if not hit:
+                return
+            want = {r["surface"]: bool(ev.get(TRANSPORT_FIELD[r["ep"]]))
+                    for r in hit}
         if when == "before":
             pending_pre.clear()
-            pending_pre.update(page.probes({r["surface"]: r["js"] for r in rows}))
+            pending_pre.update(page.probes({r["surface"]: r["js"] for r in hit}))
             return
         page.settle(80)
-        post = page.probes({r["surface"]: r["js"] for r in rows})
-        for r in rows:
+        post = page.probes({r["surface"]: r["js"] for r in hit})
+        for r in hit:
             obs.append(R.Observation(
-                ep=r["ep"], surface=r["surface"],
-                expect=bool(ev.get("on")),
+                ep=r["ep"], surface=r["surface"], expect=want[r["surface"]],
                 pre=pending_pre.get(r["surface"]), post=post.get(r["surface"]),
                 mode=r["mode"], pulse=bool(ev.get("pulse")), index=i, mark=mark))
 
-    w = R.walk(rp, t, on_event=on_event)
-    print(f"      fed {w.fed} messages across {len(w.marks)} marks "
+    w = R.walk(rp, t, on_event=on_event, skip_event=skip)
+    print(f"      driver {driver!r}: fed {w.fed} messages "
+          f"({w.withheld} withheld) across {len(w.marks)} marks "
           f"in {w.seconds}s; {len(obs)} surface readings")
     return obs
 
 
-def _report_matrix(obs: list[R.Observation], t: Transcript) -> None:
+def _report_matrix(by_driver: dict, t: Transcript) -> None:
     """One check per matrix row, plus the coverage floor.
 
     `seen_eps` comes from the TRANSCRIPT, not from `obs`. Reading it off the
@@ -480,21 +577,29 @@ def _report_matrix(obs: list[R.Observation], t: Transcript) -> None:
     """
     seen_eps = {str(e.get("ep")) for e in t.events("level")}
     for row in MATRIX:
-        mine = [o for o in obs if o.ep == row["ep"] and o.surface == row["surface"]]
-        tag = f"{row['ep']} -> {row['surface']}"
-        if not mine:
-            check(f"{tag}: the transcript drives it", False,
-                  "no level event for this endpoint in the recording")
-            continue
-        if all(o.missing_surface for o in mine):
-            check(f"{tag}: the surface exists on the replayed board", False,
-                  "probe returned null every time — card absent or selector stale")
-            continue
+        for driver in row.get("drivers", DRIVERS_DEFAULT):
+            obs = by_driver.get(driver, [])
+            mine = [o for o in obs
+                    if o.ep == row["ep"] and o.surface == row["surface"]]
+            # Name the driver only where there is more than one, so the 30-odd
+            # single-driver rows read exactly as they did before.
+            multi = len(row.get("drivers", DRIVERS_DEFAULT)) > 1
+            tag = (f"{row['ep']} -> {row['surface']}"
+                   + (f" [via {driver}]" if multi else ""))
+            if not mine:
+                check(f"{tag}: the transcript drives it", False,
+                      f"no {driver} event for this endpoint in the recording")
+                continue
+            if all(o.missing_surface for o in mine):
+                check(f"{tag}: the surface exists on the replayed board", False,
+                      "probe returned null every time — card absent or "
+                      "selector stale")
+                continue
 
-        if row["mode"] == "level":
-            _report_steady(row, mine, tag)
-        else:
-            _report_pulse(row, mine, tag)
+            if row["mode"] == "level":
+                _report_steady(row, mine, tag)
+            else:
+                _report_pulse(row, mine, tag)
 
     # An endpoint the engine emits with no row and no by-design exemption is
     # an uncovered indicator — exactly what the matrix exists to prevent.

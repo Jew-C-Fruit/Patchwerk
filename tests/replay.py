@@ -327,12 +327,13 @@ class Walk:
     observations: list = field(default_factory=list)
     marks: list = field(default_factory=list)
     fed: int = 0
+    withheld: int = 0
     seconds: float = 0.0
 
 
 def walk(rp: ReplayPage, t: Transcript, *, on_event=None,
          stop_mark: str | None = None, start_mark: str | None = None,
-         skip_types: tuple = SKIP_TYPES) -> Walk:
+         skip_types: tuple = SKIP_TYPES, skip_event=None) -> Walk:
     """Feed every recorded server message into the page, in file order.
 
     `on_event(rp, event, index, mark)` fires AFTER an inner
@@ -345,6 +346,13 @@ def walk(rp: ReplayPage, t: Transcript, *, on_event=None,
     hypothetical — the `indicators` scenario pokes at the end of both
     steady phases, and the top-bar click gap is invisible if you read
     there.
+
+    `skip_event` WITHHOLDS inner events. It exists for attribution, and it
+    is only honest under one rule: **every withheld event must get its own
+    pass in which its own effect is asserted.** Withholding is how you find
+    out which of two adjacent causes moved a surface; it becomes a way of
+    excusing a broken handler the moment some event is withheld everywhere.
+    `check_replay`'s driver passes hold that line — see DRIVERS there.
     """
     w = Walk()
     t0 = time.monotonic()
@@ -365,6 +373,10 @@ def walk(rp: ReplayPage, t: Transcript, *, on_event=None,
             continue
         m = r["msg"]
         if m.get("type") in skip_types:
+            continue
+        if (skip_event is not None and m.get("type") == "midi"
+                and skip_event(m.get("event") or {})):
+            w.withheld += 1
             continue
         pre_hook = on_event is not None and m.get("type") == "midi"
         ev = (m.get("event") or {}) if pre_hook else None
