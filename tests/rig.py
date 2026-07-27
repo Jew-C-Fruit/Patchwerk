@@ -130,6 +130,15 @@ SPAWNABLE = {
     "spawn_button": ("buttons", "remove_button"),
     "spawn_clock": ("clocks", "remove_clock"),
     "spawn_voice": ("voices", "remove_voice"),
+    # item 10. All allocation policies — mono, poly, hold — are ONE registry
+    # behind one state section and one remove message, so they share
+    # "voices"/remove_voice with spawn_voice rather than getting sections of
+    # their own. Added by the BATCH MERGE: the rig was written against a base
+    # with only mono voices, and test_rig's drift guard is BIDIRECTIONAL — an
+    # entry here before server.py dispatches it fails just as loudly as a
+    # dispatch with no entry. So each line lands in the merge that brings its
+    # own handler, not a package earlier.
+    "spawn_poly": ("voices", "remove_voice"),
     "spawn_tonic": ("tonics", "remove_tonic"),
     "spawn_literal": ("literals", "remove_literal"),
     "spawn_keyshift": ("keyshifts", "remove_keyshift"),

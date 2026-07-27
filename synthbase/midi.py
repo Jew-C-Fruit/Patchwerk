@@ -22,6 +22,7 @@ import time
 
 import mido
 
+from .allocation import MonoLatest
 from .rack import Rack
 
 A4_MIDI, A4_FREQ = 69, 440.0
@@ -50,78 +51,12 @@ def list_inputs(force: bool = False) -> list[str]:
     return names
 
 
-class MonoVoice:
-    """Last-note-priority mono voice with pitch bend and sustain."""
-
-    def __init__(self, rack: Rack, target_key: str) -> None:
-        self.rack = rack
-        self.target_key = target_key
-        self.on_voiced = None  # viz tap: (note, on) for what actually sounds
-        self.transpose = 0     # semitones, applied to every note
-        self._held: list[int] = []  # note stack, most recent last
-        self._sounding: int | None = None  # note currently voiced (incl. sustained)
-        self.bend = 0.0  # semitones
-        self.sustain = False
-
-    def _freq(self, note: int) -> float:
-        return midi_to_freq(note + self.transpose) * 2 ** (self.bend / 12)
-
-    def _emit_voiced(self, note: int, on: bool) -> None:
-        if self.on_voiced:
-            try:
-                self.on_voiced(note, on)
-            except Exception:  # noqa: BLE001
-                pass
-
-    def note_on(self, note: int, velocity: int) -> None:
-        if note in self._held:
-            self._held.remove(note)
-        self._held.append(note)
-        prev = self._sounding
-        self._sounding = note
-        self.rack.set_params(self.target_key, freq=self._freq(note), gate=1)
-        # the mono voice sounds ONE note: close the old segment, open the new
-        if prev is not None and prev != note:
-            self._emit_voiced(prev, False)
-        if prev != note:
-            self._emit_voiced(note, True)
-
-    def note_off(self, note: int) -> None:
-        if note in self._held:
-            self._held.remove(note)
-        if note != self._sounding:
-            return  # released a background-held key; sound unchanged
-        if self._held:
-            prev = self._sounding
-            self._sounding = self._held[-1]
-            self.rack.set_params(self.target_key, freq=self._freq(self._sounding))
-            self._emit_voiced(prev, False)
-            self._emit_voiced(self._sounding, True)
-        elif self.sustain:
-            pass  # pedal holds the last note; released on set_sustain(False)
-        else:
-            self._sounding = None
-            self.rack.set_params(self.target_key, gate=0)
-            self._emit_voiced(note, False)
-
-    def set_sustain(self, on: bool) -> None:
-        self.sustain = on
-        if not on and not self._held and self._sounding is not None:
-            self._emit_voiced(self._sounding, False)
-            self._sounding = None
-            self.rack.set_params(self.target_key, gate=0)
-
-    def set_bend(self, semitones: float) -> None:
-        self.bend = semitones
-        if self._sounding is not None:
-            self.rack.set_params(self.target_key, freq=self._freq(self._sounding))
-
-    def all_off(self) -> None:
-        if self._sounding is not None:
-            self._emit_voiced(self._sounding, False)
-        self._held.clear()
-        self._sounding = None
-        self.rack.set_params(self.target_key, gate=0)
+#: The mono voice is now the ``mono-latest`` policy of the allocation
+#: framework (``synthbase/allocation.py``), which it shares with the poly
+#: voice and — from item 29 — the drone. Re-exported here because the import
+#: path ``from .midi import MonoVoice`` is what the app and patches use, and
+#: because a mono voice IS what a MIDI keyboard drives by default.
+MonoVoice = MonoLatest
 
 
 class MidiRouter:
