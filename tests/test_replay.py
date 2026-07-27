@@ -141,8 +141,91 @@ def main():
           and R.lane_of(("looper", "recording")) == "looper",
           str(sorted(R.CONCURRENT_EMITTERS)))
 
+    check_atomic_write()
+
     print(f"\n{'PASS' if not FAILURES else 'FAIL'} — {len(FAILURES)} failures")
     return 1 if FAILURES else 0
+
+
+def _collide_writer(target, tag):
+    """A module-level worker: `spawn` pickles the target by reference."""
+    from transcript import TranscriptWriter
+    with TranscriptWriter(target, scenario=tag) as tw:
+        for i in range(40):
+            tw.recv({"type": "midi", "event": {"kind": "level",
+                                               "ep": f"{tag}:{i}",
+                                               "pad": "x" * 300}})
+
+
+def check_atomic_write():
+    """A transcript appears at its final path COMPLETE, or not at all.
+
+    Two sessions independently reported `--emission` failing with
+    `Expecting value: line 1 column 1` and a check count that dropped from
+    16 to 13. Reproduced at 2 in 6 trials by pointing two writers at one
+    path: each had its own offset and its own O_TRUNC, so the file was a mix
+    of both — sometimes a torn line, sometimes a plausible file that had
+    silently lost half its records. The second is the worse one, and it is
+    the reason this is asserted rather than assumed: a short recording reads
+    as a backend regression, or worse, as a smaller passing run.
+    """
+    import multiprocessing as mp
+    import tempfile
+    from transcript import TranscriptWriter, read_transcript
+
+    d = Path(tempfile.mkdtemp(prefix="patchwerk-atomic-"))
+    target = d / "t.jsonl"
+
+    with TranscriptWriter(target, scenario="a") as tw:
+        check("while writing, the FINAL path does not exist yet",
+              not target.exists(), f"{target} appeared early")
+        check("...and the partial is at a per-process sidecar",
+              tw.sidecar_path.exists()
+              and tw.sidecar_path.name.startswith("."), str(tw.sidecar_path))
+        tw.recv({"type": "state"})
+    check("on close it is published, complete", target.exists()
+          and len(read_transcript(target)) == 2, "")
+    check("...and the sidecar is gone", not tw.sidecar_path.exists(), "")
+
+    # An abandoned recording must not overwrite what was already there.
+    before = target.read_text()
+    tw2 = TranscriptWriter(target, scenario="b")
+    tw2.recv({"type": "state"})
+    left = tw2.abandon()
+    check("an ABANDONED recording leaves the previous file intact",
+          target.read_text() == before, "the committed file was clobbered")
+    check("...and its partial is still readable, for diagnosis",
+          left is not None and left.exists(), str(left))
+
+    # Two writers, one path. NOT raced: a race would make this assertion
+    # itself probabilistic — at ~1 in 3 per trial, four trials give a ~20%
+    # chance of passing while broken, and a check that agrees with a
+    # coincidence is the exact thing this suite exists to refuse. Assert the
+    # deterministic INVARIANT that makes concurrency safe instead: two live
+    # writers never share a file, and neither publishes until it closes.
+    a = TranscriptWriter(target, scenario="A")
+    b = TranscriptWriter(target, scenario="B")
+    a.recv({"type": "state", "who": "A"})
+    b.recv({"type": "state", "who": "B"})
+    check("two concurrent writers never share a file",
+          a.sidecar_path != b.sidecar_path,
+          f"both wrote {a.sidecar_path}")
+    check("...and neither has published while both are open",
+          target.read_text() == before, "the target moved under them")
+    a.close()
+    first = read_transcript(target)
+    b.close()
+    second = read_transcript(target)
+    check("each publish lands WHOLE — last writer wins, no interleaving",
+          len(first) == 2 and len(second) == 2
+          and first.records[0].get("scenario") == "A"
+          and second.records[0].get("scenario") == "B",
+          f"{len(first)}/{len(second)} records, "
+          f"{first.records[0].get('scenario')}/"
+          f"{second.records[0].get('scenario')}")
+
+    import shutil
+    shutil.rmtree(d, ignore_errors=True)
 
 
 if __name__ == "__main__":

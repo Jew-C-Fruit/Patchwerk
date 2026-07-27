@@ -19,3 +19,6 @@ nohup.out
 .resume.json
 psine_wavs/
 continuity/
+
+# transcript sidecars — a partial recording, never a committed one
+.*.jsonl.partial-*

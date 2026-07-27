@@ -372,6 +372,36 @@ FIXTURE_SCENARIOS = [
 ]
 
 
+def _owed_checks(spec: dict, derivable: bool, rerecord: bool) -> list[str]:
+    """Exactly the checks this fixture must produce — the coverage LEDGER.
+
+    Every `continue` in the loop below used to drop the remaining checks
+    silently. A run that failed to record one scenario therefore reported
+    13 checks where a healthy run reported 16: it asserted less while still
+    looking like a run, and the shortfall was visible only to someone who
+    happened to know what 16 meant. Two sessions independently hit that
+    without being able to name it.
+
+    A check that COULD NOT BE EVALUATED is a FAILURE, not an absence. That
+    is the premise of this whole suite, and it has to hold for the suite
+    itself — so the owed set is declared up front and anything unsettled at
+    the end is reported red, by name.
+    """
+    fixture, scenario = spec["fixture"], spec["scenario"]
+    if rerecord:
+        return [] if not derivable else [f"re-record {scenario} against this tree"]
+    owed = [f"re-record {scenario} against this tree",
+            f"{fixture}: no unpaired note-ons in the recording"]
+    if derivable:
+        owed.append(f"{fixture}: the backend still emits what it emitted")
+    want = (spec.get("post_contract_levels", spec["levels"])
+            if R.engine_capabilities()["pulse"] else spec["levels"])
+    owed.append(f"{fixture}: the recording carries >= {want} level taps" if want
+                else f"{fixture}: the recording carries ZERO level taps "
+                     f"({spec.get('pre_contract_note', '')})")
+    return owed
+
+
 def emission_plane(rerecord: bool = False) -> None:
     caps = R.engine_capabilities()
     if not caps["engine"]:
@@ -458,6 +488,19 @@ def emission_plane(rerecord: bool = False) -> None:
         open_ = R.unpaired_from(fresh)
         check(f"{fixture}: no unpaired note-ons in the recording",
               not open_, str(open_[:3]))
+
+    # Settle the ledger. Nothing below this line can shorten a run silently:
+    # an owed check that never ran is reported red, with its own name, so a
+    # 13-check run cannot masquerade as a 16-check one.
+    ran = set(RAN)
+    for spec in FIXTURE_SCENARIOS:
+        derivable = have_pulse or not spec["needs_pulse"]
+        for name in _owed_checks(spec, derivable, rerecord):
+            if name not in ran:
+                check(name, False,
+                      "NOT EVALUATED — the block exited before reaching it "
+                      "(a recording that failed, or an early return). This is "
+                      "a coverage hole, not a passing check.")
 
 
 # =============================================================================

@@ -38,13 +38,18 @@ by construction.
 
 from __future__ import annotations
 
+import itertools
 import json
+import os
 import re
 import time
 from collections import Counter
 from pathlib import Path
 
 VERSION = 1
+
+#: Distinguishes concurrent writers within one process (see below).
+_SIDECAR_SEQ = itertools.count()
 
 #: Message types dropped by `normalize()` — high-rate telemetry whose
 #: content is float noise and whose ARRIVAL is a clock artefact.
@@ -63,12 +68,42 @@ _ID_RE = re.compile(r"\b([a-z][a-z_]*)\.(\d+)\b")
 # -- writing -----------------------------------------------------------------
 
 class TranscriptWriter:
-    """Append-only .jsonl writer. Offsets are monotonic from open()."""
+    """Append-only .jsonl writer. Offsets are monotonic from open().
+
+    **The final path is written ATOMICALLY**: every line goes to a
+    per-process sidecar and `close()` does one `os.replace()`. Three
+    reasons, and the third is the one that forced it.
+
+    1. A reader can never see a half-written transcript. `os.replace` is
+       atomic on POSIX, so the destination is either the previous complete
+       file or the new complete one — never a torn line.
+    2. `--rerecord` writes straight over a COMMITTED fixture. Opening that
+       path with "w" truncates it before a single byte of the replacement
+       exists, so a rig that then failed to boot left a tracked repo file
+       empty. Now a failed re-record leaves the committed fixture untouched.
+    3. Two processes writing one path used to interleave into it. Each had
+       its own file offset and its own O_TRUNC, so the result was a mix of
+       both — sometimes a torn line (`Expecting value: line 1 column 1`),
+       sometimes a plausible-looking file that had silently LOST half its
+       records. Reproduced 2 in 6 trials. With a sidecar per process the
+       loser is simply replaced by the winner, whole.
+
+    The flush-per-line is kept, and so is the property it was there for: a
+    killed rig still leaves a readable file. It just leaves it at
+    `sidecar_path` rather than at `path` — which is strictly better, since
+    a partial recording can no longer masquerade as a complete one.
+    """
 
     def __init__(self, path, **header) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._fh = self.path.open("w", encoding="utf-8")
+        # pid AND a per-writer sequence. The pid alone is not unique: two
+        # writers in ONE process would share a sidecar and re-create, inside
+        # the process, exactly the interleaving this indirection removes
+        # between them. Found by tests/test_replay.py the first time it ran.
+        self.sidecar_path = self.path.with_name(
+            f".{self.path.name}.partial-{os.getpid()}-{next(_SIDECAR_SEQ)}")
+        self._fh = self.sidecar_path.open("w", encoding="utf-8")
         self._t0 = time.monotonic()
         self.count = Counter()
         self._write("header", v=VERSION,
@@ -104,9 +139,31 @@ class TranscriptWriter:
             self.count["type:" + str(fields.get("msg", {}).get("type"))] += 1
 
     def close(self) -> None:
+        """Flush, fsync, and publish the sidecar to `path` in one step.
+
+        The fsync is not ceremony: `os.replace` orders the rename against
+        the data only if the data has actually reached the disk, and a
+        transcript that survives the rename but not its contents is the
+        failure this method exists to make impossible.
+        """
+        if self._fh is None:
+            return
+        self._fh.flush()
+        os.fsync(self._fh.fileno())
+        self._fh.close()
+        self._fh = None
+        os.replace(self.sidecar_path, self.path)
+
+    def abandon(self) -> Path | None:
+        """Give up without publishing. Returns where the partial landed.
+
+        For a caller that knows its recording is junk — the sidecar stays
+        on disk to be read, and `path` keeps whatever was there before.
+        """
         if self._fh is not None:
             self._fh.close()
             self._fh = None
+        return self.sidecar_path if self.sidecar_path.exists() else None
 
     def __enter__(self):
         return self
