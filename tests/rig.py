@@ -168,6 +168,50 @@ def find_scsynth() -> Path | None:
     return None
 
 
+def pick_python() -> str | None:
+    """The interpreter to launch a rig with. MIRRORS `run.sh`'s pick_python.
+
+    A git WORKTREE has no `.venv/` of its own — it is gitignored, so it
+    lives only in the main checkout — and agent sessions work almost
+    entirely from worktrees. Hardcoding `REPO/.venv/bin/python` therefore
+    failed exactly where the driver is used most.
+
+    The order is run.sh's, deliberately, candidate for candidate: this
+    tree's venv, an already-activated venv, the MAIN worktree's venv, then
+    whatever `python3` is on PATH. `sys.executable` is NOT used as a
+    shortcut, tempting as it is — two resolution strategies in one repo is
+    how they drift, and `test_rig.py` asserts this list still matches the
+    one in run.sh.
+
+    (run.sh gained `pick_python()` on `feat/p38-audio-session`, which is not
+    yet on main. The parity check tolerates its absence and says so.)
+    """
+    for cand in python_candidates():
+        if cand and os.access(cand, os.X_OK) and Path(cand).is_file():
+            return cand
+    return shutil.which("python3")
+
+
+def python_candidates() -> list[str]:
+    """The candidates, in order — factored out so the parity check can read
+    them without running anything."""
+    out = [str(REPO / ".venv/bin/python")]
+    venv = os.environ.get("VIRTUAL_ENV")
+    if venv:
+        out.append(str(Path(venv) / "bin/python"))
+    common = subprocess.run(
+        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        cwd=str(REPO), capture_output=True, text=True)
+    root = common.stdout.strip()
+    if root.endswith("/.git"):
+        out.append(str(Path(root[:-len("/.git")]) / ".venv/bin/python"))
+    return out
+
+
+class NoPython(RuntimeError):
+    pass
+
+
 def child_env() -> dict:
     """Environment for a spawned rig: scsynth's directory on PATH."""
     env = dict(os.environ)
@@ -248,24 +292,58 @@ def free_udp_port() -> int:
     return p
 
 
+def classify_scsynth(ready: bool, devices: bool, rc, text: str) -> str:
+    """Turn a scsynth run into a NAMED cause. Never just "it didn't work".
+
+    The audio session spent hours on `rc=-6, Setting sample rate failed` —
+    a 24 kHz default input against a 48 kHz output — because the probe
+    answered with a bool and somebody guessed "microphone permission". A
+    boolean that collapses four causes into one costs far more time than it
+    saves, so every distinguishable failure gets its own sentence here.
+    """
+    low = (text or "").lower()
+    if ready:
+        return "ready"
+    if rc is not None:
+        if "sample rate" in low:
+            return (f"scsynth exited rc={rc}: SETTING SAMPLE RATE FAILED — the "
+                    "input and output devices disagree (a 24 kHz mic against "
+                    "a 48 kHz output does it). This is NOT a permissions "
+                    "problem. Boot with --no-midi-irrelevant input off "
+                    "(`-i 0` / `--in-device`), or match the rates in Audio "
+                    "MIDI Setup.")
+        if "could not open" in low or "failed to open" in low:
+            return (f"scsynth exited rc={rc}: could not open the audio device "
+                    "— it may be held exclusively, or gone (bluetooth).")
+        if rc == -6:
+            return (f"scsynth aborted (rc={rc}) during startup — read the tail; "
+                    "an abort here is a device negotiation failure, not a crash.")
+        return f"scsynth exited rc={rc} before becoming ready"
+    if devices:
+        return ("scsynth enumerated CoreAudio devices and never started one — "
+                "the device-start stall. It did not exit and did not become "
+                "ready; audio cannot start in this session.")
+    return "scsynth produced no device list at all — check the SuperCollider install"
+
+
 def scsynth_check(timeout: float = 15.0) -> dict:
     """Can scsynth start an audio device on this machine RIGHT NOW?
 
     Spawns a bare scsynth — no supriya, no Patchwerk — on a fresh UDP port
-    and reports BOTH readiness signals separately, because they fail apart:
-    a machine where audio cannot start still enumerates devices happily.
+    and reports the readiness signals SEPARATELY, because they fail apart:
+    a machine where audio cannot start still enumerates devices happily,
+    and a machine where the devices disagree on sample rate exits instead
+    of stalling. Those are three different answers and get three different
+    `why` sentences.
 
-    Returns {"ready", "devices", "udp", "others", "seconds", "tail"}.
-    `ready=False, devices=True` is the CoreAudio device-start stall.
-
-    It kills ONLY the scsynth it spawned. It used to clear every scsynth on
-    the machine first, which meant running `doctor` shot down other
-    sessions' rigs.
+    Returns {"ready", "devices", "udp", "rc", "why", "others", "seconds",
+    "tail"}. It kills ONLY the scsynth it spawned.
     """
     sc = find_scsynth()
     if sc is None:
-        return {"ready": False, "devices": False, "udp": False, "others": 0,
-                "seconds": 0.0, "tail": "scsynth not found"}
+        return {"ready": False, "devices": False, "udp": False, "rc": None,
+                "why": "scsynth not found — is SuperCollider installed?",
+                "others": 0, "seconds": 0.0, "tail": ""}
     others = len(scsynth_alive())      # reported, never touched
     p = free_udp_port()
     t0 = time.monotonic()
@@ -274,15 +352,20 @@ def scsynth_check(timeout: float = 15.0) -> dict:
                             text=True, bufsize=1)
     lines: list[str] = []
     ready = devices = False
+    rc = None
     try:
         import selectors
         sel = selectors.DefaultSelector()
         sel.register(proc.stdout, selectors.EVENT_READ)
         while time.monotonic() - t0 < timeout and not ready:
+            if (rc := proc.poll()) is not None:
+                lines.extend(x.rstrip() for x in proc.stdout.readlines())
+                break                      # it EXITED — a different failure
             if not sel.select(0.3):
                 continue
             line = proc.stdout.readline()
             if not line:
+                rc = proc.poll()
                 break
             lines.append(line.rstrip())
             if SCSYNTH_DEVICES in line:
@@ -292,23 +375,26 @@ def scsynth_check(timeout: float = 15.0) -> dict:
         sel.close()
     finally:
         udp = udp_held(p) if ready else False
-        proc.terminate()
-        try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-    return {"ready": ready, "devices": devices, "udp": udp, "others": others,
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+    text = "\n".join(lines)
+    return {"ready": ready, "devices": devices, "udp": udp, "rc": rc,
+            "others": others, "why": classify_scsynth(ready, devices, rc, text),
             "seconds": round(time.monotonic() - t0, 1),
             "tail": "\n".join(lines[-6:])}
 
 
 def _diagnose(p: int, log: str) -> str:
-    """Why the boot failed, in the two signals that actually distinguish it.
+    """Why the boot failed, as a NAMED cause plus the signals behind it.
 
-    `Server().boot()` blocks with NO timeout on the CoreAudio stall, so
+    `Server().boot()` blocks with no timeout on the device-start stall, so
     without this every environment fault presents as an indistinguishable
     hang. The driver times out on its own and then says which signal was
-    missing.
+    missing and what that means.
     """
     chk = scsynth_check()
     out = [""]
@@ -317,19 +403,15 @@ def _diagnose(p: int, log: str) -> str:
                    "another session's, left alone")
     out.append(f"  bare scsynth: devices={'yes' if chk['devices'] else 'NO'} "
                f"ready={'yes' if chk['ready'] else 'NO'} "
-               f"udp={'yes' if chk['udp'] else 'NO'}  ({chk['seconds']}s)")
-    if chk["devices"] and not chk["ready"]:
-        out.append("  -> scsynth enumerates CoreAudio devices and never starts "
-                   "one. This is NOT a stale process and NOT a Patchwerk "
-                   "regression: audio cannot start in this session at all. "
-                   "Everything above the rack still works — boot the driver "
-                   "with silent=True (tests/silent_rig.py).")
-    elif not chk["devices"]:
-        out.append("  -> bare scsynth produced no device list either; check "
-                   "the SuperCollider install.")
-    else:
-        out.append("  -> bare scsynth IS healthy, so the fault is above it: "
+               f"udp={'yes' if chk['udp'] else 'NO'} "
+               f"rc={chk['rc']}  ({chk['seconds']}s)")
+    out.append(f"  -> {chk['why']}")
+    if chk["ready"]:
+        out.append(f"     scsynth itself is healthy, so the fault is above it: "
                    f"read {log}.")
+    elif chk["devices"] and chk["rc"] is None:
+        out.append("     Everything above the rack still works — boot the "
+                   "driver with silent=True (tests/silent_rig.py).")
     if chk["tail"]:
         out.append("  scsynth said:\n    " + chk["tail"].replace("\n", "\n    "))
     return "\n".join(out)
@@ -337,16 +419,45 @@ def _diagnose(p: int, log: str) -> str:
 
 # -- process ------------------------------------------------------------------
 
-async def is_up(p: int | None = None, timeout: float = 2.0) -> bool:
+async def probe_http(p: int | None = None, timeout: float = 2.0) -> dict:
+    """Is a rig serving here — and if not, WHY NOT?
+
+    A bare bool collapses four different situations into "it didn't work":
+    nothing is listening, something is listening but is not a rig, the rig
+    is up but still booting, or the request timed out. Those want four
+    different responses from a caller, and the audio session lost hours to
+    exactly this shape of answer — a boolean probe reported a sample-rate
+    mismatch as "no microphone permission" and sent Cole to System Settings
+    to fix something that was not broken.
+
+    Returns {"up", "why", "status"}.
+    """
     import aiohttp
     p = p or rig_port()
     try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(f"http://127.0.0.1:{p}/",
-                             timeout=aiohttp.ClientTimeout(total=timeout)) as r:
-                return r.status == 200
-    except Exception:  # noqa: BLE001
-        return False
+        async with aiohttp.ClientSession() as sess:
+            async with sess.get(f"http://127.0.0.1:{p}/",
+                                timeout=aiohttp.ClientTimeout(total=timeout)) as r:
+                if r.status == 200:
+                    return {"up": True, "why": "serving", "status": 200}
+                return {"up": False, "status": r.status,
+                        "why": f"something is listening on {p} but answered "
+                               f"HTTP {r.status} — not a Patchwerk rig"}
+    except aiohttp.ClientConnectorError:
+        return {"up": False, "status": None,
+                "why": f"nothing is listening on {p}"}
+    except asyncio.TimeoutError:
+        return {"up": False, "status": None,
+                "why": f"port {p} accepted the connection but did not answer "
+                       f"in {timeout:.0f}s — a rig mid-boot, or a wedged one"}
+    except Exception as exc:  # noqa: BLE001
+        return {"up": False, "status": None,
+                "why": f"probing {p} failed: {exc.__class__.__name__}: {exc}"}
+
+
+async def is_up(p: int | None = None, timeout: float = 2.0) -> bool:
+    """The bool form, for callers that genuinely only need yes/no."""
+    return (await probe_http(p, timeout))["up"]
 
 
 async def boot(patch: str = "pad_space", p: int | None = None,
@@ -383,10 +494,16 @@ async def boot(patch: str = "pad_space", p: int | None = None,
     try:
         if not silent and udp_held(p):
             pass                      # informational only; the lock is truth
-        cmd = ([str(REPO / ".venv/bin/python"), "-u",
-                str(REPO / "tests/silent_rig.py"), "--port", str(p)] if silent
-               else [str(REPO / ".venv/bin/python"), "-u", "-m", "synthbase",
-                     "gui", patch, "--port", str(p), "--no-browser", *args])
+        py = pick_python()
+        if not py:
+            raise NoPython(
+                "no python found to launch a rig with — no .venv in this "
+                "tree, none activated, none in the main worktree, and no "
+                "python3 on PATH. Run setup, or activate a venv.")
+        cmd = ([py, "-u", str(REPO / "tests/silent_rig.py"), "--port", str(p)]
+               if silent else
+               [py, "-u", "-m", "synthbase", "gui", patch, "--port", str(p),
+                "--no-browser", *args])
         fh = open(log, "wb")
         proc = subprocess.Popen(cmd, cwd=str(REPO), env=child_env(),
                                 stdout=fh, stderr=subprocess.STDOUT)
@@ -1142,18 +1259,18 @@ async def _cmd_doctor(args) -> int:
     chk = await asyncio.to_thread(scsynth_check)
     print(f"other scsynth:  {chk['others']}  (left alone — another "
           "session's)")
+    print(f"exit code:      {chk['rc']}")
     print(f"device list:    {'yes' if chk['devices'] else 'NO'}")
     print(f"server ready:   {'yes' if chk['ready'] else 'NO'}   "
           f"({chk['seconds']}s)")
     print(f"udp bound:      {'yes' if chk['udp'] else 'NO'}")
     if chk["tail"]:
         print("  " + chk["tail"].replace("\n", "\n  "))
+    print(f"\n{chk['why']}")
     if chk["ready"]:
-        print("\nAudio can start. A rig failure is above scsynth.")
         return 0
-    print("\nAudio CANNOT start in this session — scsynth enumerates devices "
-          "and never starts one.\nUse silent=True / --silent: the control "
-          "plane, the level taps and the transcript all still work.")
+    print("\nUse silent=True / --silent meanwhile: the control plane, the "
+          "level taps and the transcript all still work without audio.")
     return 1
 
 

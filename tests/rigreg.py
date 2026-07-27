@@ -101,16 +101,33 @@ def read(port: int) -> dict | None:
         return None
 
 
-def is_stale(rec: dict | None) -> bool:
-    """A lock nobody is behind any more.
+def stale_reason(rec: dict | None) -> str | None:
+    """Why this lock is (or is not) stale — the reason, not a bool.
 
-    Both signals must be dead: the owning PROCESS and the PORT. A live owner
-    with a rig still booting has no port yet; a dead owner whose rig is still
-    serving is a rig worth leaving alone until someone reaps it.
+    Both signals must be dead for a lock to be stale: the owning PROCESS
+    and the PORT. A live owner with a rig still booting has no port yet; a
+    dead owner whose rig is still serving is a rig worth leaving alone
+    until someone reaps it. Saying WHICH of those held is the difference
+    between "it refused" and knowing what to do about it.
+
+    Returns None when the lock is live.
     """
     if not rec:
-        return True
-    return not _alive(rec.get("owner_pid")) and not port_answers(rec.get("port", 0))
+        return "no lock on file"
+    owner = _alive(rec.get("owner_pid"))
+    serving = port_answers(rec.get("port", 0))
+    if owner and serving:
+        return None
+    if owner:
+        return None          # owner alive, rig still booting — not stale
+    if serving:
+        return None          # owner gone but the rig still serves — leave it
+    return (f"owner pid {rec.get('owner_pid')} is gone and port "
+            f"{rec.get('port')} answers nothing")
+
+
+def is_stale(rec: dict | None) -> bool:
+    return stale_reason(rec) is not None
 
 
 def live() -> list[dict]:

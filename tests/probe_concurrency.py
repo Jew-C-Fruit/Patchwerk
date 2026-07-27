@@ -54,7 +54,7 @@ def other_session(port: int) -> subprocess.Popen:
             f"import rigreg, time;"
             f"rigreg.acquire({port}, session='pretend-other');"
             f"print('held', flush=True); time.sleep(300)")
-    proc = subprocess.Popen([str(REPO / ".venv/bin/python"), "-u", "-c", code],
+    proc = subprocess.Popen([R.pick_python(), "-u", "-c", code],
                             stdout=subprocess.PIPE, text=True)
     proc.stdout.readline()          # wait for the claim
     return proc

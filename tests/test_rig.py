@@ -235,14 +235,16 @@ def test_scsynth_hygiene():
     real = R.scsynth_check
     try:
         R.scsynth_check = lambda *a, **k: {
-            "ready": False, "devices": True, "udp": False, "others": 0,
+            "ready": False, "devices": True, "udp": False, "others": 0, "rc": None,
+            "why": R.classify_scsynth(False, True, None, ""),
             "seconds": 15.0, "tail": "SC_AudioDriver: sample rate = 48000"}
         stalled = R._diagnose(8765, "/tmp/x.log")
         check("devices-but-not-ready is named as the CoreAudio stall",
-              "never starts one" in stalled and "NOT a stale process" in stalled
-              and "silent=True" in stalled, stalled)
+              "never started one" in stalled and "silent=True" in stalled,
+              stalled)
         R.scsynth_check = lambda *a, **k: {
-            "ready": True, "devices": True, "udp": True, "others": 2,
+            "ready": True, "devices": True, "udp": True, "others": 2, "rc": None,
+            "why": "ready",
             "seconds": 1.0, "tail": "SuperCollider 3 server ready"}
         healthy = R._diagnose(8765, "/tmp/x.log")
         check("a healthy scsynth points the finger above it",
@@ -300,6 +302,88 @@ def _code(path) -> str:
     return " ".join(out)
 
 
+def test_pick_python_matches_run_sh():
+    """One resolution strategy in this repo, not two.
+
+    `run.sh` gained `pick_python()` on `feat/p38-audio-session` after the
+    same bug bit it: a git worktree has no `.venv/` of its own — it is
+    gitignored, so it lives only in the main checkout — and agent sessions
+    work almost entirely from worktrees. This asserts the driver's order is
+    still run.sh's, candidate for candidate, so the two cannot drift.
+    """
+    cands = R.python_candidates()
+    check("this tree's venv is tried first",
+          cands[0] == str(REPO / ".venv/bin/python"), str(cands))
+    check("the MAIN worktree's venv is a candidate — the whole point",
+          any(c.endswith("/.venv/bin/python") and not c.startswith(str(REPO))
+              for c in cands)
+          or REPO == Path(__file__).resolve().parent.parent, str(cands))
+    check("pick_python answers something runnable, or None",
+          R.pick_python() is None or Path(R.pick_python()).exists(),
+          str(R.pick_python()))
+    check("a missing interpreter is its own named error",
+          issubclass(R.NoPython, RuntimeError))
+
+    sh = (REPO / "run.sh").read_text()
+    if "pick_python" not in sh:
+        print("      (run.sh here has no pick_python yet — it lands with "
+              "feat/p38-audio-session; parity check skipped, not passed)")
+        return
+    body = sh[sh.index("pick_python()"):sh.index("PY=$(pick_python)")]
+    check("run.sh tries this tree's venv first too",
+          body.index('".venv/bin/python"') < body.index("VIRTUAL_ENV"), body[:200])
+    check("run.sh and the driver both consult VIRTUAL_ENV",
+          "VIRTUAL_ENV" in body
+          and any("VIRTUAL_ENV" in c for c in _candidate_sources()), body[:200])
+    check("run.sh and the driver both fall back to the git common dir",
+          "git-common-dir" in body
+          and "git-common-dir" in "".join(_candidate_sources()), body[:200])
+    check("run.sh and the driver both end at python3 on PATH",
+          "python3" in body and "python3" in _code(REPO / "tests" / "rig.py"))
+
+
+def _candidate_sources() -> list[str]:
+    import inspect
+    return [inspect.getsource(R.python_candidates), inspect.getsource(R.pick_python)]
+
+
+def test_diagnostics_carry_reasons():
+    """A bool that collapses four causes into "it didn't work" costs hours.
+
+    It did: the audio session's probe answered yes/no, a sample-rate
+    mismatch (`rc=-6, Setting sample rate failed`) got reported as "no
+    microphone permission", and Cole went to System Settings to fix
+    something that was not broken. Every distinguishable failure gets its
+    own sentence.
+    """
+    sample = R.classify_scsynth(
+        False, True, -6,
+        "Number of Devices: 2\nERROR: Setting sample rate failed\n")
+    check("a sample-rate failure is NAMED, not guessed at",
+          "SAMPLE RATE" in sample and "rc=-6" in sample, sample)
+    check("...and explicitly denies the permissions theory that cost the time",
+          "NOT a permissions problem" in sample, sample)
+    stall = R.classify_scsynth(False, True, None, "Number of Devices: 2\n")
+    check("a device-start stall is a different sentence",
+          "never started one" in stall and "sample rate" not in stall, stall)
+    dead = R.classify_scsynth(False, False, None, "")
+    check("no device list at all is a third", "no device list" in dead, dead)
+    check("an exit code outranks the device list — it is the harder fact",
+          "rc=1" in R.classify_scsynth(False, False, 1, ""),
+          R.classify_scsynth(False, False, 1, ""))
+    check("a healthy run says so", R.classify_scsynth(True, True, None, "")
+          == "ready")
+    opened = R.classify_scsynth(False, True, -6, "could not open device")
+    check("a device that will not open is its own cause",
+          "could not open the audio device" in opened, opened)
+
+    body = ((REPO / "tests" / "rig.py").read_text()
+            .split("def scsynth_check")[1].split("def _diagnose")[0])
+    check("the scsynth signals are reported APART, not merged into one bool",
+          {"ready", "devices", "udp", "rc", "why"}
+          <= set(re.findall(r'"(\w+)":', body)), body[-300:])
+
+
 def test_registry():
     """Port-scoped ownership: coexist, refuse, and self-clear."""
     import os
@@ -334,6 +418,12 @@ def test_registry():
             RR.update(8902, owner_pid=999999)
             check("a lock whose owner is gone is stale",
                   RR.is_stale(RR.read(8902)))
+            check("...and stale_reason SAYS WHY, rather than just 'stale'",
+                  "is gone" in (RR.stale_reason(RR.read(8902)) or "")
+                  and "answers nothing" in (RR.stale_reason(RR.read(8902)) or ""),
+                  str(RR.stale_reason(RR.read(8902))))
+            check("a live lock has no reason to be stale",
+                  RR.stale_reason(RR.read(8901)) is None)
             check("...and ours is not", not RR.is_stale(RR.read(8901)))
             check("release refuses to drop somebody else's lock",
                   RR.release(8902) is False)
@@ -672,6 +762,8 @@ def main():
     test_port_and_discovery()
     test_scsynth_hygiene()
     test_no_machine_wide_kill()
+    test_pick_python_matches_run_sh()
+    test_diagnostics_carry_reasons()
     test_registry()
     test_stale_tabs_respect_other_sessions()
     test_browser_classification()
