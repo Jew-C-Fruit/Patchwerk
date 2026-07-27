@@ -51,13 +51,25 @@ creates an rtmidi virtual port, waits for the engine to SEE it, points
     §6.3 (force the cache, honour an explicit port name) is still the right
     fix; it is an engine change and it is not this file's to make.
 
-Boot / teardown. `Rig` ATTACHES to a rig that is already up and never tears
-that one down; it only boots — and only then tears down — when nothing
-answers. On the default port it boots through `./run.sh`, which already owns
-the orphan hardening, the pidfile and a readiness poll (note run.sh eats $1 as
-the patch name: it must be `./run.sh pad_space --no-browser`). On any other
-port it launches `-m synthbase gui --port N` directly, since run.sh hardcodes
-8765. SuperCollider is DISCOVERED, never assumed to be on PATH — supriya's own
+Boot / teardown, and ISOLATION — several agent sessions drive this machine at
+once. `Rig` ATTACHES to a rig that is already up and never tears that one
+down; it only boots, and only then tears down, when nothing answers. The port
+is claimed in `rigreg`: two sessions COEXIST on different ports, and a second
+session wanting a port someone else holds is REFUSED by name rather than
+killed. Teardown kills our rig process and the scsynth it spawned BY PID.
+
+    ⚠ Nothing here is machine-wide any more, and that is the point. The
+    first cut used `pkill -x scsynth` and booted through `./run.sh`, which
+    reaps every `-m synthbase` process on the machine — so every boot one
+    session made killed every other session's rig, and theirs killed ours
+    mid-probe. It presents as `Server offline!` partway through a run and is
+    indistinguishable from flaky audio; the tell is SIGABRT inside `exit()`,
+    which is a SIGTERM, not a crash. So the driver launches
+    `-m synthbase gui --port N` itself and never shells out to run.sh. The
+    cost is that run.sh's orphan hardening is not inherited: a port held by
+    something we do not own is REFUSED, not cleared.
+
+SuperCollider is DISCOVERED, never assumed to be on PATH — supriya's own
 finder knows the /Applications location, and `find_scsynth()` prepends its
 directory to the child's PATH so subprocess paths work from any shell.
 
@@ -70,6 +82,9 @@ scsynth cannot boot. It cannot do MIDI (no rack, so no router) or audio.
 CLI:
 
     .venv/bin/python tests/rig.py status                      # what is up
+    .venv/bin/python tests/rig.py rigs                        # who owns what
+    .venv/bin/python tests/rig.py doctor                      # can audio start?
+    .venv/bin/python tests/rig.py tabs --close-stale          # sweep orphan tabs
     .venv/bin/python tests/rig.py midi                        # virtual-MIDI check
     .venv/bin/python tests/rig.py play tests/scenarios/x.json -o /tmp/x.jsonl
     SS_PORT=8799 .venv/bin/python tests/rig.py --silent \\
@@ -95,11 +110,12 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "tests"))
 
 import browser  # noqa: E402
+import rigreg  # noqa: E402
 from transcript import TranscriptWriter  # noqa: E402
 
 DEFAULT_PORT = 8765
 PIDFILE = Path("/tmp/patchwerk.pid")
-BOOT_TIMEOUT = 40.0          # cold scsynth + device fallback; run.sh allows 20
+BOOT_TIMEOUT = 40.0          # a cold scsynth plus a device fallback
 #: Our virtual MIDI port carries the PID. Several sessions run this machine
 #: at once, and a fixed name collides: `MidiRouter.start()` with no explicit
 #: port picks `hardware[0]`, so two identically-named ports make "which one
@@ -194,28 +210,26 @@ def scsynth_alive() -> list[int]:
     return [int(x) for x in r.stdout.split() if x.strip().isdigit()]
 
 
-def kill_scsynth(timeout: float = 4.0) -> int:
-    """Clear stale scsynth servers. Returns how many were alive.
+def kill_scsynth(rig_pid: int) -> list[int]:
+    """Kill the scsynth processes THIS rig spawned. Nothing else. Ever.
 
-    ⚠ **`-x`, never `-f`.** supriya spawns
-    `/Applications/SuperCollider.app/Contents/Resources/scsynth`, so a
-    `pkill -f scsynth` pattern matches that — and ALSO matches this driver's
-    own shell command line, and any editor, log tail or grep that happens to
-    contain the word. A `-f` kill here is a driver that kills itself.
-    `run.sh` gets this right (`pkill -x scsynth`); so does this.
+    ⚠ This was `pkill -x scsynth` and that was a **machine-wide kill on a
+    machine running several agent sessions at once**: every boot took down
+    every other session's rig, and theirs took down ours mid-probe. It
+    presents as `Server offline!` halfway through a run and reads exactly
+    like flaky audio — the tell is SIGABRT inside `exit()`, which is a
+    process being SIGTERM'd, not one crashing.
+
+    scsynth is a direct CHILD of the rig process (verified with
+    `pgrep -P`), so ownership is provable and the sweep is unnecessary.
+    `-x` is still right for MATCHING the name — a `-f` pattern would match
+    this driver's own command line — it is the missing `-P` that was the bug.
     """
-    pids = scsynth_alive()
-    if not pids:
-        return 0
-    subprocess.run(["pkill", "-x", "scsynth"], capture_output=True)
-    end = time.monotonic() + timeout
-    while time.monotonic() < end:
-        if not scsynth_alive():
-            return len(pids)
-        time.sleep(0.2)
-    subprocess.run(["pkill", "-9", "-x", "scsynth"], capture_output=True)
-    time.sleep(0.3)
-    return len(pids)
+    killed = []
+    for pid in rigreg.scsynth_children(rig_pid):
+        if rigreg._kill(pid):
+            killed.append(pid)
+    return killed
 
 
 def udp_held(p: int) -> bool:
@@ -234,21 +248,25 @@ def free_udp_port() -> int:
     return p
 
 
-def scsynth_check(timeout: float = 15.0, kill_first: bool = True) -> dict:
+def scsynth_check(timeout: float = 15.0) -> dict:
     """Can scsynth start an audio device on this machine RIGHT NOW?
 
     Spawns a bare scsynth — no supriya, no Patchwerk — on a fresh UDP port
     and reports BOTH readiness signals separately, because they fail apart:
     a machine where audio cannot start still enumerates devices happily.
 
-    Returns {"ready", "devices", "udp", "stale", "seconds", "tail"}.
+    Returns {"ready", "devices", "udp", "others", "seconds", "tail"}.
     `ready=False, devices=True` is the CoreAudio device-start stall.
+
+    It kills ONLY the scsynth it spawned. It used to clear every scsynth on
+    the machine first, which meant running `doctor` shot down other
+    sessions' rigs.
     """
     sc = find_scsynth()
     if sc is None:
-        return {"ready": False, "devices": False, "udp": False, "stale": 0,
+        return {"ready": False, "devices": False, "udp": False, "others": 0,
                 "seconds": 0.0, "tail": "scsynth not found"}
-    stale = kill_scsynth() if kill_first else len(scsynth_alive())
+    others = len(scsynth_alive())      # reported, never touched
     p = free_udp_port()
     t0 = time.monotonic()
     proc = subprocess.Popen([str(sc), "-u", str(p), "-i", "0", "-o", "2"],
@@ -279,8 +297,7 @@ def scsynth_check(timeout: float = 15.0, kill_first: bool = True) -> dict:
             proc.wait(timeout=3)
         except subprocess.TimeoutExpired:
             proc.kill()
-        kill_scsynth()
-    return {"ready": ready, "devices": devices, "udp": udp, "stale": stale,
+    return {"ready": ready, "devices": devices, "udp": udp, "others": others,
             "seconds": round(time.monotonic() - t0, 1),
             "tail": "\n".join(lines[-6:])}
 
@@ -295,8 +312,9 @@ def _diagnose(p: int, log: str) -> str:
     """
     chk = scsynth_check()
     out = [""]
-    if chk["stale"]:
-        out.append(f"  stale scsynth cleared before this check: {chk['stale']}")
+    if chk["others"]:
+        out.append(f"  {chk['others']} other scsynth process(es) running — "
+                   "another session's, left alone")
     out.append(f"  bare scsynth: devices={'yes' if chk['devices'] else 'NO'} "
                f"ready={'yes' if chk['ready'] else 'NO'} "
                f"udp={'yes' if chk['udp'] else 'NO'}  ({chk['seconds']}s)")
@@ -334,16 +352,25 @@ async def is_up(p: int | None = None, timeout: float = 2.0) -> bool:
 async def boot(patch: str = "pad_space", p: int | None = None,
                log: str = "/tmp/synth_gui.log", args: list | None = None,
                silent: bool = False) -> dict:
-    """Bring a rig up. Returns {"how", "pid", "log"} — raises on failure.
+    """Bring a rig up. Returns {"how", "pid", "log", ...} — raises on failure.
 
     Callers should check `is_up()` first: this always starts a NEW rig, and
-    on the default port run.sh reaps any existing one first.
+    raises `rigreg.RigBusy` if another session already owns the port.
 
-    Boot is IDEMPOTENT FROM A DIRTY STATE: any stale scsynth is cleared by
-    exact name first (`kill_scsynth`), the wait is bounded by this driver's
-    own timeout rather than `Server().boot()`'s absent one, and a failure is
-    reported as the two readiness signals in `_diagnose` — so an environment
-    fault never presents as an indistinguishable hang.
+    Boot is IDEMPOTENT FROM A DIRTY STATE and ISOLATED FROM OTHER SESSIONS:
+    the port is claimed in `rigreg` (refusing, never killing, if someone else
+    holds it), the wait is bounded by this driver's own timeout rather than
+    `Server().boot()`'s absent one, and a failure is reported as the two
+    readiness signals in `_diagnose` — so an environment fault never presents
+    as an indistinguishable hang.
+
+    ⚠ **This deliberately does NOT use `run.sh`.** run.sh reaps every
+    `-m synthbase` process and every `scsynth` on the machine. That is right
+    for a human relaunching their own rig and catastrophic for a driver on a
+    machine running several agent sessions: it kills rigs it did not start.
+    The cost is that run.sh's orphan hardening is not inherited — so when a
+    port is held by something we do not own, this REFUSES and names it
+    instead of clearing it.
 
     `args` are extra `synthbase gui` flags — `["--hw-buffer", "512"]`,
     `["--out-device", "MacBook Pro Speakers"]`, `["--no-midi"]`.
@@ -351,57 +378,51 @@ async def boot(patch: str = "pad_space", p: int | None = None,
     p = p or rig_port()
     args = list(args or [])
     t0 = time.monotonic()
-    if not silent:
-        # A server left holding the audio device (or its UDP port) makes the
-        # next boot fail in a way that reads as environmental. Clear it, and
-        # SAY that we did — a silent kill hides how dirty the machine was.
-        stale = kill_scsynth()
-        if stale:
-            print(f"[rig] cleared {stale} stale scsynth process(es) before boot")
-    if silent:
-        # tests/silent_rig.py: the real server over an engine-less SynthApp.
-        # No scsynth, no audio device — the control plane only.
+    rigreg.clean()                    # drop locks nobody is behind any more
+    rigreg.acquire(p, how="silent" if silent else "gui")   # raises RigBusy
+    try:
+        if not silent and udp_held(p):
+            pass                      # informational only; the lock is truth
+        cmd = ([str(REPO / ".venv/bin/python"), "-u",
+                str(REPO / "tests/silent_rig.py"), "--port", str(p)] if silent
+               else [str(REPO / ".venv/bin/python"), "-u", "-m", "synthbase",
+                     "gui", patch, "--port", str(p), "--no-browser", *args])
         fh = open(log, "wb")
-        proc = subprocess.Popen(
-            [str(REPO / ".venv/bin/python"), "-u", str(REPO / "tests/silent_rig.py"),
-             "--port", str(p)],
-            cwd=str(REPO), env=child_env(), stdout=fh, stderr=subprocess.STDOUT)
-        pid, how = proc.pid, "silent"
-    elif p == DEFAULT_PORT and (REPO / "run.sh").exists():
-        # run.sh: orphan hardening + pidfile + its own 20 s readiness poll.
-        # $1 is always eaten as the patch name — flags come after it.
-        r = await asyncio.to_thread(
-            subprocess.run, ["./run.sh", patch, "--no-browser", *args],
-            cwd=str(REPO), env=child_env(), capture_output=True, text=True)
-        if r.returncode != 0:
-            raise RuntimeError(f"run.sh failed:\n{r.stdout}\n{r.stderr}"
-                               + _boot_hint(log) + _diagnose(p, log))
-        pid = int(PIDFILE.read_text().strip()) if PIDFILE.exists() else None
-        how, proc = "run.sh", None
-    else:
-        fh = open(log, "wb")
-        proc = subprocess.Popen(
-            [str(REPO / ".venv/bin/python"), "-u", "-m", "synthbase", "gui",
-             patch, "--port", str(p), "--no-browser", *args],
-            cwd=str(REPO), env=child_env(), stdout=fh, stderr=subprocess.STDOUT)
-        pid, how = proc.pid, "direct"
-    while time.monotonic() - t0 < BOOT_TIMEOUT:
-        if proc is not None and proc.poll() is not None:
-            raise RuntimeError(f"rig exited {proc.returncode} — tail {log}:\n"
-                               + _tail(log) + _boot_hint(log)
-                               + ("" if silent else _diagnose(p, log)))
-        if await is_up(p):
-            return {"how": how, "pid": pid, "log": log, "args": args,
-                    "seconds": round(time.monotonic() - t0, 1), "proc": proc}
-        await asyncio.sleep(0.4)
-    # OUR timeout, not Server().boot()'s (it has none on this failure mode).
-    if proc is not None:
-        _reap(proc.pid)
-    if not silent:
-        kill_scsynth()          # do not leave the mess for the next boot
-    raise RuntimeError(f"no 200 from port {p} in {BOOT_TIMEOUT:.0f}s — "
-                       f"tail {log}:\n" + _tail(log) + _boot_hint(log)
-                       + ("" if silent else _diagnose(p, log)))
+        proc = subprocess.Popen(cmd, cwd=str(REPO), env=child_env(),
+                                stdout=fh, stderr=subprocess.STDOUT)
+        how = "silent" if silent else "direct"
+        rigreg.update(p, rig_pid=proc.pid)
+        seen_scsynth: list[int] = []
+        while time.monotonic() - t0 < BOOT_TIMEOUT:
+            # Record the scsynth child the MOMENT it appears, not on success.
+            # A boot that fails leaves the rig process dead and its scsynth
+            # ORPHANED (verified: killing the parent does not take the server
+            # with it), and by then `pgrep -P <dead pid>` finds nothing — so
+            # the only chance to learn the pid is while the parent lives.
+            if not seen_scsynth and not silent:
+                seen_scsynth = rigreg.scsynth_children(proc.pid)
+                if seen_scsynth:
+                    rigreg.update(p, scsynth_pid=seen_scsynth[0])
+            if proc.poll() is not None:
+                raise RuntimeError(f"rig exited {proc.returncode} — tail {log}:\n"
+                                   + _tail(log) + _boot_hint(log)
+                                   + ("" if silent else _diagnose(p, log)))
+            if await is_up(p):
+                kids = rigreg.scsynth_children(proc.pid) or seen_scsynth
+                if kids:
+                    rigreg.update(p, scsynth_pid=kids[0])
+                return {"how": how, "pid": proc.pid, "log": log, "args": args,
+                        "port": p, "scsynth": kids,
+                        "seconds": round(time.monotonic() - t0, 1), "proc": proc}
+            await asyncio.sleep(0.4)
+        # OUR timeout, not Server().boot()'s (it has none on this failure mode)
+        raise RuntimeError(f"no 200 from port {p} in {BOOT_TIMEOUT:.0f}s — "
+                           f"tail {log}:\n" + _tail(log) + _boot_hint(log)
+                           + ("" if silent else _diagnose(p, log)))
+    except BaseException:
+        rigreg.stop_owned(p)          # kills OUR rig + OUR scsynth, by pid
+        rigreg.release(p)
+        raise
 
 
 def _boot_hint(log: str) -> str:
@@ -558,25 +579,23 @@ class Rig:
     async def shutdown(self) -> None:
         """Stop a rig THIS driver booted. Never touches one we attached to.
 
-        Teardown has to be good enough that the NEXT boot does not inherit
-        the mess: the rig process goes first, and if its scsynth outlives it
-        (a killed parent does not always take the server with it) that gets
-        cleared too, by exact name.
+        Everything goes by PID, through the registry: the rig process, then
+        the scsynth it spawned (a killed parent does not always take the
+        server with it). There is no machine-wide sweep — that is what took
+        down other sessions' rigs.
         """
         if not self.booted:
             return
-        silent = self.booted.get("how") == "silent"
+        port = self.booted.get("port", self.port)
         proc = self.booted.get("proc")
-        if proc is not None:
-            _reap(proc.pid)
-        elif self.booted.get("pid"):
-            _reap(int(self.booted["pid"]))
-            if PIDFILE.exists():
-                PIDFILE.unlink(missing_ok=True)
-        if not silent:
-            await asyncio.sleep(0.4)      # give it the chance to go quietly
-            if kill_scsynth():
-                print("[rig] scsynth outlived its rig — cleared it")
+        if proc is not None and proc.poll() is None:
+            kids = rigreg.scsynth_children(proc.pid)
+            if kids:
+                rigreg.update(port, scsynth_pid=kids[0])
+        out = rigreg.stop_owned(port)
+        if out.get("killed"):
+            print(f"[rig] stopped pid(s) {out['killed']} on port {port}")
+        rigreg.release(port)
         self.booted = None
 
     # -- reader ---------------------------------------------------------------
@@ -1092,6 +1111,24 @@ async def _cmd_status(args) -> int:
     return 0
 
 
+async def _cmd_rigs(args) -> int:
+    """Who owns what on this machine. The shared-machine situation report."""
+    if args.clean:
+        for rec in rigreg.clean():
+            print(f"dropped stale lock: {rigreg.describe(rec)}")
+    rigs = rigreg.live()
+    if not rigs:
+        print("no rigs registered")
+    for rec in rigs:
+        mine = " (OURS)" if rec.get("owner_pid") == os.getpid() else ""
+        print(f"  {rigreg.describe(rec)}{mine}")
+    others = scsynth_alive()
+    if others:
+        print(f"\nscsynth running: {others}  — NOT killed by this driver; "
+              "it only ever stops the ones its own rigs spawned")
+    return 0
+
+
 async def _cmd_doctor(args) -> int:
     """Can this machine start audio at all? Answer before blaming the code."""
     p = args.port or rig_port()
@@ -1103,7 +1140,8 @@ async def _cmd_doctor(args) -> int:
         print("  (a rig is running — not probing scsynth under it)")
         return 0
     chk = await asyncio.to_thread(scsynth_check)
-    print(f"stale cleared:  {chk['stale']}")
+    print(f"other scsynth:  {chk['others']}  (left alone — another "
+          "session's)")
     print(f"device list:    {'yes' if chk['devices'] else 'NO'}")
     print(f"server ready:   {'yes' if chk['ready'] else 'NO'}   "
           f"({chk['seconds']}s)")
@@ -1222,6 +1260,9 @@ def main(argv=None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status")
     sub.add_parser("doctor")
+    p_rigs = sub.add_parser("rigs")
+    p_rigs.add_argument("--clean", action="store_true",
+                        help="drop locks nobody is behind any more")
     p_tabs = sub.add_parser("tabs")
     p_tabs.add_argument("--close-stale", action="store_true",
                         help="close Patchwerk tabs whose rig is gone")
@@ -1231,8 +1272,13 @@ def main(argv=None) -> int:
     p_play.add_argument("scenario")
     args = ap.parse_args(argv)
     fn = {"status": _cmd_status, "doctor": _cmd_doctor, "tabs": _cmd_tabs,
-          "ui": _cmd_ui, "midi": _cmd_midi, "play": _cmd_play}[args.cmd]
-    return asyncio.run(fn(args))
+          "ui": _cmd_ui, "rigs": _cmd_rigs, "midi": _cmd_midi,
+          "play": _cmd_play}[args.cmd]
+    try:
+        return asyncio.run(fn(args))
+    except rigreg.RigBusy as exc:
+        print(f"\nREFUSED: {exc}")
+        return 2
 
 
 if __name__ == "__main__":

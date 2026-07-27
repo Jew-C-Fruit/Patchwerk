@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO / "tests"))
 
 import browser as B  # noqa: E402
 import rig as R  # noqa: E402
+import rigreg as RR  # noqa: E402
 import transcript as T  # noqa: E402
 
 FAILURES = []
@@ -234,20 +235,142 @@ def test_scsynth_hygiene():
     real = R.scsynth_check
     try:
         R.scsynth_check = lambda *a, **k: {
-            "ready": False, "devices": True, "udp": False, "stale": 0,
+            "ready": False, "devices": True, "udp": False, "others": 0,
             "seconds": 15.0, "tail": "SC_AudioDriver: sample rate = 48000"}
         stalled = R._diagnose(8765, "/tmp/x.log")
         check("devices-but-not-ready is named as the CoreAudio stall",
               "never starts one" in stalled and "NOT a stale process" in stalled
               and "silent=True" in stalled, stalled)
         R.scsynth_check = lambda *a, **k: {
-            "ready": True, "devices": True, "udp": True, "stale": 2,
+            "ready": True, "devices": True, "udp": True, "others": 2,
             "seconds": 1.0, "tail": "SuperCollider 3 server ready"}
         healthy = R._diagnose(8765, "/tmp/x.log")
         check("a healthy scsynth points the finger above it",
-              "fault is above it" in healthy and "cleared" in healthy, healthy)
+              "fault is above it" in healthy, healthy)
+        check("other sessions' servers are REPORTED, never cleared",
+              "left alone" in healthy and "cleared" not in healthy, healthy)
     finally:
         R.scsynth_check = real
+
+
+def test_no_machine_wide_kill():
+    """The regression that matters most on a shared machine.
+
+    `pkill -x scsynth` and `run.sh` (which reaps every `-m synthbase`
+    process) are machine-wide: one session's boot killed every other
+    session's rig. Nothing in the driver may reach for either again, and a
+    source check is the only kind that cannot be fooled by a green run on an
+    idle machine.
+    """
+    src = "".join(_code(REPO / "tests" / "rig.py").split())
+    check("the driver contains NO pkill at all — killing goes by pid now",
+          "pkill" not in src, src[src.find("pkill") - 80:][:160])
+    check("nor does it shell out to run.sh, which reaps machine-wide",
+          "run.sh" not in src, "run.sh still invoked in live code")
+    check("kill_scsynth takes the rig pid whose children it may kill",
+          "defkill_scsynth(rig_pid" in src)
+    reg = "".join(_code(REPO / "tests" / "rigreg.py").split())
+    check("scsynth_children scopes by parent pid", '"-P"' in reg)
+    check("the registry kills by pid and never sweeps",
+          "pkill" not in reg and "os.kill" in reg)
+
+
+def _code(path) -> str:
+    """Source with docstrings and comments stripped — prose about `pkill`
+    is not a `pkill`, and a source-level rule must not be fooled by either.
+
+    Callers join out the whitespace: tokenising separates `os` `.` `kill`.
+    """
+    import io
+    import tokenize
+    out = []
+    with open(path, "rb") as fh:
+        prev = tokenize.NAME
+        for tok in tokenize.tokenize(fh.readline):
+            if tok.type == tokenize.COMMENT:
+                continue
+            if tok.type == tokenize.STRING and prev in (
+                    tokenize.INDENT, tokenize.NEWLINE, tokenize.NL,
+                    tokenize.ENCODING, tokenize.DEDENT):
+                continue                      # a docstring
+            if tok.type not in (tokenize.NL, tokenize.NEWLINE,
+                                tokenize.INDENT, tokenize.DEDENT):
+                out.append(tok.string)
+            prev = tok.type
+    return " ".join(out)
+
+
+def test_registry():
+    """Port-scoped ownership: coexist, refuse, and self-clear."""
+    import os
+    import tempfile
+    real_dir = RR.REG_DIR
+    with tempfile.TemporaryDirectory() as d:
+        RR.REG_DIR = Path(d)
+        try:
+            check("an empty registry lists nothing", RR.live() == [])
+            rec = RR.acquire(8901, session="mine")
+            check("acquire claims the port",
+                  rec["port"] == 8901 and rec["owner_pid"] == os.getpid())
+            check("we own what we claimed", RR.owned_by_us(8901))
+            check("it shows up as live", [r["port"] for r in RR.live()] == [8901])
+
+            # a different port is nobody's business — coexistence
+            RR.acquire(8902, session="other")
+            check("a second port coexists",
+                  {r["port"] for r in RR.live()} == {8901, 8902})
+
+            # the same port, claimed by a LIVE owner, is refused
+            try:
+                RR.acquire(8901)
+                check("re-claiming a live port raises RigBusy", False)
+            except RR.RigBusy as exc:
+                check("re-claiming a live port raises RigBusy", True)
+                check("the refusal names the holder and the alternative",
+                      "8901" in str(exc) and "SS_PORT" in str(exc)
+                      and "will NOT kill" in str(exc), str(exc))
+
+            # a lock from a dead owner, on a silent port, is stale
+            RR.update(8902, owner_pid=999999)
+            check("a lock whose owner is gone is stale",
+                  RR.is_stale(RR.read(8902)))
+            check("...and ours is not", not RR.is_stale(RR.read(8901)))
+            check("release refuses to drop somebody else's lock",
+                  RR.release(8902) is False)
+            check("clean() drops exactly the stale one",
+                  [r["port"] for r in RR.clean()] == [8902]
+                  and RR.read(8901) is not None)
+            check("a stale lock can be taken over",
+                  RR.acquire(8902)["owner_pid"] == os.getpid())
+            check("stop_owned refuses a port we do not own",
+                  (RR.update(8902, owner_pid=999999),
+                   RR.stop_owned(8902))[1]["stopped"] is False)
+            check("release drops ours", RR.release(8901) and not RR.read(8901))
+        finally:
+            RR.REG_DIR = real_dir
+
+
+def test_stale_tabs_respect_other_sessions():
+    """A tab is not an orphan just because someone else's rig is slow."""
+    import tempfile
+    real_osa, real_running, real_alive = B._run_osa, B.running, B.port_alive
+    real_dir = RR.REG_DIR
+    with tempfile.TemporaryDirectory() as d:
+        RR.REG_DIR = Path(d)
+        try:
+            B.running = lambda: ["Safari"]
+            B.port_alive = lambda p, timeout=1.5: False    # nothing answers
+            theirs = ("http://127.0.0.1:8799/", "Patchwerk — Blocks")
+            B._run_osa = FakeOsa([theirs])
+            check("with no claim, an unanswering tab is stale",
+                  [t.url for t in B.stale_tabs()] == [theirs[0]])
+            RR.acquire(8799, session="another-session")
+            check("a tab whose port ANOTHER session claims is left alone",
+                  B.stale_tabs() == [],
+                  str([str(t) for t in B.stale_tabs()]))
+        finally:
+            B._run_osa, B.running, B.port_alive = real_osa, real_running, real_alive
+            RR.REG_DIR = real_dir
 
 
 class FakeOsa:
@@ -511,6 +634,23 @@ def test_recorded_fixtures():
     check("normalising a real recording is idempotent",
           T.normalize(n, quantum=0) == n)
 
+    midi = T.read_transcript(d / "transcript_midi_notes.jsonl")
+    check("the MIDI transcript was recorded through a REAL rig — the events "
+          "only a rtmidi callback thread can produce are all there",
+          {"tap", "voiced", "bend", "sustain", "cc"}
+          <= {e.get("kind") for e in midi.events()},
+          str(sorted({e.get("kind") for e in midi.events()})))
+    check("notes travelled the control plane, keys AND arp",
+          {e.get("src") for e in midi.events("tap")} == {"keys", "arp"},
+          str({e.get("src") for e in midi.events("tap")}))
+    check("the ±2 semitone bend round-tripped at full scale",
+          [e.get("semitones") for e in midi.events("bend")] == [1.0, 0.0],
+          str([e.get("semitones") for e in midi.events("bend")]))
+    check("the sustain pedal went down and up",
+          [e.get("on") for e in midi.events("sustain")] == [True, False])
+    check("a real MIDI run left no note open — the pedal closed everything",
+          T.unpaired_notes(midi) == [], str(T.unpaired_notes(midi)))
+
     tap = T.read_transcript(d / "transcript_transport_tap.jsonl")
     during = tap.segment("taps", "settled")
     check("the tap transcript records four button fires",
@@ -531,6 +671,9 @@ def main():
     test_unpaired_notes()
     test_port_and_discovery()
     test_scsynth_hygiene()
+    test_no_machine_wide_kill()
+    test_registry()
+    test_stale_tabs_respect_other_sessions()
     test_browser_classification()
     test_browser_hygiene()
     test_ids_in()

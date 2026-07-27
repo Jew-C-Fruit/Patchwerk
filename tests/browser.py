@@ -72,6 +72,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
+try:
+    import rigreg
+except ImportError:                       # usable standalone
+    rigreg = None
+
 #: name -> the AppleScript dialect it speaks. Safari calls a tab's title
 #: `name` and its active tab `current tab`; the Chromium family calls them
 #: `title` and `active tab index`. Everything else is identical.
@@ -250,10 +255,20 @@ def port_alive(p: int | None, timeout: float = 1.5) -> bool:
 
 
 def stale_tabs(apps: list[str] | None = None) -> list[Tab]:
-    """Patchwerk tabs whose rig is gone — the orphans of a killed session."""
+    """Patchwerk tabs whose rig is gone — the orphans of a killed session.
+
+    Two liveness signals, and a tab needs to fail BOTH to be swept. The HTTP
+    check is the real one; the registry is the guard against sweeping a tab
+    belonging to another session whose rig is merely mid-boot or momentarily
+    slow. Same ownership rule as the rig processes: never act on what
+    somebody else owns just because it did not answer fast enough.
+    """
+    claimed = {r.get("port") for r in rigreg.live()} if rigreg else set()
     live: dict[int | None, bool] = {}
     out = []
     for t in patchwerk_tabs(apps):
+        if t.port in claimed:
+            continue                      # another session's rig owns it
         if t.port not in live:
             live[t.port] = port_alive(t.port)
         if not live[t.port]:
