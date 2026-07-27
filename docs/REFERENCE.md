@@ -36,8 +36,9 @@
 > of 2026-07-26: item 11's `dual` kind (`feat/p11-dual-mode`) in §2.2 and
 > §10.3/§10.3.1; item 10's allocation framework and poly voices
 > (`feat/p2-poly-voice`) in §4.1, §4.3.1 and §11.3, with its GUI half
-> (`feat/p11-dual-mode`) in §13.1 — item 10 is additionally **not
-> live-verified**, headless-green only; item 29's drone allocation
+> (`feat/p11-dual-mode`) in §13.1 — item 10 is **live-verified on the rig**,
+> and carries a BEHAVIOUR CHANGE to module removal (§3.2); item 29's drone
+> allocation
 > (`feat/p29-drone-allocation`, branched from item 10 — **merge 10 first**)
 > in §4.3.2, §4.7, §11.1, §11.3 and §13.1, carrying a real **behaviour
 > change** to drone pitch; and the `transport` event plus the `pulse` field
@@ -281,6 +282,27 @@ the current derived wiring. Rules, enforced in `app.graph_wire` +
   scrubs X's ctl wires, `:pwr` gate wires, LFO dests, drone sink, and
   re-aims the drums target.
 
+> ⚠ **BEHAVIOUR CHANGE — PENDING (`feat/p2-poly-voice` @ `9dda485`).
+> Removing a module WHILE IT IS SOUNDING now cuts its release tail instead
+> of fading it.** Every node `free()` in `rack.py` passes `force=True`.
+>
+> This is the cost of fixing a real leak, not a regression. supriya's
+> `Node.free()` emits **`/n_set gate 0` for any synth that HAS a gate** —
+> a release, not a free — and `/n_free` only for one without. Every
+> playable source has a gate (module rule 5), and the SAME rule mandates
+> `done_action=0` so the node survives release, deliberately, because
+> voices are persistent nodes. The two rules compose into a leak: an
+> unforced free **silenced a gated instance and left it running forever**
+> while the rack dropped its `Instance` and forgot it existed. Measured
+> live 2026-07-26 — removing a gated instance took the node count
+> 10→11→12→13, while a gateless reverb correctly went 14→13.
+>
+> **The scope is narrow**: a gated source is silent unless a voice is
+> holding a note on it, so this is only observable when a module is
+> removed MID-NOTE. Restoring the fade would mean releasing first and
+> forcing after a scheduled delay — `rack.py` has no scheduler, so that is
+> a real piece of work, not a flag.
+
 ### 3.3 Live edits without rebuild
 
 `edit_chain("add")` / `spawn_unconnected` spawn ONE node parked on the
@@ -423,18 +445,18 @@ ids and stored targets where the module still exists.
 
 #### 4.3.1 The allocation framework and poly voices — PENDING, not on `main`
 
-> Item 10, built on the local-only branch **`feat/p2-poly-voice`** @
-> `d10b907`; unmerged and unpushed. The backlog anticipated the rename of
-> this section to **Allocation** (backlog item 2).
+> Item 10, on the local-only branch **`feat/p2-poly-voice`** @ `9dda485`;
+> unmerged and unpushed. The backlog anticipated the rename of this section
+> to **Allocation** (backlog item 2).
 >
-> ⚠ **NOT LIVE-VERIFIED. Do not treat this as working audio.** All 13
-> headless suites pass, including the new `tests/test_allocation.py` (521
-> lines), but nothing here has been through a real scsynth with real
-> hardware. `supriya.Server().boot()` fails from the sandbox shell —
-> identically on plain `main`, so that is ENVIRONMENTAL, not a regression
-> this branch introduced. The poly path still needs a pass on the Mac
-> (`python -m synthbase test` is the real proof) before anyone trusts it
-> for audio.
+> ✅ **LIVE-VERIFIED on the rig.** (This supersedes an earlier "not
+> live-verified" note — that was true when written and is not now.)
+> Reproduced three times, ten checks: satellites sound and SUM; a mirrored
+> param moves all four voices; disposing while sounding leaves silence;
+> stealing craters and rebuilds; two mono voices on one source sound as
+> two. The separate leak fix (`9dda485`) was live-verified with its own
+> counter-proof. Item 10 is therefore still PENDING in the sense of
+> unmerged — but it is no longer unproven audio.
 
 Three things turn a stream of note events into sound, and each used to
 carry its own copy of the answer. They differ on **exactly one axis — the
@@ -490,8 +512,9 @@ replaced — per the "track the server OBJECT, not a boolean" landmine.
 
 > Item 29, on the local-only branch **`feat/p29-drone-allocation`** @
 > `03d7d16`. It is branched from `feat/p2-poly-voice`, **not** from `main`,
-> so the **merge order is item 10 first, then 29**. Like item 10 it is
-> headless-green and **not live-verified**.
+> so the **merge order is item 10 first, then 29**. Headless-green and
+> **not live-verified** — unlike item 10, whose poly behaviour HAS since
+> been verified on the rig (§4.3.1).
 
 The drone stops being a bespoke `_DroneSink` and becomes the third policy.
 Ids are **`hold`, `hold.2`, …** — the card is titled "Drone Voice", but the
@@ -1360,8 +1383,9 @@ the page with Playwright against mock state — no server needed.
 ### 13.1 The allocation cards (Mono Voice / Poly Voice) — PENDING
 
 > Item 10's GUI half, on the local-only branch **`feat/p11-dual-mode`**
-> (unmerged). The engine half is §4.3.1 on `feat/p2-poly-voice`, and is
-> **not live-verified**.
+> (unmerged). The ENGINE half is §4.3.1 on `feat/p2-poly-voice` and **has
+> been live-verified on the rig**; these CARDS have not — the engine being
+> proven says nothing about the card that drives it.
 
 **ONE card renders both policies** (`buildVoiceCard`). The policy is read
 off the server's `state.voices[]` entry (§11.3) and **never guessed from

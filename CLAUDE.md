@@ -40,8 +40,8 @@ destination), `arp`, `deck` (the MIDI looper: keys→deck records raw,
 arp→deck records voiced, deck→X replays), mono voices (`voice`,
 `voice.2`, ...; each drives one target source), POLY voices (`poly`,
 `poly.2`, ...; N notes at once on ONE target, oldest stolen when full —
-**pending on `feat/p2-poly-voice`, not on main, and not live-verified**;
-see the satellite landmine below), DRONE voices (`hold`, `hold.2`, ... —
+**pending on `feat/p2-poly-voice`, not on main — but LIVE-VERIFIED on the
+rig**; see the satellite landmine below), DRONE voices (`hold`, `hold.2`, ... —
 note the id type is `hold`, NOT `drone`; holds the last root, with a binary
 POWER level-in at `"<id>:pwr"` — **pending on `feat/p29-drone-allocation`,
 which branches from item 10, so merge 10 first**), tonic derivers (`tonic.N`:
@@ -428,7 +428,7 @@ nets keep their last healthy state. Restore first, then diff.
   managers do; any future manager that sends synthdefs or registers OSC
   callbacks must too).
 - **SATELLITE VOICES ARE NOT `Instance`s** (item 10, pending on
-  `feat/p2-poly-voice`, not live-verified). A poly voice leases SLOTS from
+  `feat/p2-poly-voice`; live-verified on the rig). A poly voice leases SLOTS from
   its target's `VoicePool`: slot 0 is the target instance's own node, but
   **slots ≥ 1 are satellites — real scsynth synths with no `Instance`, no
   card and no state entry**, cloned from the target's settings onto the same
@@ -454,6 +454,29 @@ nets keep their last healthy state. Restore first, then diff.
   identity changes (bypass, hot reload, rack rebuild) or the server object is
   replaced — the same rule as the entry above. **When you add a path that
   touches a target node, assume you owe the pool a call.**
+- **`node.free()` does NOT free a gated synth — pass `force=True`.**
+  supriya emits `/n_set gate 0` for any synth that HAS a gate (a release)
+  and `/n_free` only for one without. Playable sources all have a gate
+  (module rule 5), and that rule also mandates `done_action=0` so the node
+  SURVIVES release — voices are persistent nodes. The two compose into a
+  leak: an unforced free silences the instance and leaves it running
+  forever while the rack forgets it exists. Measured live: removing a gated
+  instance took the node count 10→11→12→13, a gateless reverb 14→13. Cost
+  of forcing: removing a module mid-note cuts its release tail (see
+  `_free_node_note` in `rack.py`). Pending on `feat/p2-poly-voice`.
+- **A NODE MOCK MUST MIRROR `free(force=...)` EXACTLY** — this is how the
+  leak above stayed invisible, and it will catch the next person. The old
+  `FakeNode.free()` took no `force` and set `freed = True`
+  UNCONDITIONALLY, so the tests cheerfully reported "freed" for satellites
+  that were still running on scsynth. Two failures had to line up, and
+  both are easy to reproduce: a mock whose signature is kinder than the
+  real API can never fail the way production does, and production's
+  `except Exception: pass` around node teardown would have swallowed a
+  signature mismatch too — so neither side could report it. **A mock is a
+  claim about the real API; if it is wrong, every test built on it is
+  testing the mock.** When you mock a supriya call, copy the real
+  signature and its DEFAULT (`force=False`), and record what was asked for
+  (`free_calls`) rather than only that it was asked.
 - **A ctl node id must never collide with a MODULE type** (item 29, pending
   on `feat/p29-drone-allocation`). The drone allocation's ids are `hold`,
   `hold.2`, … and NOT `drone`, for one reason: `drone` is already a module
