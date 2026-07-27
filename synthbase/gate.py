@@ -149,6 +149,13 @@ class GateManager:
     def _base(ep) -> str:
         return str(ep).split(":", 1)[0]
 
+    def _is_drone_voice(self, base: str) -> bool:
+        """Is `base` a drone-voice allocation id (item 29)? Its ":pwr" is a
+        level-in like any module's, but it lives in app.voices, not the
+        rack — holding a target's gate open, not bypassing a node."""
+        v = getattr(self.app, "voices", {}).get(base)
+        return getattr(v, "policy", None) == "hold"
+
     def is_toggle_dst(self, dst) -> bool:
         """Endpoints a BINARY wire may land on: level-ins (:pwr, logic
         named ins, relay circuit ins, relay:ctl, transport:run|click|
@@ -164,6 +171,8 @@ class GateManager:
         if sub == "pwr":
             if base in ("arp", "drums"):
                 return True
+            if self._is_drone_voice(base):
+                return True            # item 29: the drone card's POWER in
             try:                       # any chain module's enable toggle
                 self.app.rack.find(base)
                 return True
@@ -402,6 +411,12 @@ class GateManager:
                         app.set_arp(enabled=lvl)
                     elif base == "drums":
                         app.set_drums(enabled=lvl)
+                    elif self._is_drone_voice(base):
+                        # item 29: a drone card's POWER holds its TARGET's
+                        # gate — never set_enabled, which would bypass the
+                        # source and take any poly voice sharing it down too
+                        app.set_drone_power(base, lvl)
+                        continue        # set_drone_power emits its own level
                     else:
                         app.set_enabled(base, lvl)
                     self._emit_level(f"{base}:pwr", lvl)

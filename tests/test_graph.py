@@ -1165,8 +1165,18 @@ def test_tonic_drone():
     app.remove_tonic("tonic.2")
 
     def drone_freqs():
-        return [c[3] for c in app.rack.calls
-                if c[0] == "set_param" and c[1] == "drone" and c[2] == "freq"]
+        # item 29: a drone sink is an allocation.Hold now, so it writes its
+        # slot through rack.set_params like every other allocation. Accept
+        # both spellings — the BEHAVIOUR under test is the freq it lands on.
+        out = []
+        for c in app.rack.calls:
+            if c[1] != "drone":
+                continue
+            if c[0] == "set_param" and c[2] == "freq":
+                out.append(c[3])
+            elif c[0] == "set_params" and "freq" in c[2]:
+                out.append(c[2]["freq"])
+        return out
 
     # drone rework: the drone is an ordinary MONO ctl note-sink — ANY note
     # source wires straight in and note_ons retarget freq (last-note priority)

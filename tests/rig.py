@@ -139,6 +139,7 @@ SPAWNABLE = {
     # dispatch with no entry. So each line lands in the merge that brings its
     # own handler, not a package earlier.
     "spawn_poly": ("voices", "remove_voice"),
+    "spawn_drone_voice": ("voices", "remove_voice"),   # item 29 (see above)
     "spawn_tonic": ("tonics", "remove_tonic"),
     "spawn_literal": ("literals", "remove_literal"),
     "spawn_keyshift": ("keyshifts", "remove_keyshift"),

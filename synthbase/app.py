@@ -33,7 +33,7 @@ from .transport import TapTempo, Transport, _click
 from .audio_devices import list_audio_devices
 from .engine import Engine
 from .master import MasterSection
-from .allocation import MAX_POLY_VOICES, Allocation, MonoLatest, Poly
+from .allocation import MAX_POLY_VOICES, Allocation, Hold, MonoLatest, Poly
 from .midi import MidiRouter, MonoVoice
 from .midi import list_inputs as _list_midi_inputs
 from .module import load_all_modules
@@ -164,49 +164,13 @@ class _FanOut(_NullSink):
         self._each(lambda s: s.set_bend(semitones))
 
 
-class _DroneSink(_NullSink):
-    """A drone instance's ctl-plane presence: a MONO note-sink with
-    last-note priority. note_on retargets the drone's `freq` (through the
-    synthdef's Lag/glide path, so portamento applies); note_off falls back
-    to the newest still-held note, and an EMPTY held-set HOLDS the last
-    root — the drone's on/off is its bypass toggle, not the note stream.
-    Retargeting goes through rack.set_param by instance key, so a respawned
-    node (bypass/hot-reload) is re-aimed automatically."""
-
-    def __init__(self, app, key: str) -> None:
-        self.app = app
-        self.key = key
-        self._held: list[int] = []   # ordered; last = the sounding root
-
-    def _aim(self, note: int) -> None:
-        rack = self.app.rack
-        if rack is None:
-            return
-        try:
-            rack.set_param(self.key, "freq", midi_to_freq(note))
-        except Exception:  # noqa: BLE001 — rack mid-rebuild; the next note lands
-            pass
-
-    def note_on(self, note: int, velocity: int = 100) -> None:
-        note = int(note)
-        if note in self._held:
-            self._held.remove(note)
-        self._held.append(note)
-        self._aim(note)
-
-    def note_off(self, note: int) -> None:
-        note = int(note)
-        was_top = bool(self._held) and self._held[-1] == note
-        if note in self._held:
-            self._held.remove(note)
-        # releasing a note that ISN'T the sounding root must not retarget;
-        # releasing the root falls back to the newest still-held note;
-        # releasing the last note holds (no silence)
-        if was_top and self._held:
-            self._aim(self._held[-1])
-
-    def all_off(self) -> None:
-        self._held.clear()   # hold the current root
+# item 29: `_DroneSink` is GONE. What made a drone a drone was never the
+# DSP, it was the allocation policy — last-note priority, no gate, hold on
+# empty — and that policy now lives once, in allocation.Hold, beside
+# MonoLatest and Poly. A drone MODULE instance's ctl-plane presence is a
+# Hold aimed at that instance (see App._drone_sink); the drone CARD (ids
+# "hold", "hold.2", ...) is a Hold in App.voices aimed at any playable
+# source, with POWER holding that source's gate open.
 
 
 class _KeysNode(_FanOut):
@@ -283,13 +247,18 @@ class SynthApp:
         # v5: multiple mono voices, id -> MonoVoice. "voice" is the primary;
         # spawned ones are "voice.2", "voice.3", ... (self.voice = primary).
         # item 10: POLY voices ("poly", "poly.2", ...) live in the same dict.
-        # Both are Allocations with one note-sink interface, so every global
-        # fan-out below (sustain, transpose, bend, panic, ctl wiring, state)
-        # treats them alike; the POLICY is read off the id's type, per the
-        # instance-id doctrine — type_of("poly.2") == "poly".
+        # item 29: DRONE voices ("hold", "hold.2", ...) too — the id type is
+        # "hold" and not "drone" because "drone" is already a MODULE type,
+        # and a ctl node sharing an id with a rack instance would shadow it
+        # in _ctl_sinks.
+        # All three are Allocations with one note-sink interface, so every
+        # global fan-out below (sustain, transpose, bend, panic, ctl wiring,
+        # state) treats them alike; the POLICY is read off the id's type, per
+        # the instance-id doctrine — type_of("poly.2") == "poly".
         self.voices: dict[str, Allocation] = {}
         self._voice_targets: dict[str, str | None] = {"voice": None}  # id -> override
         self._poly_sizes: dict[str, int] = {}   # poly id -> voice count
+        self._drone_powers: dict[str, bool] = {}  # hold id -> POWER (user intent)
         self.arp: Arpeggiator | None = None
         self._arp_settings: dict = {}  # persists across patch switches
         self.transport = Transport()
@@ -305,7 +274,11 @@ class SynthApp:
         self.literals: dict[str, LiteralDeriver] = {}
         # v6: key shifters (spawnable 4-lane ctl modifiers)
         self.keyshifts: dict[str, KeyShifter] = {}
-        self._drone_sinks: dict[str, _DroneSink] = {}  # drone id -> mono sink
+        # drone MODULE instance id -> its Hold (item 29). Kept across
+        # rebuilds so the held root survives; rebound to the fresh rack on
+        # access, since an Allocation binds a rack where _DroneSink read
+        # app.rack live.
+        self._drone_sinks: dict[str, Hold] = {}
         # binary sources (hi/lo levels; wires ride ctl_wires, kind inferred
         # from the source endpoint — see synthbase/gate.py for the model)
         self.buttons: dict[str, ButtonTrigger] = {}
@@ -444,13 +417,20 @@ class SynthApp:
 
     def _new_allocation(self, vid: str, target: str) -> Allocation:
         """Build the allocation a voice id calls for. The id's TYPE is the
-        policy: "voice[.n]" -> mono-latest, "poly[.n]" -> poly."""
-        if type_of(vid) == "poly":
+        policy: "voice[.n]" -> mono-latest, "poly[.n]" -> poly,
+        "hold[.n]" -> hold (item 29's drone)."""
+        kind = type_of(vid)
+        if kind == "poly":
             v = Poly(self.rack, target, voices=self._poly_sizes.get(vid, 8))
+        elif kind == "hold":
+            v = Hold(self.rack, target)
         else:
             v = MonoLatest(self.rack, target)
         v.transpose = self._transpose
-        v.on_voiced = self._emit_voiced
+        # a drone has no note-on/off segments to visualise; on_voiced would
+        # emit an "on" that nothing ever closes
+        if not isinstance(v, Hold):
+            v.on_voiced = self._emit_voiced
         return v
 
     def _make_voices(self, patch: dict) -> None:
@@ -459,6 +439,11 @@ class SynthApp:
         bindings = patch.get("bindings", {})
         if "voice" not in self._voice_targets:
             self._voice_targets["voice"] = None
+        # a drone SURVIVES a rebuild — that is the whole policy. Carry each
+        # hold's root over so the rebuilt allocation re-aims at it (power is
+        # already carried, in _drone_powers).
+        roots = {vid: v._root for vid, v in self.voices.items()
+                 if isinstance(v, Hold)}
         for v in self.voices.values():
             # a rebuild silences the old rack — close each old voice's open
             # "voiced" segments so note rolls don't pin a stuck bar. all_off()
@@ -485,7 +470,14 @@ class SynthApp:
             target = target or guess
             if not target:
                 continue
-            self.voices[vid] = self._new_allocation(vid, target)
+            v = self.voices[vid] = self._new_allocation(vid, target)
+            if isinstance(v, Hold):
+                v._root = roots.get(vid)
+        # a rebuilt drone is silent until it is told again — the rack came up
+        # fresh and every satellite spawned gate=0. Re-push here rather than
+        # at each caller, so EVERY path that rebuilds voices keeps item 32's
+        # invariant (patch build, and edit_chain removing a voice's target).
+        self._sync_drone_run_state()
 
     def _reapply_graph_wires(self) -> None:
         """After ANY rebuild the rack comes up linear; re-impose the user's
@@ -530,12 +522,22 @@ class SynthApp:
         return any(i.key == nid and i.type == "drone"
                    for i in self.rack.instances)
 
-    def _drone_sink(self, key: str) -> _DroneSink:
-        """The per-instance mono sink (held-note state persists across
-        events; the sink re-aims by key so node respawns are transparent)."""
+    def _drone_sink(self, key: str) -> Hold:
+        """The per-instance drone sink: an allocation.Hold aimed at the drone
+        MODULE instance (item 29 — the policy is shared with the drone CARD
+        and with mono/poly, rather than reimplemented here).
+
+        Held-note state persists across events, and the sink is rebound to
+        the live rack on access: pools die with their rack, where the old
+        `_DroneSink` read `app.rack` on every note and never noticed. The
+        drone module is GATELESS, so Hold's power axis is inert here and
+        bypass remains its only off switch, exactly as before."""
         s = self._drone_sinks.get(key)
         if s is None:
-            s = self._drone_sinks[key] = _DroneSink(self, key)
+            s = self._drone_sinks[key] = Hold(self.rack, key)
+        elif s.rack is not self.rack:
+            s.rebind(self.rack)
+        s.transpose = self._transpose
         return s
 
     @staticmethod
@@ -1095,7 +1097,7 @@ class SynthApp:
                 v.target_key = inst.key
             self._voice_targets[voice] = inst.key
 
-    # -- multiple voices: mono and poly ------------------------------------------
+    # -- multiple voices: mono, poly and drone ------------------------------------
 
     def _spawn_allocation(self, kind: str, size: int | None = None) -> str:
         if not self.rack:
@@ -1137,6 +1139,45 @@ class SynthApp:
             v.set_voices(voices)
             self._poly_sizes[vid] = v.voices
 
+    def spawn_drone_voice(self) -> str:
+        """Add a DRONE voice ("hold", "hold.2", ...): item 29.
+
+        Aimed at any playable source, it steers that source's freq from its
+        TONE input and holds its gate open from its POWER input. It leases
+        its own slot, so a drone and a poly voice can share one source
+        without fighting over it."""
+        with self._lock:
+            return self._spawn_allocation("hold")
+
+    def set_drone_power(self, vid: str, on: bool) -> None:
+        """The drone card's POWER: hold the target's envelope open.
+
+        The drone module's "bypass is the only off switch" becomes LEVEL
+        semantics here — a binary wire into "<id>:pwr" drives this, and so
+        does a click on the card. Both routes announce themselves so the
+        indicator reacts to LOGIC input (reactive-indicator doctrine)."""
+        with self._lock:
+            v = self.voices.get(vid)
+            if not isinstance(v, Hold):
+                raise KeyError(f"no drone voice {vid!r}")
+            self._drone_powers[vid] = bool(on)
+            self._apply_drone_power(vid)
+        self._emit_midi_event(
+            {"kind": "level", "ep": f"{vid}:pwr", "on": bool(on)})
+
+    def _apply_drone_power(self, vid: str) -> None:
+        """Effective gate = POWER **and** transport.running.
+
+        Item 32's invariant, in allocation terms: a drone is gateless from
+        the note stream, so a stopped transport is the only other thing that
+        silences it. Drone MODULE nodes get paused; a drone CARD closes the
+        gate it is holding on its target instead — pausing the target would
+        silence the poly voice sharing it."""
+        v = self.voices.get(vid)
+        if isinstance(v, Hold):
+            v.set_gate_open(self._drone_powers.get(vid, False)
+                            and self.transport.running)
+
     def remove_voice(self, vid: str) -> None:
         with self._lock:
             if vid == "voice":
@@ -1144,6 +1185,7 @@ class SynthApp:
             v = self.voices.pop(vid, None)
             self._voice_targets.pop(vid, None)
             self._poly_sizes.pop(vid, None)
+            self._drone_powers.pop(vid, None)
             if v is None:
                 raise KeyError(f"no voice {vid!r}")
             try:
@@ -1152,7 +1194,9 @@ class SynthApp:
             except Exception:  # noqa: BLE001
                 pass
             self.ctl_wires = [w for w in self.ctl_wires
-                              if vid not in (w.get("from"), w.get("to"))]
+                              if vid not in (w.get("from"), w.get("to"))
+                              # ...and the binary wire into its POWER in
+                              and w.get("to") != f"{vid}:pwr"]
             self._relay_refresh_kinds()
 
     # -- the binary plane: logic gates + relays ------------------------------------
@@ -1704,13 +1748,27 @@ class SynthApp:
         must land it PAUSED (patch build/reload, edit_chain add, swap_synth,
         set_enabled, the legacy compat pair). DISABLED instances are skipped
         — bypass pausing belongs to rack.set_enabled and must not be undone
-        here."""
+        here.
+
+        ITEM 29 extends the same invariant to the drone CARD. A hold
+        allocation is not a node, so there is nothing to pause — its POWER
+        is re-pushed with `transport.running` ANDed in, which also re-aims
+        its root. That re-push is what makes a drone survive a rebuild at
+        all: the rack comes up fresh and every satellite spawns `gate=0`."""
         running = self.transport.running
         for inst in (self.rack.instances if self.rack else []):
             if inst.type != "drone" or inst.node is None or not inst.enabled:
                 continue
             try:
                 (inst.node.unpause if running else inst.node.pause)()
+            except Exception:  # noqa: BLE001
+                pass
+        for vid, v in self.voices.items():
+            if not isinstance(v, Hold):
+                continue
+            try:
+                v.refresh()             # re-aim the held root first...
+                self._apply_drone_power(vid)   # ...then the effective gate
             except Exception:  # noqa: BLE001
                 pass
 
@@ -1956,11 +2014,16 @@ class SynthApp:
                 ),
                 "boot_note": self.engine.boot_note if self.engine else None,
                 "voice_target": self.voice.target_key if self.voice else None,
-                # one entry per ALLOCATION, mono or poly. `policy` tells the
-                # GUI which card to draw; `slots` is how many notes it can
-                # sound at once (always 1 for mono-latest).
+                # one entry per ALLOCATION — mono, poly or drone. `policy`
+                # tells the GUI which card to draw; `slots` is how many notes
+                # it can sound at once (always 1 for mono-latest and hold).
+                # `power` is the drone card's POWER (item 29), null for the
+                # gated policies — it is USER INTENT, not the effective gate,
+                # which also depends on transport.running.
                 "voices": [{"id": vid, "target": v.target_key,
-                            "policy": v.policy, "slots": v.voices}
+                            "policy": v.policy, "slots": v.voices,
+                            "power": (self._drone_powers.get(vid, False)
+                                      if isinstance(v, Hold) else None)}
                            for vid, v in self.voices.items()],
                 "tonics": [d.settings() for d in self.tonics.values()],
                 "literals": [d.settings() for d in self.literals.values()],
