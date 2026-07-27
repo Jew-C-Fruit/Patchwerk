@@ -186,15 +186,6 @@ def _port_row(gid, ep):
 #: would stop asserting a level path that demonstrably works.
 DRIVERS_DEFAULT = {"level": None}
 
-#: `{"kind":"transport"}` is handled only where item 11's GUI half has
-#: landed. On this base `onMidi` has no branch for the kind at all, so the
-#: event moves nothing and the driver is PENDING — the same status the pulse
-#: rows carry here, for the same reason, resolved by the same merge.
-PENDING_TRANSPORT = dict(
-    status="pending",
-    owner="gui/blocks.html — no onTransportEvent on this base; lands with "
-          "item 11 (handoff 1.2)")
-
 #: For the `transport` driver, which field of the event payload each
 #: endpoint's surface must follow. One event carries all three, so exactly
 #: the field that changed yields an informative reading — attribution falls
@@ -205,21 +196,21 @@ TRANSPORT_FIELD = {"transport:run": "running", "transport:click": "click",
 MATRIX = [
     # ---- steady level-ins ---------------------------------------------------
     dict(ep="transport:run", mode="level", status="live",
-         drivers={"level": None, "transport": PENDING_TRANSPORT},
+         drivers={"level": None, "transport": None},
          surface="Play/Stop card",
          js="(() => { const n = nodes.get('tplay');"
             " return n ? n.el.classList.contains('playing') : null; })()"),
     dict(ep="transport:run", mode="level", status="live",
-         drivers={"level": None, "transport": PENDING_TRANSPORT},
+         drivers={"level": None, "transport": None},
          surface="top bar #play-btn",
          js="(() => { const e = document.getElementById('play-btn');"
             " return e ? e.textContent === '\\u23f9' : null; })()"),
 
     dict(ep="transport:click", mode="level", status="live",
-         drivers={"level": None, "transport": PENDING_TRANSPORT},
+         drivers={"level": None, "transport": None},
          surface="Tempo card click LED", js=_row_led("ttempo", "click")),
-    dict(ep="transport:click", mode="level", status="pending",
-         drivers={"level": None, "transport": PENDING_TRANSPORT},
+    dict(ep="transport:click", mode="level", status="live",
+         drivers={"level": None, "transport": None},
          owner="feat/p11-dual-mode — syncTopBarClick(), already written there",
          surface="top bar #click-on",
          js="(() => { const e = document.getElementById('click-on');"
@@ -229,7 +220,7 @@ MATRIX = [
     # element exists, so there is nothing to mirror. A row asserting a
     # top-bar accent control would be asserting a fiction — do not add one.
     dict(ep="transport:accent", mode="level", status="live",
-         drivers={"level": None, "transport": PENDING_TRANSPORT},
+         drivers={"level": None, "transport": None},
          surface="Tempo card accent LED", js=_row_led("ttempo", "accent")),
 
     dict(ep="drums:pwr", mode="level", status="live",
@@ -242,31 +233,31 @@ MATRIX = [
     # Every one of these is unwritten on this base. The contract for them is
     # handoff section 1.1: flash on `on:true`, IGNORE `on:false`, and survive a
     # zero-duration pair (both halves in one tick) still visibly lit.
-    dict(ep="transport:tap", mode="change", status="pending",
+    dict(ep="transport:tap", mode="change", status="live",
          owner="gui/blocks.html — handoff section 2.2(b), flash the tap port's rowEl",
          surface="Tempo card tap-port row",
          js=_sig(_port_row("ttempo", "transport:tap"))),
-    dict(ep="deck:rec", mode="change", status="pending",
+    dict(ep="deck:rec", mode="change", status="live",
          owner="gui/blocks.html — handoff section 2.3, note ep 'rec' vs data-a 'record'",
          surface="Deck record button",
          js=_sig("(nodes.get('deck')||{el:{querySelector:()=>null}}).el"
                  ".querySelector('.deckbtns button[data-a=\"record\"]')")),
-    dict(ep="deck:play", mode="change", status="pending",
+    dict(ep="deck:play", mode="change", status="live",
          owner="gui/blocks.html — handoff section 2.3",
          surface="Deck play button",
          js=_sig("(nodes.get('deck')||{el:{querySelector:()=>null}}).el"
                  ".querySelector('.deckbtns button[data-a=\"play\"]')")),
-    dict(ep="deck:stop", mode="change", status="pending",
+    dict(ep="deck:stop", mode="change", status="live",
          owner="gui/blocks.html — handoff section 2.3",
          surface="Deck stop button",
          js=_sig("(nodes.get('deck')||{el:{querySelector:()=>null}}).el"
                  ".querySelector('.deckbtns button[data-a=\"stop\"]')")),
-    dict(ep="deck:clear", mode="change", status="pending",
+    dict(ep="deck:clear", mode="change", status="live",
          owner="gui/blocks.html — handoff section 2.3",
          surface="Deck clear button",
          js=_sig("(nodes.get('deck')||{el:{querySelector:()=>null}}).el"
                  ".querySelector('.deckbtns button[data-a=\"clear\"]')")),
-    dict(ep="tonic", mode="change", status="pending",
+    dict(ep="tonic", mode="change", status="live",
          owner="gui/blocks.html — handoff section 2.4, the deriver's trigger row",
          surface="Theory Wizard trigger row",
          js=_sig("(() => { const n = nodes.get('tonic'); if (!n) return null;"
@@ -794,12 +785,12 @@ def check_observable_bpm(rp: R.ReplayPage, t: Transcript) -> None:
           f"rig={rig_bpm} shown-before={before}")
 
     moved = no_state is not None and abs(no_state - (before or 0)) > 1.0
-    check("bpm observability: still PENDING (gui/blocks.html — handoff 2.2(a): "
-          "handle {'kind':'transport'} and write #bpm-v / uiParam['ttempo.tempo'])",
-          not moved,
-          f"XPASS — the page now follows a tapped tempo without waiting for a "
-          f"state broadcast ({before} -> {no_state}); change this check to "
-          "assert `moved` and delete the PENDING wording")
+    check("bpm observability: a tapped tempo moves the page with NO state "
+          "broadcast",
+          moved,
+          f"the shown bpm did not follow the taps ({before} -> {no_state}); "
+          "blocks.html's {'kind':'transport'} handler is the surface that "
+          "carries this")
 
     # -- window B: release the broadcasts -------------------------------------
     for r in body.records:

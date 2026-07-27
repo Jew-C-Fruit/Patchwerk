@@ -19,7 +19,7 @@ from supriya import AddAction, CalculationRate, synthdef
 from supriya.ugens import In, Out
 
 from .engine import Engine
-from .module import Module
+from .module import Module, generates, takes_audio_in
 
 
 @synthdef()
@@ -59,6 +59,9 @@ class Instance:
     settings: dict[str, Any]
     node: Any = None
     bus_group: Any = None  # audio bus group feeding the *next* stage (None for last)
+    in_bus_group: Any = None  # PRIVATE in-bus this instance allocated (item 11:
+                              # a dual at the chain head owns BOTH an in-bus and
+                              # an out-bus, so one `bus_group` slot is not enough)
     enabled: bool = True
     service: bool = False  # side-instance (drone, LFO) rather than a chain stage
     type: str = ""         # module key; defaults to type_of(key)
@@ -129,13 +132,14 @@ class Rack:
 
             settings = {name: p.default for name, p in mod.params.items()}
             settings.update(overrides)
-            if (mod.kind == "source" and "gate" not in settings
+            if (generates(mod.kind) and "gate" not in settings
                     and "gate" in mod.synthdef.parameters):
                 # playable sources start SILENT — the synthdef default gate=1
                 # otherwise drones at default freq after every (re)build
                 settings["gate"] = 0
 
             bus_group = None  # bus this stage OWNS (feeds the next stage)
+            in_group = None   # PRIVATE in-bus this stage owns (dual at head)
             if mod.kind == "source" and prev_bus_group is not None:
                 # Extra source mid-chain (e.g. audio_in alongside a signal
                 # gen): SUM into the running bus — a fresh bus here would
@@ -149,8 +153,19 @@ class Rack:
                     calculation_rate=CalculationRate.AUDIO, count=2
                 )
                 settings["out"] = int(bus_group)
-            if mod.kind == "effect":
-                settings["in_bus"] = int(prev_bus_group)
+            if takes_audio_in(mod.kind):
+                if prev_bus_group is not None:
+                    settings["in_bus"] = int(prev_bus_group)
+                else:
+                    # item 11: a DUAL at the chain head has no predecessor to
+                    # read. It still needs a real in-bus (the synthdef reads it
+                    # unconditionally), and it must be PRIVATE — never the null
+                    # bus, which every disconnected output parks on and is
+                    # therefore a junk sum, not silence.
+                    in_group = server.add_bus_group(
+                        calculation_rate=CalculationRate.AUDIO, count=2
+                    )
+                    settings["in_bus"] = int(in_group)
 
             node = server.add_synth(
                 mod.synthdef,
@@ -160,7 +175,8 @@ class Rack:
             )
             self.instances.append(
                 Instance(key=key, module=mod, settings=settings, node=node,
-                         bus_group=bus_group, type=mod.key)
+                         bus_group=bus_group, in_bus_group=in_group,
+                         type=mod.key)
             )
             if bus_group is not None:
                 prev_bus_group = bus_group
@@ -197,6 +213,8 @@ class Rack:
                 inst.node.free(force=True)   # see _free_node_note below
             if inst.bus_group is not None:
                 inst.bus_group.free()
+            if inst.in_bus_group is not None:
+                inst.in_bus_group.free()
         self.instances = []
 
     #: _free_node_note — why every node free() in this file passes force=True.
@@ -271,6 +289,8 @@ class Rack:
             inst.node.free(force=True)   # see _free_node_note below
         if inst.bus_group is not None:
             inst.bus_group.free()
+        if inst.in_bus_group is not None:
+            inst.in_bus_group.free()
         self.instances.remove(inst)
 
     # -- incremental chain edits (in-place, no whole-rack rebuild) ----------------
@@ -287,11 +307,13 @@ class Rack:
         mod = self.registry[type_key] if type_key else self._lookup(key)
         self.engine.register(mod)
         settings = {name: p.default for name, p in mod.params.items()}
-        if (mod.kind == "source" and "gate" not in settings
+        if (generates(mod.kind) and "gate" not in settings
                 and "gate" in mod.synthdef.parameters):
             settings["gate"] = 0
         owned = None
-        if mod.kind == "effect":
+        if takes_audio_in(mod.kind):
+            # duals get one too (item 11) — a private, genuinely silent bus,
+            # so an unwired dual reads silence and stays a pure generator
             owned = self.engine.server.add_bus_group(
                 calculation_rate=CalculationRate.AUDIO, count=2
             )
@@ -334,11 +356,15 @@ class Rack:
         for name in ("in_bus", "out"):              # buses survive the swap
             if name in inst.settings:
                 settings[name] = inst.settings[name]
-        if mod.kind == "source" and "gate" in mod.synthdef.parameters:
+        if mod.kind == "dual" and "mode" in inst.settings:
+            # item 11: `mode` is derived, not a param, so the rebuild above
+            # would drop it and leave an FX-wired dual generating
+            settings["mode"] = inst.settings["mode"]
+        if generates(mod.kind) and "gate" in mod.synthdef.parameters:
             settings["gate"] = 0     # ALWAYS gated silent — never carry a
                                      # live gate across the swap; the voice
                                      # re-gates on the next note
-        if not inst.enabled and mod.kind == "effect":
+        if not inst.enabled and takes_audio_in(mod.kind):
             # bypassed effect: the live node IS the passthrough — leave it;
             # re-enable spawns the (new) module synthdef from inst.settings
             inst.module = mod
@@ -370,8 +396,10 @@ class Rack:
         self.instances.remove(inst)
         if inst.node is not None:
             inst.node.free(force=True)   # see _free_node_note below
-        if inst.bus_group is not None:
-            bus = int(inst.bus_group)
+        for group in (inst.bus_group, inst.in_bus_group):
+            if group is None:
+                continue
+            bus = int(group)
             still_used = any(
                 int(i.settings.get("in_bus", -1)) == bus
                 or int(i.settings.get("out", -1)) == bus
@@ -379,7 +407,7 @@ class Rack:
             )
             if not still_used:
                 try:
-                    inst.bus_group.free()
+                    group.free()
                 except Exception:  # noqa: BLE001
                     pass
 
@@ -431,6 +459,12 @@ class Rack:
         Sources pause/unpause (silence, state kept). Effects are swapped
         with a passthrough synth so the rest of the chain keeps flowing —
         a true bypass, not a mute.
+
+        Item 11: a DUAL takes the effect path, and that is right in BOTH of
+        its modes without asking which one it is in. In FX mode the
+        passthrough passes its input, exactly as for any effect; in GENERATE
+        mode its in_bus is a private, unwritten bus, so the passthrough
+        outputs silence — which is what pausing a source achieves anyway.
         """
         inst = self.find(key)
         enabled = bool(enabled)
@@ -483,12 +517,17 @@ class Rack:
         return int(self._null_bus)
 
     def _dst_bus(self, dst_key: str) -> int:
-        """Bus an audio wire INTO dst_key lands on. Effects: their in_bus.
-        Sources: their own out bus (fan-in by summing). Master: hardware 0."""
+        """Bus an audio wire INTO dst_key lands on. Effects AND duals: their
+        in_bus. Sources: their own out bus (fan-in by summing). Master: 0.
+
+        Item 11, the one deliberate semantic exception: a wire into a plain
+        source SUMS into its output (the "extra source mid-chain" behaviour
+        that stops the "generators go dead" bug), but a wire into a DUAL
+        lands on its in_bus — that gesture is what puts it in FX mode."""
         if dst_key == "master":
             return 0
         dst = self.find(dst_key)
-        if dst.module.kind == "effect":
+        if takes_audio_in(dst.module.kind):
             return int(dst.settings["in_bus"])
         return int(dst.settings.get("out", 0))
 
@@ -559,7 +598,10 @@ class Rack:
         in_bus back to a key; bus 0 (or a tail-routed bus) is master."""
         in_map = {}
         for inst in self.instances:
-            if inst.service or inst.module.kind != "effect":
+            # duals are in here too (item 11) — leaving them out made a wire
+            # into a dual report "→ master", which corrupts state["wires"]
+            # AND the graph_wires seed, losing the wire on the next edit
+            if inst.service or not takes_audio_in(inst.module.kind):
                 continue
             if "in_bus" in inst.settings:
                 in_map[int(inst.settings["in_bus"])] = inst.key
@@ -648,7 +690,7 @@ class Rack:
             # Merge: keep live settings, adopt defaults for any new params.
             settings = {name: p.default for name, p in new_module.params.items()}
             settings.update(inst.settings)
-            if not inst.enabled and inst.module.kind == "effect":
+            if not inst.enabled and takes_audio_in(inst.module.kind):
                 # Node is currently a passthrough; the new definition takes
                 # over when the module is re-enabled.
                 inst.module = new_module

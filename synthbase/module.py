@@ -73,15 +73,42 @@ FAMILIES = {
 }
 
 
+KINDS = ("source", "effect", "dual")
+
+
+def generates(kind: str) -> bool:
+    """Does this kind PRODUCE audio of its own? (source + dual)"""
+    return kind in ("source", "dual")
+
+
+def takes_audio_in(kind: str) -> bool:
+    """Does this kind read an `in_bus`? (effect + dual)
+
+    Item 11: a "dual" module is BOTH — it generates, and it processes
+    whatever is wired into it. It therefore always owns an in_bus, and an
+    audio wire into it lands on that in_bus rather than summing into its
+    output the way a plain source's fan-in does (see Rack._dst_bus).
+    """
+    return kind in ("effect", "dual")
+
+
 @dataclass
 class Module:
     """A DSP recipe plus metadata. Produced by the @module decorator."""
 
     name: str  # human-facing display name
-    kind: str  # "source" (generates audio) or "effect" (processes audio in -> out)
+    kind: str  # "source" (generates), "effect" (in -> out), or "dual" (both)
     synthdef: SynthDef
     params: dict[str, Param] = field(default_factory=dict)
     source_file: str = ""
+
+    @property
+    def generates(self) -> bool:
+        return generates(self.kind)
+
+    @property
+    def takes_audio_in(self) -> bool:
+        return takes_audio_in(self.kind)
 
     @property
     def family(self) -> str:
@@ -103,8 +130,8 @@ def module(*, name: str, kind: str, params: dict[str, Param] | None = None):
         def wobble_saw(freq=220, amp=0.3, gate=1, out=0):
             ...
     """
-    if kind not in ("source", "effect"):
-        raise ValueError(f"kind must be 'source' or 'effect', got {kind!r}")
+    if kind not in KINDS:
+        raise ValueError(f"kind must be one of {KINDS}, got {kind!r}")
 
     def wrap(synthdef_obj: SynthDef) -> Module:
         if not isinstance(synthdef_obj, SynthDef):
