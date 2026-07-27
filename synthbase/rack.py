@@ -249,11 +249,24 @@ class Rack:
     def alloc_id(self, type_key: str) -> str:
         return alloc_id(type_key, (i.key for i in self.instances))
 
+    def _drop_pool(self, key: str) -> None:
+        """Dispose a departing instance's voice pool.
+
+        EVERY path that takes an instance out of the rack must call this, or
+        its satellites keep sounding with no card left to silence them. Both
+        removal paths route through here rather than each popping the dict:
+        they drifted once already — `detach_instance`, the path
+        `app.edit_chain("remove")` actually takes, force-freed the instance
+        node but left the pool registered and its satellites running until
+        the next full teardown.
+        """
+        pool = self.voice_pools.pop(key, None)
+        if pool is not None:
+            pool.dispose()
+
     def remove_instance(self, key: str) -> None:
         inst = self.find(key)
-        pool = self.voice_pools.pop(inst.key, None)
-        if pool is not None:
-            pool.dispose()   # else the satellites outlive the card and drone on
+        self._drop_pool(inst.key)
         if inst.node is not None:
             inst.node.free(force=True)   # see _free_node_note below
         if inst.bus_group is not None:
@@ -353,6 +366,7 @@ class Rack:
         owned out-bus. Worst case is a small bounded leak (bus kept alive with no
         owner), reclaimed at the next full teardown; never a dangling read."""
         inst = self.find(key)
+        self._drop_pool(inst.key)
         self.instances.remove(inst)
         if inst.node is not None:
             inst.node.free(force=True)   # see _free_node_note below

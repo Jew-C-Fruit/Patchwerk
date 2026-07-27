@@ -581,18 +581,75 @@ def test_rack_removal_takes_the_satellites_with_it():
     p.note_on(64)
     p.note_on(67)
     target = rack.find("pad").node
+    sats = list(rack.engine.server.spawned)
     rack.detach_instance("pad")
-    check("target node freed", target.freed)
-    # detach_instance doesn't own the pool (remove_instance does); the pool
-    # is dropped with the rack, so assert the explicit path too
+    check("detach: target node freed", target.freed)
+    # This is the LIVE path — app.edit_chain("remove") calls detach_instance,
+    # not remove_instance. An earlier version of this test noticed that only
+    # remove_instance popped the pool, wrote a comment explaining it away
+    # ("the pool is dropped with the rack"), and asserted against
+    # remove_instance instead. The excuse was wrong: the pool OBJECT dies
+    # with the rack, but its satellite SYNTHS keep running on scsynth until
+    # the next full teardown. Assert the path the app actually takes.
+    check("detach: satellites freed too", sats and all(n.freed for n in sats))
+    check("detach: nothing left running", rack.engine.server.live() == [])
+    check("detach: the pool is deregistered", "pad" not in rack.voice_pools)
+
+    # both removal paths must agree — they drifted once
     rack2 = make_rack(playable=("pad",))
     p2 = Poly(rack2, "pad", voices=4)
     p2.note_on(60)
-    sats = list(rack2.engine.server.spawned)
+    sats2 = list(rack2.engine.server.spawned)
     rack2.remove_instance("pad")
     check("remove_instance frees the satellites too",
-          sats and all(n.freed for n in sats))
-    check("nothing left running", rack2.engine.server.live() == [])
+          sats2 and all(n.freed for n in sats2))
+    check("remove_instance: nothing left running",
+          rack2.engine.server.live() == [])
+    check("remove_instance: the pool is deregistered",
+          "pad" not in rack2.voice_pools)
+
+
+def test_no_pool_outlives_its_instance():
+    """Structural invariant, checked across EVERY path that drops an
+    instance: a registered pool must always have an instance behind it.
+
+    Two separate bugs got here by one route — a removal path forgetting the
+    pool — so assert the property rather than the call sites. `swap_module`
+    is included because it keeps the id and replaces the node: the pool must
+    SURVIVE that one, and re-clone its satellites against the new synthdef.
+    """
+    def orphans(rack):
+        return set(rack.voice_pools) - {i.key for i in rack.instances}
+
+    for path in ("detach_instance", "remove_instance"):
+        rack = make_rack(playable=("pad", "bell"))
+        Poly(rack, "pad", voices=3).note_on(60)
+        getattr(rack, path)("pad")
+        check(f"{path}: no orphaned pool", orphans(rack) == set())
+
+    rack = make_rack(playable=("pad", "bell"))
+    Poly(rack, "pad", voices=3).note_on(60)
+    rack.teardown()
+    check("teardown: no orphaned pool", orphans(rack) == set())
+    check("teardown: no satellite running", rack.engine.server.live() == [])
+
+
+def test_detach_with_two_allocations_on_one_target():
+    """Item 29's repro verbatim: a mono voice AND a drone on `pad`. Detach
+    left 1 satellite live with the pool still registered; via
+    remove_instance it was 0. Both must now be 0."""
+    for path in ("detach_instance", "remove_instance"):
+        rack = make_rack(playable=("pad", "bell"))
+        mono = MonoLatest(rack, "pad")
+        drone = Hold(rack, "pad")
+        mono.note_on(60)
+        drone.note_on(48)
+        live_before = len(rack.engine.server.live())
+        getattr(rack, path)("pad")
+        check(f"{path}: mono+drone leaves nothing running "
+              f"(was {live_before} satellite(s))",
+              rack.engine.server.live() == [])
+        check(f"{path}: pool deregistered", "pad" not in rack.voice_pools)
 
 
 # ---- policy registry --------------------------------------------------------
