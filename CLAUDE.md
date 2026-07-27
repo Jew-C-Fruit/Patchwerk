@@ -178,25 +178,15 @@ mirror to.
 
 ## Writing a new module (the main vibecoding activity)
 
-> ⚠ **The `dual` kind is LIVE on `main`** (2026-07-27):
-> `KINDS = ("source", "effect", "dual")`, the
-> `generates()`/`takes_audio_in()` predicates are load-bearing —
-> `rack.py` branches on them in nine places — and `power_shaper` declares
-> `kind="dual"`. **The three-kind table in rule 3 is what the code does
-> today**; do not revert it to the old binary rule.
+> **The `dual` kind is LIVE and WORKING** (2026-07-27).
+> `KINDS = ("source", "effect", "dual")`, `power_shaper` declares
+> `kind="dual"`, and both modes are verified on the rig — GEN rms 0.130 at
+> 440 Hz with THD ~0, FX rms 0.724 with THD 0.396 and a real odd-harmonic
+> square spectrum. Rules 3 and 10 below are exercised, not theoretical.
 >
-> **Gen mode is under active repair, so treat the details as moving.** It
-> shipped SILENT (see the playability landmine below) and was briefly
-> reverted to `kind="effect"` on a branch; Cole's call was to fix it
-> properly instead, so that revert is not on `main` and is not the
-> direction. Until the item 11 session reports, **read the code for ground
-> truth, not this banner**: `KINDS` in `synthbase/module.py`, and
-> `grep -l 'kind="dual"' modules/`. `power-shaper-dual-v1` tags the
-> pre-revert module and `continuity/item11-gen-mode-failure.md` holds the
-> post-mortem.
->
-> The kind existing and a module using it are separate questions — check
-> both.
+> Gen mode was briefly SILENT and briefly reverted; both are history now.
+> The post-mortem is worth reading before you add a kind:
+> `continuity/item11-gen-mode-failure.md`.
 
 Copy an existing file in `modules/` and change the body. The contract:
 
@@ -250,6 +240,16 @@ Rules:
    signal in `EnvGen.kr(envelope=Envelope.adsr(...), gate=gate)`. Keep
    `done_action` unset (0) so the node survives release — mono voices are
    persistent nodes.
+
+   **A module that declares `freq` + `gate` MUST be reachable by a voice**,
+   and `App._is_playable` is the SINGLE place that decides. It is one
+   predicate because it used to be four, and they drifted: all four tested
+   `kind == "source"`, which quietly made every `dual` module unreachable —
+   no voice would aim at one, so its gate never opened and Power Shaper was
+   silent in GEN mode while its DSP was provably correct. Declaring the two
+   controls is not enough on its own; something has to be willing to write
+   them. `tests/test_playable.py` enforces it. **If you add a playability
+   condition, it goes in `_is_playable` — never in a second place.**
 6. **Keep one module per file** unless variants truly belong together.
 7. Smoothing: wrap params that will be twiddled in `Lag.kr(source=p,
    lag_time=0.02)` to avoid zipper noise.
@@ -320,7 +320,9 @@ instance ids, multi-voice, tonic→drone, keyshift lanes, tap-closure and
 snip-heal) · `test_looper.py` (deck timing, take pairing) · `test_gate`,
 `test_ping`, `test_deriver`, `test_lfo`, `test_threshold`, `test_transport`,
 `test_allocation`, `test_drone_alloc`, `test_reactive`, `test_audio_session`,
-`test_rig`, `test_power_sine`.
+`test_rig`, `test_power_sine` — eighteen on `main`, and `test_playable`
+(**a module declaring `freq`+`gate` is REACHABLE by a voice** — the join
+nothing used to test) makes nineteen once `fix/p11-dual-playable` lands.
 
 **2. Playwright suites — the RENDER**, driven against mock state/events.
 `check_blocks.py` (blocks geometry — sections 1–10 are the regression net) ·
@@ -350,8 +352,10 @@ browser.
 
 Write NEW checks failing-first against the broken behavior.
 
-`test_mixed_sources.py`, `diag_*.py`, `hear_check.py`, and `probe_ws.py`
-talk to a **live** server over websocket instead of running headless — they
+`tests/live_dual_mode.py` (both Power Shaper modes through real audio —
+GEN tone, FX spectrum; on `fix/p11-dual-playable`), `tests/probe_live_gui.py`, `test_mixed_sources.py`,
+`diag_*.py`, `hear_check.py` and `probe_ws.py` talk to a **live** server
+over websocket instead of running headless — they
 need `python -m synthbase gui` actually running with real audio, so treat
 them as Mac-only manual checks, not something CI or a cloud session can run.
 
@@ -437,23 +441,41 @@ nets keep their last healthy state. Restore first, then diff.
   upstream ("generators go dead"). **This is KIND-SPECIFIC**: a wire into a
   `dual` module goes to its `in_bus` instead of summing. Never infer the
   destination's behaviour from the fact that it is a destination —
-  `Rack._dst_bus` decides, and it is the only thing that does.
-- **NOTHING ASSERTS THAT A PLAYABLE MODULE IS REACHABLE BY A VOICE.** Not
-  one of the 18 Python or 3 Playwright suites. That is how item 11's
+  `Rack._dst_bus` decides, and it is the only thing that does. Covered by
+  `test_graph.py` through the REAL rewire path, not merely asserted here.
+- **A PLAYABLE MODULE MUST BE REACHABLE BY A VOICE — now tested
+  (`tests/test_playable.py`), and it was not.** That gap is how item 11's
   Power Shaper — a module that **could never make a sound** — shipped
-  green on 2026-07-27: `rack.py` was widened to the `generates()` /
-  `takes_audio_in()` predicates, but `app.py`'s FOUR playability tests
-  still compared `kind == "source"` by strict equality (`:471`, `:924`,
-  `:1153`, `:1579`), so no voice would ever aim at it, and a playable
-  source spawns `gate=0` — the envelope never opened. Every suite passed
-  because each one tested a layer: the module compiles, the rack accepts
-  it, the card renders. **Nothing tested the JOIN** — that a thing
-  declaring itself playable is actually reachable from the note plane.
-  Until such a check exists, **adding a kind or a playability rule means
-  grepping every predicate over `kind` yourself** (`grep -rn 'kind ==' \
-  synthbase/`) — a new kind is done when every predicate over it has been
-  re-derived, not when it compiles. Post-mortem:
-  `continuity/item11-gen-mode-failure.md`.
+  green: `rack.py` was widened to the `generates()`/`takes_audio_in()`
+  predicates, but `app.py`'s FOUR playability tests still compared
+  `kind == "source"` by strict equality, so no voice would aim at it, and
+  a playable source spawns `gate=0` with nothing to open it. Every suite
+  passed because each tested a LAYER — the module compiles, the rack
+  accepts it, the card renders — and **none tested the JOIN**, that
+  something declaring itself playable is reachable from the note plane.
+  The four predicates are now one, `App._is_playable`. When you add a
+  layer, ask what joins it to the next one; that is where the silent
+  failures live.
+- **ADDING A VALUE TO AN ENUM IS NOT DONE WHEN THE CODE THAT BRANCHES ON
+  IT COMPILES — it is done when every PREDICATE over it has been
+  re-derived.** This is the generalisable form of the bug above, and it
+  bites whenever a type gains a member. Item 11 audited `rack.py` line by
+  line for `kind` and got it exactly right; `app.py` was never audited at
+  all, and that asymmetry was invisible because everything still compiled
+  and every suite still passed. **One `grep "module.kind" synthbase/`
+  would have found all four missed sites in a single pass** — cheaper than
+  the audit that was done, and it is the audit that was skipped. Before
+  adding a member to `KINDS` (or any enum-shaped set): grep the ATTRIBUTE,
+  not the identifier, and re-derive every test over it.
+- **`set_param` SPEAKS NORMALISED UNITS (0–1), NOT RAW ONES.** A live
+  check sent a raw value, so the parameter sat at its identity curve, the
+  DSP passed a sine through unchanged, and **the check went green while
+  measuring nothing** — caught only because the numbers didn't move when
+  they should have. A test that drives a param through `set_param` must
+  normalise, and should assert the output CHANGED, not merely that it
+  arrived: a check whose pass condition is satisfied by a no-op is not a
+  check. Same family as the mock landmines below — the failure is always
+  something that agrees with you too easily.
 - **A TEST DOUBLE THAT ENUMERATES A PRODUCTION TYPE'S FIELDS breaks
   silently when that type gains one.** A double that lists what it expects
   — rather than mirroring the real shape — keeps passing while quietly
