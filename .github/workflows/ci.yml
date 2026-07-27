@@ -47,6 +47,12 @@ jobs:
       - name: Transport card tests
         run: python tests/test_transport.py
 
+      # The device-start STALL needs a Mac, but the fallback logic around it
+      # does not — and that logic is what decides whether the engine boots at
+      # all. tests/audio_proof.py is the Mac-only other half.
+      - name: Audio session / device fallback tests
+        run: python tests/test_audio_session.py
+
   gui-checks:
     name: GUI checks (headless Playwright)
     runs-on: ubuntu-latest

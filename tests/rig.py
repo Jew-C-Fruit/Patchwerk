@@ -292,41 +292,20 @@ def free_udp_port() -> int:
     return p
 
 
-def classify_scsynth(ready: bool, devices: bool, rc, text: str) -> str:
-    """Turn a scsynth run into a NAMED cause. Never just "it didn't work".
-
-    The audio session spent hours on `rc=-6, Setting sample rate failed` —
-    a 24 kHz default input against a 48 kHz output — because the probe
-    answered with a bool and somebody guessed "microphone permission". A
-    boolean that collapses four causes into one costs far more time than it
-    saves, so every distinguishable failure gets its own sentence here.
-    """
-    low = (text or "").lower()
-    if ready:
-        return "ready"
-    if rc is not None:
-        if "sample rate" in low:
-            return (f"scsynth exited rc={rc}: SETTING SAMPLE RATE FAILED — the "
-                    "input and output devices disagree (a 24 kHz mic against "
-                    "a 48 kHz output does it). This is NOT a permissions "
-                    "problem. Boot with --no-midi-irrelevant input off "
-                    "(`-i 0` / `--in-device`), or match the rates in Audio "
-                    "MIDI Setup.")
-        if "could not open" in low or "failed to open" in low:
-            return (f"scsynth exited rc={rc}: could not open the audio device "
-                    "— it may be held exclusively, or gone (bluetooth).")
-        if rc == -6:
-            return (f"scsynth aborted (rc={rc}) during startup — read the tail; "
-                    "an abort here is a device negotiation failure, not a crash.")
-        return f"scsynth exited rc={rc} before becoming ready"
-    if devices:
-        return ("scsynth enumerated CoreAudio devices and never started one — "
-                "the device-start stall. It did not exit and did not become "
-                "ready; audio cannot start in this session.")
-    return "scsynth produced no device list at all — check the SuperCollider install"
+#: ONE diagnosis path, not two. `classify_scsynth` lived here first; it now
+#: lives in `synthbase/audio_session.py` because the ENGINE needs the cause
+#: too — `boot_note` is what tells the user why the input meter is missing,
+#: and it was making the exact "no microphone permission" misattribution this
+#: classifier exists to prevent. `tests/` may import `synthbase/`; the reverse
+#: would be backwards. Re-exported so `rig.classify_scsynth` still resolves.
+from synthbase.audio_session import (  # noqa: E402
+    PROBE_ATTEMPTS,
+    classify_scsynth,
+    output_only_devices,
+)
 
 
-def scsynth_check(timeout: float = 15.0) -> dict:
+def scsynth_check(timeout: float = 15.0, device: str | None = None) -> dict:
     """Can scsynth start an audio device on this machine RIGHT NOW?
 
     Spawns a bare scsynth — no supriya, no Patchwerk — on a fresh UDP port
@@ -335,6 +314,13 @@ def scsynth_check(timeout: float = 15.0) -> dict:
     and a machine where the devices disagree on sample rate exits instead
     of stalling. Those are three different answers and get three different
     `why` sentences.
+
+    `device` pins `-H`. Leaving it None reproduces the DEFAULT device choice,
+    which is the configuration that stalls in a disclaimed session — and note
+    that `-i 0` below does NOT save it, because disabling input buses does not
+    stop scsynth opening the default input DEVICE. So a stall here means "the
+    default device cannot start", never "this machine has no audio": callers
+    must re-ask with an output-only device before concluding anything.
 
     Returns {"ready", "devices", "udp", "rc", "why", "others", "seconds",
     "tail"}. It kills ONLY the scsynth it spawned.
@@ -347,7 +333,10 @@ def scsynth_check(timeout: float = 15.0) -> dict:
     others = len(scsynth_alive())      # reported, never touched
     p = free_udp_port()
     t0 = time.monotonic()
-    proc = subprocess.Popen([str(sc), "-u", str(p), "-i", "0", "-o", "2"],
+    argv = [str(sc), "-u", str(p), "-i", "0", "-o", "2"]
+    if device:
+        argv += ["-H", device]
+    proc = subprocess.Popen(argv,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, bufsize=1)
     lines: list[str] = []
@@ -1269,8 +1258,30 @@ async def _cmd_doctor(args) -> int:
     print(f"\n{chk['why']}")
     if chk["ready"]:
         return 0
-    print("\nUse silent=True / --silent meanwhile: the control plane, the "
-          "level taps and the transcript all still work without audio.")
+    # Do not condemn the session on the DEFAULT device alone. The stall is an
+    # input-stream authorization, and an output-only device sidesteps it —
+    # which is the configuration the engine actually boots with here, so a
+    # doctor that reports "no audio" would be contradicting a working rig.
+    for dev in output_only_devices():
+        for _ in range(PROBE_ATTEMPTS):
+            # Retried: killing the stalled probe above leaves coreaudiod
+            # briefly unable to start ANY device, and a single attempt here
+            # reported "no audio at all" on a machine where audio was fine.
+            alt = await asyncio.to_thread(scsynth_check, 8.0, dev)
+            if alt["ready"]:
+                break
+        if alt["ready"]:
+            print(f"\nAudio CAN start — on {dev!r} ({alt['seconds']}s), just "
+                  "not on the default device.\nsynthbase.audio_session pins "
+                  "the engine to an output-only device automatically, so a "
+                  "rig\nboots here with real audio. Audio INPUT is "
+                  "unavailable: the input meter and\nmodules/audio_in.py are "
+                  "off, and state.boot_note says which cause it was.")
+            return 0
+    print("\nNo output-only device could start either, so this really is a "
+          "mute session.\nUse silent=True / --silent meanwhile: the control "
+          "plane, the level taps and the\ntranscript all still work without "
+          "audio.")
     return 1
 
 
