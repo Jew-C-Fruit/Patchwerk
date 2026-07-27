@@ -15,6 +15,7 @@ from pathlib import Path
 from supriya import AddAction, Options, Server, find_free_port
 
 from .audio_devices import find_rate_matched_input
+from .audio_session import resolve as resolve_devices
 from .module import Module
 
 
@@ -55,8 +56,34 @@ class Engine:
 
     # -- lifecycle ---------------------------------------------------------
 
+    def _preflight_devices(self) -> None:
+        """Never hand scsynth a device configuration that cannot START.
+
+        The CoreAudio device-start stall has NO timeout and raises NOTHING
+        (see audio_session), so the fallback below — which keys off an
+        exception — can never fire on it. `Server().boot()` would simply
+        block forever. So the device choice is settled BEFORE we boot, by
+        probing a throwaway scsynth rather than by catching a failure that
+        never arrives.
+        """
+        in_dev, out_dev, in_ch, note = resolve_devices(
+            self.options.input_device,
+            self.options.output_device,
+            self.options.input_bus_channel_count,
+        )
+        if note:
+            self.boot_note = note
+            print(f"[engine] {note}")
+        self.options = dataclasses.replace(
+            self.options,
+            input_device=in_dev,
+            output_device=out_dev,
+            input_bus_channel_count=in_ch,
+        )
+
     def boot(self) -> "Engine":
         _ensure_synthdef_dir()
+        self._preflight_devices()
         try:
             self.server = Server().boot(options=self.options)
         except Exception as exc:
