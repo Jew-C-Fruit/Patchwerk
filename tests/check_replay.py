@@ -87,6 +87,27 @@ sys.path.insert(0, str(REPO / "tests"))
 import replay as R                                  # noqa: E402
 from transcript import Transcript, read_transcript  # noqa: E402
 
+_SCRATCH = None
+
+
+def _scratch() -> Path:
+    """A private scratch dir for this process's re-recordings.
+
+    Torn down with the interpreter. Keeping it out of a shared constant
+    path is not tidiness: two sessions writing one filename corrupt each
+    other's evidence, and a corrupted transcript fails as a backend
+    regression rather than as an I/O collision.
+    """
+    global _SCRATCH
+    if _SCRATCH is None:
+        import atexit
+        import shutil
+        import tempfile
+        _SCRATCH = Path(tempfile.mkdtemp(prefix="patchwerk-replay-"))
+        atexit.register(shutil.rmtree, _SCRATCH, ignore_errors=True)
+    return _SCRATCH
+
+
 FAILURES: list[str] = []
 RAN: list[str] = []
 NOTES: list[str] = []
@@ -373,9 +394,16 @@ def emission_plane(rerecord: bool = False) -> None:
             note(f"{fixture}: NOT re-recorded — it needs the reactive-taps "
                  "engine and this tree does not have it")
             continue
-        out = (fpath if rerecord else Path("/tmp") / f"replay_rerecord_{fixture}")
+        # NOT a fixed /tmp path. Several agent sessions share this Mac and
+        # run this suite from different worktrees; a constant filename means
+        # two processes truncate and interleave into the SAME file, and the
+        # corrupted result reads as a backend regression. Measured: a
+        # concurrent session's run produced a 46-entry "recording" of a
+        # 22-entry scenario, with an extra ping, and the diff blamed the
+        # engine. Per-process, and cleaned up with the process.
+        out = fpath if rerecord else _scratch() / f"rerecord_{fixture}"
         try:
-            fresh = R.record(spath, out, port=R.free_port())
+            fresh = R.record(spath, out)
         except Exception as exc:  # noqa: BLE001
             check(f"re-record {scenario} against this tree", False, str(exc)[:400])
             continue
@@ -392,8 +420,18 @@ def emission_plane(rerecord: bool = False) -> None:
             d = R.diff_skeletons(R.skeleton(read_transcript(fpath)), got)
             check(f"{fixture}: the backend still emits what it emitted",
                   d["same"],
-                  f"at #{d['at']} want={d['want']} got={d['got']} "
+                  f"{d['why']} at {d['at']} want={d['want']} got={d['got']} "
                   f"n={d['n_want']}/{d['n_got']} missing={d['missing'][:4]}")
+            # Say out loud how much cross-lane interleaving was absorbed. A
+            # relaxation nobody can see is one nobody re-examines, and the
+            # lane map is exactly the kind of thing that gets widened once
+            # to fix a flake and never narrowed again.
+            if d["tolerated"]:
+                note(f"{fixture}: {d['tolerated']} segment(s) differed only by "
+                     f"interleaving across lanes "
+                     f"({'/'.join(sorted(R.CONCURRENT_EMITTERS))} vs "
+                     f"{R.SETTLE_LANE}) — tolerated, contents and per-lane "
+                     f"order identical")
         else:
             # The fixture is the TARGET contract, replayed by the DOM plane.
             # It cannot be re-derived here, and pretending otherwise would
