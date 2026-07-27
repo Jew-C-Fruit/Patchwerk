@@ -5269,6 +5269,144 @@ def main():
               in page.evaluate("window.__sent"),
               str(page.evaluate("window.__sent")))
 
+        # ================================================================
+        # SECTION 30 — item 29: the Drone Voice card ("hold" policy).
+        # The dispatch here is a BUG FIX as much as a feature: state.voices
+        # is no longer mono-only, and a hold entry rendered as "Mono Voice"
+        # before a policy dispatch existed.
+        # ================================================================
+        VOICES30 = [
+            {"id": "voice", "target": "signal_gen",
+             "policy": "mono-latest", "slots": 1, "power": None},
+            {"id": "hold", "target": "signal_gen",
+             "policy": "hold", "slots": 1, "power": False},
+        ]
+        page.evaluate("posMem = {};")
+        page.evaluate("(s) => __msg({type: 'state', ...s})", base_state(
+            [sg], [{"from": "signal_gen", "to": "master"}],
+            available=AVAIL27, voices=VOICES30))
+        page.wait_for_timeout(500)
+
+        pal30 = page.evaluate("""(() => [...document.querySelectorAll(
+          '#palette h3, #palette button')].map(e => e.tagName + ':'
+            + e.textContent))()""")
+        ai = pal30.index("H3:allocation")
+        check("item 29: all three allocation buttons, in policy order",
+              pal30[ai + 1:ai + 4] == ["BUTTON:Mono Voice", "BUTTON:Poly Voice",
+                                       "BUTTON:Drone Voice"],
+              str(pal30[ai:ai + 5]))
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("""() => [...document.querySelectorAll('#palette button')]
+          .find(b => b.textContent === 'Drone Voice').click()""")
+        page.wait_for_timeout(120)
+        check("…and Drone Voice spawns with no arguments",
+              {"type": "spawn_drone_voice"} in page.evaluate("window.__sent"),
+              str(page.evaluate("window.__sent")))
+
+        d30 = page.evaluate("""(() => {
+          const n = nodes.get('hold'), m = nodes.get('voice');
+          const labels = (c) => [...c.el.querySelectorAll('.mini label')]
+            .map(l => l.title);
+          const port = (c, pred) => c.ports.find(pred);
+          const pw = port(n, q => q.sig === 'bin' && q.dir === 'in');
+          return {
+            title: n.el.querySelector('.title').textContent,
+            mono: m.el.querySelector('.title').textContent,
+            fam: n.fam, size: n.size,
+            sub: n.el.querySelector('.sub').textContent,
+            rows: labels(n),
+            tone: !!port(n, q => q.sig === 'ctl' && q.dir === 'in'),
+            drive: !!port(n, q => q.sig === 'ctl' && q.dir === 'out'),
+            pwEp: pw && pw.ep, pwSingle: pw && !!pw.single,
+            stripe: !!n.el.querySelector('.stripe.pwr'),
+            lit: n.el.querySelector('.stripe').classList.contains('on'),
+            // measured sizing: none of the declared-size opt-ins
+            declared: !!(n.defaultSize || n.ownFaces),
+          };
+        })()""")
+        check("a hold entry titles its card Drone Voice, not Mono Voice",
+              d30["title"] == "Drone Voice" and d30["mono"] == "Mono Voice",
+              str(d30))
+        check("…ctl family, measured sizing (no declared-size opt-ins)",
+              d30["fam"] == "ctl" and not d30["declared"], str(d30))
+        check("…two rows, no subtitle, no bend and no voices row",
+              d30["rows"] == ["target"] and d30["sub"] == "", str(d30))
+        check("…TONE in + drive out, and POWER at '<gid>:pwr' as fan-in",
+              d30["tone"] and d30["drive"] and d30["pwEp"] == "hold:pwr"
+              and not d30["pwSingle"], str(d30))
+        check("…POWER renders as the card's colour bar, seeded off",
+              d30["stripe"] and not d30["lit"], str(d30))
+
+        # The click route. togglePower() is the "one door" every press path
+        # funnels through (§17 covers bindNode's stationary-press-vs-drag on
+        # the stripe itself; re-testing that here would be testing addCard).
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("() => nodes.get('hold').togglePower()")
+        page.wait_for_timeout(120)
+        check("toggling the bar sends set_drone_power and fills it",
+              {"type": "set_drone_power", "id": "hold", "on": True}
+              in page.evaluate("window.__sent")
+              and page.evaluate("nodes.get('hold').el.querySelector('.stripe')"
+                                ".classList.contains('on')"),
+              str(page.evaluate("window.__sent")))
+
+        # THE REACTIVE ROUTE — the reason this card gets an indicator at all.
+        # A binary wire driving "<id>:pwr" applies server-side outside the
+        # broadcast, so this tap is the only live signal. Unlike item 10's
+        # poly card, the tap is proven to fire on both edges from both routes
+        # (tests/test_drone_alloc.py), so the indicator may depend on it.
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'hold:pwr', on: false}})")
+        page.wait_for_timeout(80)
+        check("a logic level-in EMPTIES the bar with no click and no rebuild",
+              not page.evaluate(
+                  "nodes.get('hold').el.querySelector('.stripe')"
+                  ".classList.contains('on')"))
+        check("…and updates state.voices[].power so a rebuild agrees",
+              page.evaluate("(state.voices.find(v => v.id === 'hold')||{})"
+                            ".power") is False)
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'hold:pwr', on: true}})")
+        page.wait_for_timeout(80)
+        check("…and re-fills it on the rising edge",
+              page.evaluate(
+                  "nodes.get('hold').el.querySelector('.stripe')"
+                  ".classList.contains('on')"))
+        # the model update must survive an actual rebuild, not just look right
+        page.evaluate("() => rebuildGraph()")
+        page.wait_for_timeout(300)
+        check("…and the bar is still filled after a real rebuild",
+              page.evaluate(
+                  "nodes.get('hold').el.querySelector('.stripe')"
+                  ".classList.contains('on')"))
+
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("() => nodes.get('hold').el.querySelector('.kill').click()")
+        page.wait_for_timeout(120)
+        check("kill sends remove_voice (there is no remove_drone_voice)",
+              {"type": "remove_voice", "id": "hold"}
+              in page.evaluate("window.__sent"),
+              str(page.evaluate("window.__sent")))
+
+        # An UNKNOWN policy must not blank the canvas. The id here is one no
+        # earlier state used, deliberately: asserting on "voice" passed even
+        # when the fallback was mutated away, because a STALE node from the
+        # previous push satisfied nodes.get(). A fresh id can only exist if
+        # the fallback actually ran.
+        page.evaluate("(s) => __msg({type: 'state', ...s})", base_state(
+            [sg], [{"from": "signal_gen", "to": "master"}],
+            available=AVAIL27,
+            voices=[{"id": "voice.7", "target": "signal_gen",
+                     "policy": "some-future-policy", "slots": 1}]))
+        page.wait_for_timeout(400)
+        check("an unknown policy falls back to the mono card, not a hole",
+              page.evaluate("!!nodes.get('voice.7')")
+              and page.evaluate("nodes.get('voice.7').el"
+                                ".querySelector('.title').textContent")
+              == "Mono Voice 7")
+
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()
 

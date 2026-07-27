@@ -4820,6 +4820,72 @@ function buildVoiceCard(v) {
                   ports: [["in", "ctl", "notes"], ["out", "ctl", "drive"]]});
 }
 
+// item 29: the DRONE voice — allocation policy "hold". It HOLDS the last
+// root instead of releasing it, so it has no gate of its own, and POWER is
+// its only off switch (inherited from the drone module's "bypass is the only
+// off switch", as LEVEL semantics).
+function buildDroneVoiceCard(v) {
+  // ids are "hold", "hold.2", … — the type is `hold`, NOT `drone`, because
+  // `drone` is a MODULE type and a ctl node sharing an id with a rack
+  // instance would shadow it in the note router. The id is plumbing; the
+  // card's name is the product.
+  const gid = v.id;
+  const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
+  const rows = [
+    rowChip({gid}, "target", {
+      text: v.target || "—",
+      onClick: (chip) => {
+        const srcs = playableSources();
+        if (!srcs.length) return;
+        const key = srcs[(srcs.indexOf(chip.textContent) + 1) % srcs.length];
+        chip.textContent = key;
+        send({type: "set_voice_target", key, voice: gid});
+      },
+    }),
+  ];
+  // Deliberately absent: a bend readout (a drone is the reference you bend
+  // AGAINST, so Mono Voice's ±2 st chip would be a lie here), a voices row
+  // (slots is always 1), a root readout (the held root is not broadcast) and
+  // a subtitle (nothing here is live state duplicated nowhere). Body is
+  // params only, so sizing stays MEASURED — no defaultSize/ownFaces.
+  const n = addCard({
+    gid, name: "Drone Voice" + suffix, short: "Drone" + suffix,
+    sub: "", fam: "ctl", rows,
+    // POWER is the card's COLOUR BAR — the same chrome as a chain card's
+    // power (outline off / filled on, bindNode splitting a stationary press
+    // from a drag). This is the first ctl card with a real power axis.
+    // addCard registers uiParam[gid + ".pwr"] off this headCheck, which IS
+    // the whole reactive wiring: the backend already emits
+    // {"kind":"level","ep":"<id>:pwr"} from a click AND from a binary wire.
+    headCheck: {
+      checked: !!v.power,
+      onChange: (on) => {
+        v.power = on;          // local truth (the broadcast excludes us)
+        send({type: "set_drone_power", id: gid, on});
+      },
+    },
+    kill: () => send({type: "remove_voice", id: gid}),
+    // TONE in at the bare gid + drive out, as Mono Voice
+    ports: [["in", "ctl", "notes"], ["out", "ctl", "drive"]],
+  });
+  // POWER in: a quiet BINARY level-in at "<gid>:pwr", exactly like a chain
+  // card's — fan-in (no `single`), anchored to the head so the wire lands on
+  // the stripe it drives.
+  n.ports.push({dir: "in", sig: "bin", label: "power", quiet: true,
+                rowEl: n.el.querySelector(".head"), ep: gid + ":pwr"});
+  return n;
+}
+
+// item 29: state.voices is no longer mono-only, so the card is chosen by
+// POLICY. An unknown policy falls back to the mono card rather than blanking
+// the canvas, so an older or newer server can never leave a hole. mono-latest
+// and poly share buildVoiceCard (it already titles and rows itself off the
+// policy); "hold" is different enough — no bend, a power axis — to be its own.
+const VOICE_CARD = {hold: buildDroneVoiceCard};
+function buildAllocationCard(v) {
+  return (VOICE_CARD[v && v.policy] || buildVoiceCard)(v);
+}
+
 // one ESTIMATOR card per state.tonics entry: two-layer scale-aware root
 // derivation (instant commit; the old settle-and-land hysteresis is gone).
 // Notes in are evidence; the committed root is the mono
@@ -6197,7 +6263,7 @@ function rebuildGraph() {
   const deck = buildDeckCard();
   const voiceList = (state.voices && state.voices.length)
     ? state.voices : [{id: "voice", target: state.voice_target}];
-  const voiceNodes = voiceList.map(buildVoiceCard);
+  const voiceNodes = voiceList.map(buildAllocationCard);
   const tonicNodes = [...(state.tonics || []).map(buildTonicCard),
                       ...(state.literals || []).map(buildLiteralCard)];
   const ksNodes = (state.keyshifts || []).map(buildKeyshiftCard);
@@ -6486,6 +6552,8 @@ function renderPalette() {
   // item 10: same family, different policy — N notes at once on ONE target
   // source. 8 is the engine's own default; the card's step slider retunes it.
   btn("Poly Voice", FAMILY.ctl, () => send({type: "spawn_poly", voices: 8}));
+  // item 29: the "hold" policy — holds the last root, POWER is its off switch
+  btn("Drone Voice", FAMILY.ctl, () => send({type: "spawn_drone_voice"}));
   h3("control");
   btn("LFO ∿", FAMILY.service, () => send({type: "spawn_lfo"}));
   btn("Key Shifter", FAMILY.ctl, () => send({type: "spawn_keyshift"}));
@@ -6916,6 +6984,10 @@ function onMidi(e) {
         const mod = (state && state.chain || []).find(c => c.key === base);
         if (mod) mod.enabled = on;
       }
+      // item 29: a drone voice's POWER lives in state.voices[], not the
+      // chain — without this the next rebuild reverts the stripe
+      const dv = (state && state.voices || []).find(x => x.id === base);
+      if (dv) dv.power = on;
       // cards key on the GID: chain modules are "m:<key>", players are bare
       const setter = uiParam[`m:${base}.pwr`] || uiParam[`${base}.pwr`];
       if (setter) setter(0, on);
