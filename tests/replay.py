@@ -145,25 +145,117 @@ def skeleton(t: Transcript | list) -> list[tuple]:
     return out
 
 
-def diff_skeletons(want: list[tuple], got: list[tuple]) -> dict:
-    """Compare two skeletons. Returns counts plus the first divergence.
+#: Event kinds emitted OFF the gate settle pass's thread, each its own LANE.
+#: Everything else shares one lane, so its ordering stays fully checked.
+#:
+#: This is an allowlist of what the engine genuinely does NOT order, not a
+#: partition of the stream — the distinction is the whole point. Relaxing
+#: globally (sorting within a timestamp, or comparing multisets) would stop
+#: noticing a genuinely reordered sequence, which is the trade refused when
+#: the probe window was widened. Ordering between SOME pairs is meaningful
+#: and between others is not, so the harness is told which is which.
+#:
+#: Each entry states the thread boundary that makes it unordered. An entry
+#: with no such boundary is a bug being excused, not a race being modelled.
+CONCURRENT_EMITTERS = {
+    "looper": (
+        "synthbase/looper.py:344-351 — `state = \"recording\"` is set inside "
+        "start_recording(), which runs on the looper's own daemon thread (or "
+        "a threading.Timer), while the deck:rec pulse pair is emitted from "
+        "the gate settle pass. Two threads, no synchronisation between them, "
+        "so there is no order to assert. Measured: across 8 recordings the "
+        "multiset and length were identical every time and the ONLY pair "
+        "ever seen in both orders was ('looper','recording') <-> "
+        "('level','deck:rec',False,True) — the reported flake exactly."),
+}
 
-    Order-sensitive on purpose — `{"kind":"transport"}` must precede the
-    `level` tap that caused it, and a reordering there is a real defect.
+#: The lane every ordered-by-construction event shares.
+SETTLE_LANE = "settle"
+
+
+def lane_of(entry: tuple) -> str:
+    return entry[0] if entry[0] in CONCURRENT_EMITTERS else SETTLE_LANE
+
+
+def _segments(sk: list[tuple]) -> list[tuple]:
+    """Split a skeleton at its marks. Returns [(mark_label, [entries]), ...].
+
+    Marks are TOTAL-ORDER BARRIERS: a scenario's phases happen in sequence,
+    so an event may float within its phase and never across one. That is
+    what keeps this from being a global relaxation — cross-lane freedom is
+    scoped to a single mark segment, and every segment's contents are still
+    compared as an exact multiset.
     """
-    n = min(len(want), len(got))
-    first = next((i for i in range(n) if want[i] != got[i]), None)
-    if first is None and len(want) != len(got):
-        first = n
-    return {
-        "same": first is None and len(want) == len(got),
-        "at": first,
-        "want": want[first] if first is not None and first < len(want) else None,
-        "got": got[first] if first is not None and first < len(got) else None,
-        "n_want": len(want), "n_got": len(got),
-        "missing": [k for k in want if k not in got],
-        "extra": [k for k in got if k not in want],
-    }
+    out, label, cur = [], None, []
+    for e in sk:
+        if e[0] == "mark":
+            out.append((label, cur))
+            label, cur = e[1], []
+        else:
+            cur.append(e)
+    out.append((label, cur))
+    return out
+
+
+def diff_skeletons(want: list[tuple], got: list[tuple]) -> dict:
+    """Compare two skeletons under a PARTIAL order. Order still matters.
+
+    Three things are asserted, and only the fourth is relaxed:
+
+    1. the sequence of MARKS matches exactly — phases cannot reorder;
+    2. within each mark segment the multiset of events is identical — so
+       nothing may go missing, appear, or drift into another phase;
+    3. within each segment, each LANE's ordered subsequence is identical —
+       so `{"kind":"transport"}` still has to precede the level tap it
+       caused, and a pulse's on-half still has to precede its off-half;
+    4. the INTERLEAVING between different lanes is free — and only between
+       lanes named in CONCURRENT_EMITTERS, each with the thread boundary
+       that earns it.
+
+    `tolerated` counts the cross-lane interleavings actually absorbed. It is
+    reported rather than hidden: if that number starts climbing, the lane
+    map has been drawn too coarsely and someone should look.
+    """
+    from collections import Counter
+    ws, gs = _segments(want), _segments(got)
+    wm, gm = [s[0] for s in ws], [s[0] for s in gs]
+    if wm != gm:
+        i = next((k for k in range(min(len(wm), len(gm))) if wm[k] != gm[k]),
+                 min(len(wm), len(gm)))
+        return {"same": False, "at": i, "why": "mark sequence differs",
+                "want": ("mark", wm[i] if i < len(wm) else None),
+                "got": ("mark", gm[i] if i < len(gm) else None),
+                "n_want": len(want), "n_got": len(got),
+                "missing": [], "extra": [], "tolerated": 0}
+
+    tolerated = 0
+    for (label, we), (_, ge) in zip(ws, gs):
+        cw, cg = Counter(we), Counter(ge)
+        if cw != cg:
+            miss = list((cw - cg).elements())
+            extra = list((cg - cw).elements())
+            return {"same": False, "at": label, "why": "segment contents differ",
+                    "want": miss[0] if miss else None,
+                    "got": extra[0] if extra else None,
+                    "n_want": len(want), "n_got": len(got),
+                    "missing": miss, "extra": extra, "tolerated": tolerated}
+        for lane in {lane_of(e) for e in we}:
+            lw = [e for e in we if lane_of(e) == lane]
+            lg = [e for e in ge if lane_of(e) == lane]
+            if lw != lg:
+                i = next((k for k in range(min(len(lw), len(lg)))
+                          if lw[k] != lg[k]), 0)
+                return {"same": False, "at": f"{label}/{lane}",
+                        "why": f"lane {lane!r} reordered within the segment",
+                        "want": lw[i] if i < len(lw) else None,
+                        "got": lg[i] if i < len(lg) else None,
+                        "n_want": len(want), "n_got": len(got),
+                        "missing": [], "extra": [], "tolerated": tolerated}
+        if we != ge:
+            tolerated += 1
+    return {"same": True, "at": None, "why": "", "want": None, "got": None,
+            "n_want": len(want), "n_got": len(got),
+            "missing": [], "extra": [], "tolerated": tolerated}
 
 
 def record(scenario: str | Path, out: str | Path, *, port: int | None = None,
@@ -176,30 +268,63 @@ def record(scenario: str | Path, out: str | Path, *, port: int | None = None,
     """
     scenario, out = Path(scenario), Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ)
-    if port:
-        env["SS_PORT"] = str(port)
-    r = subprocess.run(
-        [sys.executable, str(REPO / "tests" / "rig.py"), "--silent",
-         "-o", str(out), "play", str(scenario)],
-        cwd=str(REPO), env=env, capture_output=True, text=True, timeout=timeout)
-    if r.returncode != 0 or not out.exists():
-        raise RuntimeError(f"record({scenario.name}) failed rc={r.returncode}\n"
-                           f"{r.stdout[-2000:]}\n{r.stderr[-2000:]}")
-    return read_transcript(out)
+    last = ""
+    # A port can be claimed between `free_port()` reading the registry and
+    # `rig.py` acquiring it — genuinely racy, and the driver's refusal is
+    # the correct behaviour, not an error to suppress. Retry on a fresh
+    # port; do NOT retry anything else, so a real boot failure still fails.
+    for attempt in range(3):
+        p = port or free_port()
+        env = dict(os.environ, SS_PORT=str(p))
+        r = subprocess.run(
+            [sys.executable, str(REPO / "tests" / "rig.py"), "--silent",
+             "-o", str(out), "play", str(scenario)],
+            cwd=str(REPO), env=env, capture_output=True, text=True,
+            timeout=timeout)
+        if r.returncode == 0 and out.exists():
+            return read_transcript(out)
+        last = f"rc={r.returncode}\n{r.stdout[-2000:]}\n{r.stderr[-2000:]}"
+        if "REFUSED" not in r.stdout + r.stderr or port:
+            break
+        print(f"      port {p} was claimed between check and acquire — retrying")
+    raise RuntimeError(f"record({scenario.name}) failed after "
+                       f"{attempt + 1} attempt(s)\n{last}")
 
 
 def free_port(lo: int = 8810, hi: int = 8899) -> int:
-    """A port nothing is listening on — parallel sessions share this Mac."""
+    """A port nothing is listening on AND nothing has CLAIMED.
+
+    Binding is not sufficient on its own any more. `tests/rigreg.py` is the
+    machine-wide ownership registry the driver refuses to fight, and a rig
+    that is still booting holds its claim before it holds the socket — so a
+    bind test alone happily hands out a port that `rig.py` will then refuse.
+
+    Scanning from a per-process offset matters just as much. Several agent
+    sessions share this Mac; if every one of them walks the range from the
+    bottom, they all pick 8810 and collide by construction. Measured: a
+    concurrent session's `--emission` run held 8810 and every attempt here
+    failed on it.
+    """
     import socket
-    for p in range(lo, hi):
+    try:
+        import rigreg
+        claimed = {r.get("port") for r in rigreg.live()}
+    except Exception:  # noqa: BLE001 — pre-registry base, or no rigreg
+        claimed = set()
+    span = hi - lo
+    start = os.getpid() % span
+    for k in range(span):
+        p = lo + (start + k) % span
+        if p in claimed:
+            continue
         with socket.socket() as s:
             try:
                 s.bind(("127.0.0.1", p))
             except OSError:
                 continue
             return p
-    raise RuntimeError(f"no free port in {lo}..{hi}")
+    raise RuntimeError(f"no free port in {lo}..{hi} "
+                       f"({len(claimed)} claimed by other rigs)")
 
 
 # -- the DOM plane ------------------------------------------------------------

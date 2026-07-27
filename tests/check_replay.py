@@ -87,6 +87,27 @@ sys.path.insert(0, str(REPO / "tests"))
 import replay as R                                  # noqa: E402
 from transcript import Transcript, read_transcript  # noqa: E402
 
+_SCRATCH = None
+
+
+def _scratch() -> Path:
+    """A private scratch dir for this process's re-recordings.
+
+    Torn down with the interpreter. Keeping it out of a shared constant
+    path is not tidiness: two sessions writing one filename corrupt each
+    other's evidence, and a corrupted transcript fails as a backend
+    regression rather than as an I/O collision.
+    """
+    global _SCRATCH
+    if _SCRATCH is None:
+        import atexit
+        import shutil
+        import tempfile
+        _SCRATCH = Path(tempfile.mkdtemp(prefix="patchwerk-replay-"))
+        atexit.register(shutil.rmtree, _SCRATCH, ignore_errors=True)
+    return _SCRATCH
+
+
 FAILURES: list[str] = []
 RAN: list[str] = []
 NOTES: list[str] = []
@@ -342,6 +363,36 @@ FIXTURE_SCENARIOS = [
 ]
 
 
+def _owed_checks(spec: dict, derivable: bool, rerecord: bool) -> list[str]:
+    """Exactly the checks this fixture must produce — the coverage LEDGER.
+
+    Every `continue` in the loop below used to drop the remaining checks
+    silently. A run that failed to record one scenario therefore reported
+    13 checks where a healthy run reported 16: it asserted less while still
+    looking like a run, and the shortfall was visible only to someone who
+    happened to know what 16 meant. Two sessions independently hit that
+    without being able to name it.
+
+    A check that COULD NOT BE EVALUATED is a FAILURE, not an absence. That
+    is the premise of this whole suite, and it has to hold for the suite
+    itself — so the owed set is declared up front and anything unsettled at
+    the end is reported red, by name.
+    """
+    fixture, scenario = spec["fixture"], spec["scenario"]
+    if rerecord:
+        return [] if not derivable else [f"re-record {scenario} against this tree"]
+    owed = [f"re-record {scenario} against this tree",
+            f"{fixture}: no unpaired note-ons in the recording"]
+    if derivable:
+        owed.append(f"{fixture}: the backend still emits what it emitted")
+    want = (spec.get("post_contract_levels", spec["levels"])
+            if R.engine_capabilities()["pulse"] else spec["levels"])
+    owed.append(f"{fixture}: the recording carries >= {want} level taps" if want
+                else f"{fixture}: the recording carries ZERO level taps "
+                     f"({spec.get('pre_contract_note', '')})")
+    return owed
+
+
 def emission_plane(rerecord: bool = False) -> None:
     caps = R.engine_capabilities()
     if not caps["engine"]:
@@ -364,9 +415,16 @@ def emission_plane(rerecord: bool = False) -> None:
             note(f"{fixture}: NOT re-recorded — it needs the reactive-taps "
                  "engine and this tree does not have it")
             continue
-        out = (fpath if rerecord else Path("/tmp") / f"replay_rerecord_{fixture}")
+        # NOT a fixed /tmp path. Several agent sessions share this Mac and
+        # run this suite from different worktrees; a constant filename means
+        # two processes truncate and interleave into the SAME file, and the
+        # corrupted result reads as a backend regression. Measured: a
+        # concurrent session's run produced a 46-entry "recording" of a
+        # 22-entry scenario, with an extra ping, and the diff blamed the
+        # engine. Per-process, and cleaned up with the process.
+        out = fpath if rerecord else _scratch() / f"rerecord_{fixture}"
         try:
-            fresh = R.record(spath, out, port=R.free_port())
+            fresh = R.record(spath, out)
         except Exception as exc:  # noqa: BLE001
             check(f"re-record {scenario} against this tree", False, str(exc)[:400])
             continue
@@ -383,8 +441,18 @@ def emission_plane(rerecord: bool = False) -> None:
             d = R.diff_skeletons(R.skeleton(read_transcript(fpath)), got)
             check(f"{fixture}: the backend still emits what it emitted",
                   d["same"],
-                  f"at #{d['at']} want={d['want']} got={d['got']} "
+                  f"{d['why']} at {d['at']} want={d['want']} got={d['got']} "
                   f"n={d['n_want']}/{d['n_got']} missing={d['missing'][:4]}")
+            # Say out loud how much cross-lane interleaving was absorbed. A
+            # relaxation nobody can see is one nobody re-examines, and the
+            # lane map is exactly the kind of thing that gets widened once
+            # to fix a flake and never narrowed again.
+            if d["tolerated"]:
+                note(f"{fixture}: {d['tolerated']} segment(s) differed only by "
+                     f"interleaving across lanes "
+                     f"({'/'.join(sorted(R.CONCURRENT_EMITTERS))} vs "
+                     f"{R.SETTLE_LANE}) — tolerated, contents and per-lane "
+                     f"order identical")
         else:
             # The fixture is the TARGET contract, replayed by the DOM plane.
             # It cannot be re-derived here, and pretending otherwise would
@@ -411,6 +479,19 @@ def emission_plane(rerecord: bool = False) -> None:
         open_ = R.unpaired_from(fresh)
         check(f"{fixture}: no unpaired note-ons in the recording",
               not open_, str(open_[:3]))
+
+    # Settle the ledger. Nothing below this line can shorten a run silently:
+    # an owed check that never ran is reported red, with its own name, so a
+    # 13-check run cannot masquerade as a 16-check one.
+    ran = set(RAN)
+    for spec in FIXTURE_SCENARIOS:
+        derivable = have_pulse or not spec["needs_pulse"]
+        for name in _owed_checks(spec, derivable, rerecord):
+            if name not in ran:
+                check(name, False,
+                      "NOT EVALUATED — the block exited before reaching it "
+                      "(a recording that failed, or an early return). This is "
+                      "a coverage hole, not a passing check.")
 
 
 # =============================================================================

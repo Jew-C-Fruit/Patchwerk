@@ -112,6 +112,14 @@ jobs:
       - name: Rig driver + transcript tests
         run: python tests/test_rig.py
 
+      # What the skeleton diff still REFUSES. The diff tolerates exactly one
+      # unordered pair (the looper's own thread vs the gate settle pass) and
+      # must keep failing on everything else — a reordered pulse pair, a
+      # missing or extra event, an event drifting across a mark. Synthetic
+      # skeletons only: milliseconds, no rig, no browser.
+      - name: Skeleton-diff partial-order tests
+        run: python tests/test_replay.py
+
       # Item 37 Phase 2, EMISSION half. Re-records each scenario against this
       # commit through tests/silent_rig.py — the real GuiServer over an
       # engine-less SynthApp — and diffs the event stream against the
