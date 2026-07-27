@@ -186,6 +186,12 @@ with Patch(list_audio_devices=fake_devices(["Mic"], ["Speakers"]),
                "ok": False, "cause": A.SAMPLE_RATE,
                "why": A.classify_scsynth(False, True, -6,
                                          "ERROR: Setting sample rate failed")},
+           # No rate-matched input EXISTS here, which is the precondition for
+           # disabling input at all — section 5 covers the case where one
+           # does. Patched rather than left real: `find_rate_matched_input`
+           # reads `audio_devices.list_audio_devices` directly, so it would
+           # shell out to system_profiler from a headless test.
+           find_rate_matched_input=lambda out: None,
            probe=lambda device=None, **kw: {
                "ready": True, "cause": A.READY, "why": "ready",
                "rc": None, "devices": True}):
@@ -226,6 +232,119 @@ import rig as R  # noqa: E402
 
 check("20. tests/rig.py re-exports THE classifier rather than copying it",
       R.classify_scsynth is A.classify_scsynth)
+
+
+# -- 5. sample-rate is the one failure with a RECOVERY --------------------------
+# Naming the cause is only half the value; the other half is that the causes
+# want different things done. A stall cannot be recovered from — no device
+# with an input stream will start. A sample-rate mismatch can: another input
+# device may already run at the output's rate, and using it keeps audio input
+# working instead of silently removing `modules/audio_in.py` and the input
+# meter for the rest of the session.
+#
+# `Engine.boot` has carried this fallback all along and has never executed it:
+# it keys off an exception from `Server().boot()`, and `_preflight_devices`
+# now settles the devices first, so the failing boot it would catch never
+# happens.
+
+CALLS = []
+
+
+def _probe_pair(device=None, input_channels=2, output_device=None, **kw):
+    CALLS.append({"device": device, "input_channels": input_channels,
+                  "output_device": output_device})
+    return {"ready": True, "cause": A.READY, "why": "ready",
+            "rc": None, "devices": True}
+
+
+with Patch(list_audio_devices=fake_devices(["Mic", "Built-in"], ["Speakers"]),
+           input_probe=lambda force=False: {
+               "ok": False, "cause": A.SAMPLE_RATE, "why": "rates disagree"},
+           find_rate_matched_input=lambda out: "Built-in",
+           probe=_probe_pair):
+    CALLS.clear()
+    in_dev, out_dev, ch, note = A.resolve(None, None, 2)
+    check("21. a SAMPLE-RATE failure keeps audio input, on a matched device",
+          (in_dev, ch) == ("Built-in", 2), f"{in_dev!r} ch={ch}")
+    check("22. ...and says which device it swapped to, not that input died",
+          bool(note) and "Built-in" in note and "disabled" not in note,
+          (note or "")[:72])
+    check("23. ...and PROBES the pair it is about to boot, not one half",
+          CALLS and CALLS[-1]["device"] == "Built-in"
+          and CALLS[-1]["input_channels"] == 2, str(CALLS[-1:]))
+
+with Patch(list_audio_devices=fake_devices(["Mic", "Built-in"], ["Speakers"]),
+           input_probe=lambda force=False: {
+               "ok": False, "cause": A.SAMPLE_RATE, "why": "rates disagree"},
+           find_rate_matched_input=lambda out: "Built-in",
+           probe=lambda device=None, **kw: {
+               # the matched device does not start either; only -i 0 does
+               "ready": kw.get("input_channels", 2) == 0,
+               "cause": A.READY if kw.get("input_channels", 2) == 0
+               else A.SAMPLE_RATE,
+               "why": "x", "rc": -6, "devices": True}):
+    _, _, ch, note = A.resolve(None, None, 2)
+    check("24. a matched device that STILL fails falls through to output-only",
+          ch == 0, f"ch={ch}")
+    check("25. ...and boot_note names sample rate, never the microphone",
+          "sample rate" in (note or "").lower()
+          and "microphone" not in (note or "").lower(), (note or "")[:72])
+
+with Patch(list_audio_devices=fake_devices(["Mic"], ["Speakers"]),
+           input_probe=lambda force=False: {
+               "ok": False, "cause": A.STALL, "why": "stalled"},
+           find_rate_matched_input=lambda out: "Built-in",
+           probe=lambda device=None, **kw: {
+               "ready": True, "cause": A.READY, "why": "ready",
+               "rc": None, "devices": True}):
+    _, _, ch, _ = A.resolve(None, None, 2)
+    check("26. a STALL does NOT take the rate-matched path — no grant, no "
+          "device", ch == 0, f"ch={ch}")
+
+with Patch(list_audio_devices=fake_devices(["Mic", "Built-in"], ["Speakers"]),
+           input_probe=lambda force=False: {
+               "ok": False, "cause": A.SAMPLE_RATE, "why": "rates disagree"},
+           find_rate_matched_input=lambda out: "Built-in",
+           probe=_probe_pair):
+    # An EXPLICIT input device is the user's choice; silently substituting a
+    # different one would be the same class of surprise as mis-blaming the mic.
+    _, _, ch, _ = A.resolve("Scarlett", None, 2)
+    check("27. an explicitly requested input is never silently swapped",
+          ch == 0, f"ch={ch}")
+
+
+
+class _RecordingPopen:
+    """Capture scsynth's argv without running it. OSError exits probe early."""
+
+    argv = None
+
+    def __init__(self, argv, **kw):
+        _RecordingPopen.argv = list(argv)
+        raise OSError("not actually launching scsynth")
+
+
+class _FakeSubprocess:
+    Popen = _RecordingPopen
+    PIPE = STDOUT = -1
+    TimeoutExpired = Exception
+
+
+with Patch(subprocess=_FakeSubprocess):
+    A.probe(device="In", input_channels=2, output_device="Out")
+    argv = _RecordingPopen.argv or []
+    check("28. differing devices render scsynth's TWO-ARGUMENT -H",
+          argv[-3:] == ["-H", "In", "Out"], str(argv[-4:]))
+
+    A.probe(device="Same", input_channels=0, output_device="Same")
+    argv = _RecordingPopen.argv or []
+    check("29. one device renders the one-argument form, as before",
+          argv[-2:] == ["-H", "Same"], str(argv[-3:]))
+
+    A.probe(device="Only", input_channels=2)
+    argv = _RecordingPopen.argv or []
+    check("30. omitting output_device changes nothing for existing callers",
+          argv[-2:] == ["-H", "Only"], str(argv[-3:]))
 
 print(f"\n{'PASS' if not FAIL else 'FAIL'} — {len(PASS)} ok, {len(FAIL)} failed"
       + (f": {', '.join(FAIL)}" if FAIL else ""))

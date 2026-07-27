@@ -567,6 +567,45 @@ class GuiServer:
             if key not in self._scope_inflight:
                 self._scope_inflight.add(key)
                 asyncio.create_task(self._run_scope(key, sender))
+        elif t == "capture":
+            # The internal listener. Recording and, especially, WRITING the
+            # buffer are blocking OSC round-trips, so they go to the executor
+            # exactly like a scope capture — a 4-second record awaited on the
+            # message loop would stall every note behind it.
+            act = m.get("action", "record")
+            if act == "arm":
+                res = self.synth.capture.arm(
+                    m.get("target", "master"), float(m.get("seconds", 4.0)),
+                    m.get("path"))
+            elif act == "stop":
+                res = await loop.run_in_executor(
+                    None, self.synth.capture.stop, m.get("path"))
+            elif act == "status":
+                res = self.synth.capture.status()
+            else:
+                res = await loop.run_in_executor(
+                    None, lambda: self.synth.capture.record(
+                        m.get("target", "master"),
+                        float(m.get("seconds", 4.0)), m.get("path")))
+            if sender is not None:
+                await sender.send_json({"type": "capture_done", **res})
+        elif t == "inject":
+            # File as microphone. Unicast the reply for the same reason the
+            # scope does: it answers the asker's question, and no other
+            # client asked it.
+            act = m.get("action", "play")
+            if act == "play":
+                res = self.synth.injector.play(
+                    m["path"], float(m.get("gain", 1.0)),
+                    bool(m.get("loop", False)))
+            elif act == "stop":
+                res = self.synth.injector.stop()
+            elif act == "gain":
+                res = self.synth.injector.set_gain(float(m["gain"]))
+            else:
+                res = self.synth.injector.status()
+            if sender is not None:
+                await sender.send_json({"type": "inject_state", **res})
         elif t == "sustain":
             # global pedal: the arp latch + every mono voice
             self.synth._keys.set_sustain(bool(m.get("on")))

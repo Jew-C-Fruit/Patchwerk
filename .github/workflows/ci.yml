@@ -81,6 +81,29 @@ jobs:
       - name: Drone allocation tests
         run: python tests/test_drone_alloc.py
 
+      # The agent's EAR, calibrated. tests/analysis.py is what turns a
+      # capture into numbers, so everything measured about the rig inherits
+      # its accuracy: each check feeds it a signal whose features are known
+      # from arithmetic (a sine of a stated amplitude, a square with 1/n odd
+      # harmonics, an exponential decay with a stated time constant) and
+      # asserts the number comes back. An extractor 8% off — the classic
+      # un-windowed Goertzel scallop, or a sample-rate conversion nobody
+      # applied — would still emit confident JSON, and every rig measurement
+      # built on it would be wrong in the same direction. Pure stdlib, no
+      # numpy, no server, no audio device.
+      - name: Audio feature extractor + WAV round-trip
+        run: python tests/test_analysis.py
+
+      # The capture tap and the file injector, bookkeeping only — a fake
+      # server stands in, so no scsynth and no device. It pins the two
+      # things that fail SILENTLY: registration keyed on the server OBJECT
+      # (a boolean never re-sends after set_devices builds a new scsynth),
+      # and node frees passing force=True (an unforced free RELEASES a gated
+      # synth instead of freeing it — see rack.py:_free_node_note). The live
+      # half is tests/audio_io_proof.py, Mac-only.
+      - name: Capture tap + input injector tests
+        run: python tests/test_capture.py
+
       # Item 37 Phase 1's headless half — the transcript round-trip, the
       # normaliser Phase 2 diffs through, the stuck-note walker, the scenario
       # grammar, and the check that rig.py's spawn/remove table still matches
