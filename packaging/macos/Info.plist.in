@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>              <string>Patchwerk</string>
+  <key>CFBundleDisplayName</key>       <string>Patchwerk</string>
+  <key>CFBundleExecutable</key>        <string>Patchwerk</string>
+  <key>CFBundleIconFile</key>          <string>Patchwerk.icns</string>
+  <key>CFBundlePackageType</key>       <string>APPL</string>
+  <key>CFBundleInfoDictionaryVersion</key> <string>6.0</string>
+
+  <!-- build.py overwrites these three -->
+  <key>CFBundleIdentifier</key>          <string>com.patchwerk.app</string>
+  <key>CFBundleShortVersionString</key>  <string>0.0.0</string>
+  <key>CFBundleVersion</key>             <string>0.0.0</string>
+
+  <!-- THE KEY THAT MAKES THE PERMISSION OBTAINABLE.
+
+       Without NSMicrophoneUsageDescription, macOS does not show a prompt at
+       all: the request is denied outright, and on the CoreAudio path that
+       denial presents as scsynth enumerating devices and then blocking
+       forever with no error (see synthbase/audio_session.py, item 38).
+
+       This string is what the user reads in the dialog, so it says what
+       Patchwerk actually does with it rather than "this app needs access". -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Patchwerk needs microphone access to use your audio input — the Audio In module and the input meter. macOS puts every audio input device behind this permission. Patchwerk does not record you, and nothing leaves your computer.</string>
+
+  <!-- python-build-standalone targets 10.13+; Core Audio behaviour we rely
+       on and TCC itself want a modern system, so claim 11.0. -->
+  <key>LSMinimumSystemVersion</key>    <string>11.0</string>
+
+  <!-- A normal foreground app: it gets a Dock icon, so there is something to
+       quit. NOT LSUIElement/LSBackgroundOnly — a background-only synth with
+       no way to stop it is how you get an audio process you cannot kill. -->
+  <key>LSBackgroundOnly</key>          <false/>
+
+  <!-- The GUI is served over plain HTTP on 127.0.0.1. Loopback is exempt
+       from ATS by default; this states the intent explicitly and grants
+       nothing beyond it. -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key> <true/>
+  </dict>
+
+  <key>NSHighResolutionCapable</key>   <true/>
+  <key>NSHumanReadableCopyright</key>
+  <string>Patchwerk — MIT licensed. SuperCollider is a separate GPL-3 program, not included.</string>
+</dict>
+</plist>
