@@ -543,7 +543,10 @@ class _FakeBus:
 class _FakeSynth:
     def __init__(self, **kw): self.kw = kw
     def set(self, **kw): self.kw.update(kw)
-    def free(self): pass
+    # supriya's real signature: free() RELEASES a gated synth (/n_set gate 0)
+    # and only force=True emits /n_free. Mocks that omitted `force` are what
+    # hid the node leak the rack now guards against.
+    def free(self, force=False): self.freed = bool(force)
     def move(self, *a, **k): pass
     def pause(self): pass
     def unpause(self): pass
@@ -662,7 +665,9 @@ def test_incremental_remove_frees_only_one():
     app = make_engine_app()
     freed = []
     for i in app.rack.instances:
-        i.node.free = (lambda k=i.key: freed.append(k))  # record who gets freed
+        # `force` is part of supriya's real free() signature — the rack now
+        # passes it, so a recorder that omits it no longer stands in for a node
+        i.node.free = (lambda force=False, k=i.key: freed.append(k))
     keep = {i.key: id(i.node) for i in app.rack.instances
             if not i.service and i.key != "chorus"}
     app.graph_wires = app.rack.audio_wires()

@@ -42,13 +42,23 @@ class FakeNode:
     def __init__(self):
         self.sets = []
         self.freed = False
+        self.free_calls = []      # every `force` value free() was called with
         self.moves = 0
 
     def set(self, **kw):
         self.sets.append(kw)
 
-    def free(self):
-        self.freed = True
+    def free(self, force=False):
+        # Mirror supriya's REAL signature. `Node.free()` emits
+        # `/n_set gate 0` for any synth that has a gate — a release, not a
+        # free — and `/n_free` only when force=True. Every playable source
+        # has a gate (rule 5), which also mandates done_action=0 so the node
+        # survives release. The old mock took no `force` and set freed=True
+        # unconditionally, so it happily "freed" satellites that were still
+        # running on scsynth; the leak was invisible here and only showed up
+        # as a live node count that climbed and never fell.
+        self.freed = bool(force)
+        self.free_calls.append(force)
 
     def pause(self):
         self.paused = True
@@ -91,6 +101,10 @@ class FakeServer:
     def add_bus_group(self, **kw):
         self._next_bus += 2
         return FakeBus(self._next_bus)
+
+    def live(self):
+        """Satellites still running on the server — the count that leaked."""
+        return [n for n in self.spawned if not n.freed]
 
 
 def make_rack(playable=("pad",), server=None):
@@ -201,6 +215,40 @@ def test_bypass_pauses_satellites():
     rack.set_enabled("pad", True)
     check("un-bypass brings them back",
           all(getattr(n, "paused", True) is False for n in sats))
+
+
+def test_satellites_do_not_accumulate():
+    """Live-found (2026-07-26): spawn/dispose cycles took the node count
+    9→13→17→21→25→29 and never down, because an unforced free() only
+    RELEASES a gated synth. Five cycles must end where they started."""
+    rack = make_rack()
+    server = rack.engine.server
+    for cycle in range(5):
+        p = Poly(rack, "pad", voices=4)
+        p.note_on(60)
+        p.note_on(64)
+        p.dispose()
+        check(f"cycle {cycle + 1}: no satellite left running",
+              server.live() == [])
+    check("every satellite was force-freed, not merely released",
+          all(n.free_calls and any(n.free_calls) for n in server.spawned))
+    check("five 4-voice cycles spawned 15 satellites total",
+          len(server.spawned) == 15)
+
+
+def test_free_is_forced_everywhere():
+    """Both teardown paths must force. An unforced free on a gated synth is
+    a silent leak, and the production `except Exception: pass` would hide a
+    signature mistake too."""
+    rack = make_rack()
+    pool = pool_for(rack, "pad")
+    pool.acquire(3)
+    sats = list(rack.engine.server.spawned)
+    pool.release(pool._slots[1:2])          # release() path
+    check("release() forces", sats[0].free_calls == [True])
+    pool.dispose()                          # _free_satellites() path
+    check("dispose() forces", sats[1].free_calls == [True])
+    check("nothing survives", rack.engine.server.live() == [])
 
 
 def test_stale_server_respawns_satellites():
@@ -494,6 +542,57 @@ def test_hold_and_poly_share_one_target():
     check("hold keeps its own pitch",
           target_node(rack).last("freq") == midi_to_freq(48))
     check("poly still sounds both its notes", len(p._sounding) == 2)
+
+
+# ---- rack node freeing: same root cause, pre-existing on main ----------------
+# These sit here rather than in test_graph.py because this file already owns
+# the FakeNode that mirrors supriya's real free(force=...) signature — the
+# mock whose absence hid the bug. The fix is in rack.py, not allocation.py.
+
+def test_rack_detach_actually_frees_a_gated_instance():
+    """Live-found: a GATED instance went 10→11→12→13 on repeated removal
+    while a gateless effect correctly went 14→13. detach_instance is the
+    path the app's module-remove actually takes."""
+    rack = make_rack(playable=("pad", "bell"))
+    node = rack.find("pad").node
+    rack.detach_instance("pad")
+    check("detach_instance force-frees", node.freed and node.free_calls == [True])
+    check("the instance is gone from the rack",
+          [i.key for i in rack.instances] == ["bell"])
+
+
+def test_rack_remove_and_teardown_actually_free():
+    rack = make_rack(playable=("pad", "bell"))
+    node = rack.find("pad").node
+    rack.remove_instance("pad")
+    check("remove_instance force-frees", node.freed)
+    rest = [i.node for i in rack.instances]
+    rack.teardown()
+    check("teardown force-frees every node", all(n.freed for n in rest))
+    check("teardown empties the rack", rack.instances == [])
+
+
+def test_rack_removal_takes_the_satellites_with_it():
+    """The two bugs compose: removing a poly's target must free the target
+    AND its satellites, or the loudest leak in the system is a live chord."""
+    rack = make_rack(playable=("pad", "bell"))
+    p = Poly(rack, "pad", voices=4)
+    p.note_on(60)
+    p.note_on(64)
+    p.note_on(67)
+    target = rack.find("pad").node
+    rack.detach_instance("pad")
+    check("target node freed", target.freed)
+    # detach_instance doesn't own the pool (remove_instance does); the pool
+    # is dropped with the rack, so assert the explicit path too
+    rack2 = make_rack(playable=("pad",))
+    p2 = Poly(rack2, "pad", voices=4)
+    p2.note_on(60)
+    sats = list(rack2.engine.server.spawned)
+    rack2.remove_instance("pad")
+    check("remove_instance frees the satellites too",
+          sats and all(n.freed for n in sats))
+    check("nothing left running", rack2.engine.server.live() == [])
 
 
 # ---- policy registry --------------------------------------------------------

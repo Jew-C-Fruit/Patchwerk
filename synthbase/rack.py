@@ -194,10 +194,28 @@ class Rack:
             self._tail_router = None
         for inst in self.instances:
             if inst.node is not None:
-                inst.node.free()
+                inst.node.free(force=True)   # see _free_node_note below
             if inst.bus_group is not None:
                 inst.bus_group.free()
         self.instances = []
+
+    #: _free_node_note — why every node free() in this file passes force=True.
+    #:
+    #: supriya's `Node.free()` emits `/n_set gate 0` for any synth that HAS a
+    #: gate control and `/n_free` only for one without. Playable sources all
+    #: have a gate (module rule 5), and the same rule mandates done_action=0
+    #: so the node SURVIVES release — deliberately, since voices are
+    #: persistent nodes. The two rules compose into a leak: an unforced free
+    #: silences a gated instance and leaves it running forever, while the
+    #: rack drops its Instance and forgets it exists. Measured live on
+    #: 2026-07-26: removing a gated instance took the node count 10→11→12→13,
+    #: while a gateless reverb correctly went 14→13.
+    #:
+    #: Cost of forcing: removing a module WHILE it is sounding now cuts its
+    #: release tail instead of fading. That is narrow (a gated source is
+    #: silent unless a voice holds a note on it) and strictly better than an
+    #: unbounded leak. Restoring the fade means releasing first and forcing
+    #: after a scheduled delay, which needs a scheduler this file doesn't have.
 
     # -- service sources (drone, future LFO modules) -----------------------------
 
@@ -237,7 +255,7 @@ class Rack:
         if pool is not None:
             pool.dispose()   # else the satellites outlive the card and drone on
         if inst.node is not None:
-            inst.node.free()
+            inst.node.free(force=True)   # see _free_node_note below
         if inst.bus_group is not None:
             inst.bus_group.free()
         self.instances.remove(inst)
@@ -337,7 +355,7 @@ class Rack:
         inst = self.find(key)
         self.instances.remove(inst)
         if inst.node is not None:
-            inst.node.free()
+            inst.node.free(force=True)   # see _free_node_note below
         if inst.bus_group is not None:
             bus = int(inst.bus_group)
             still_used = any(

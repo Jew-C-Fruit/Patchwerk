@@ -185,7 +185,15 @@ class VoicePool:
         for slot in self._slots[1:]:
             if slot.node is not None:
                 try:
-                    slot.node.free()
+                    # force=True or this does NOT free. supriya's
+                    # `Node.free()` emits `/n_set gate 0` for any synth that
+                    # HAS a gate control, and `/n_free` only without one — and
+                    # every playable source has a gate (rule 5), which also
+                    # mandates done_action=0 so the node survives release.
+                    # Unforced, the satellite is merely SILENCED while the
+                    # pool records it as gone: five spawn/dispose cycles took
+                    # the live node count 9→13→17→21→25→29, never down.
+                    slot.node.free(force=True)
                 except Exception:  # noqa: BLE001 — server already gone
                     pass
                 slot.node = None
@@ -221,7 +229,7 @@ class VoicePool:
                 self._leased.discard(slot.index)
                 if slot.index > 0 and slot.node is not None:
                     try:
-                        slot.node.free()
+                        slot.node.free(force=True)   # see _free_satellites
                     except Exception:  # noqa: BLE001
                         pass
                     slot.node = None
