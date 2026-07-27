@@ -25,6 +25,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "tests"))
 
+import browser as B  # noqa: E402
 import rig as R  # noqa: E402
 import transcript as T  # noqa: E402
 
@@ -249,6 +250,155 @@ def test_scsynth_hygiene():
         R.scsynth_check = real
 
 
+class FakeOsa:
+    """A browser made of a list, so tab hygiene is testable with no browser.
+
+    Answers the two scripts that matter — list and close — and can be told
+    to do the work and then TIME OUT, which is the real Safari behaviour
+    that `close_tabs` has to survive.
+    """
+
+    def __init__(self, tabs, close_works=True, close_times_out=False):
+        self.tabs = list(tabs)              # [(url, title)]
+        self.close_works = close_works
+        self.close_times_out = close_times_out
+        self.scripts = []
+
+    def __call__(self, script):
+        import subprocess as sp
+        self.scripts.append(script)
+        if "close tab" in script:
+            targets = set(re.findall(r'"([^"]*)"', script.split("set targets to")[1]
+                                     .split("}")[0]))
+            if self.close_works:
+                self.tabs = [t for t in self.tabs if t[0] not in targets]
+            if self.close_times_out:
+                raise sp.TimeoutExpired("osascript", B.OSA_TIMEOUT)
+            return sp.CompletedProcess([], 0, "", "")
+        if "repeat with t in tabs" in script:
+            out = "".join(f"1{B.SEP}{i}{B.SEP}{u}{B.SEP}{ti}\n"
+                          for i, (u, ti) in enumerate(self.tabs, 1))
+            return sp.CompletedProcess([], 0, out, "")
+        return sp.CompletedProcess([], 0, "", "")
+
+
+def test_browser_classification():
+    """What counts as OUR tab. The false positives here are real tabs."""
+    def tab(url, title="", app="Safari"):
+        return B.Tab(app, 1, 1, url, title)
+
+    check("a live rig's tab qualifies by title",
+          B.is_patchwerk(tab("http://127.0.0.1:8790/", "Patchwerk — Blocks")))
+    check("a DEAD rig's tab qualifies by port — the browser overwrote the "
+          "title with the URL, so the port is the only evidence left",
+          B.is_patchwerk(tab("http://127.0.0.1:8765/", "127.0.0.1:8765")))
+    check("localhost is loopback too",
+          B.is_patchwerk(tab("http://localhost:8765/", "whatever")))
+    check("someone else's dev server on loopback is NOT ours",
+          not B.is_patchwerk(tab("http://127.0.0.1:3000/", "Vite")))
+    check("the GitHub repo tab is NOT ours, though its title says Patchwerk",
+          not B.is_patchwerk(tab(
+              "https://github.com/Jew-C-Fruit/Patchwerk",
+              "Jew-C-Fruit/Patchwerk: AI friendly synth with flexible IO")))
+    check("nor is any other remote page that mentions it",
+          not B.is_patchwerk(tab("https://example.com/patchwerk", "Patchwerk")))
+    check("a tab's port and host parse off its URL",
+          (tab("http://127.0.0.1:8799/blocks").port,
+           tab("http://127.0.0.1:8799/blocks").host) == (8799, "127.0.0.1"))
+
+
+def test_browser_hygiene():
+    src = (REPO / "tests" / "browser.py").read_text()
+    calls = re.findall(r'\[\s*"pgrep"[^\]]*\]', src)
+    check("running() detects browsers with pgrep -x, which cannot LAUNCH one",
+          calls and all('"-x"' in c and '"-f"' not in c for c in calls),
+          str(calls))
+    check("Safari and the Chromium family are both spoken for",
+          {"Safari", "Google Chrome"} <= set(B.BROWSERS)
+          and B.BROWSERS["Safari"] == "safari"
+          and B.BROWSERS["Google Chrome"] == "chromium")
+    check("the dialects differ where they actually differ (title vs name)",
+          "name of t" in B._list_script("Safari")
+          and "title of t" in B._list_script("Google Chrome"))
+    check("focus uses each browser's own way of selecting a tab",
+          "current tab of w" in _focus_script("Safari")
+          and "active tab index" in _focus_script("Google Chrome"))
+    check("URLs are quoted and escaped into the AppleScript list",
+          B._as_list(['http://a/"x"', "http://b/"])
+          == '{"http://a/\\"x\\"", "http://b/"}', B._as_list(['http://a/"x"']))
+
+    real_osa, real_running, real_alive = B._run_osa, B.running, B.port_alive
+    try:
+        B.running = lambda: ["Safari"]
+        mine = ("http://127.0.0.1:8765/", "Patchwerk — Blocks")
+        theirs = ("https://github.com/Jew-C-Fruit/Patchwerk", "Patchwerk repo")
+        fake = FakeOsa([theirs, mine])
+        B._run_osa = fake
+
+        check("all_tabs parses the delimited listing", len(B.all_tabs()) == 2)
+        check("patchwerk_tabs picks out only ours",
+              [t.url for t in B.patchwerk_tabs()] == [mine[0]])
+
+        B.port_alive = lambda p, timeout=1.5: False
+        check("a tab whose port is dead is stale",
+              [t.url for t in B.stale_tabs()] == [mine[0]])
+        B.port_alive = lambda p, timeout=1.5: True
+        check("a tab whose rig answers is not stale", B.stale_tabs() == [])
+
+        B.port_alive = lambda p, timeout=1.5: False
+        check("close_stale closes it and returns it",
+              [t.url for t in B.close_stale()] == [mine[0]])
+        check("the bystander survived", [t[0] for t in fake.tabs] == [theirs[0]])
+
+        # the observed Safari behaviour: the work lands, the script hangs
+        fake = FakeOsa([theirs, mine], close_works=True, close_times_out=True)
+        B._run_osa = fake
+        got = B.close_tabs([B.Tab("Safari", 1, 2, mine[0], mine[1])])
+        check("a close that WORKED but timed out is reported as success — "
+              "the count comes from re-listing, not from the script", got == 1)
+        check("...and the bystander is still untouched",
+              [t[0] for t in fake.tabs] == [theirs[0]])
+
+        # a close that genuinely failed must still raise
+        fake = FakeOsa([theirs, mine], close_works=False, close_times_out=True)
+        B._run_osa = fake
+        try:
+            B.close_tabs([B.Tab("Safari", 1, 2, mine[0], mine[1])])
+            check("a close that did NOT work still raises", False)
+        except B.BrowserError as exc:
+            check("a close that did NOT work still raises",
+                  "timed out" in str(exc), str(exc))
+
+        # reuse rather than stack
+        fake = FakeOsa([theirs, mine])
+        B._run_osa = fake
+        B.port_alive = lambda p, timeout=1.5: True
+        tab, reused = B.open_or_reuse("http://127.0.0.1:8765/blocks")
+        check("open_or_reuse REUSES a tab on the same origin, whatever the "
+              "route", reused is True and tab.url == mine[0])
+        check("...and opened nothing",
+              not any("make new tab" in s for s in fake.scripts))
+    finally:
+        B._run_osa, B.running, B.port_alive = real_osa, real_running, real_alive
+
+
+def _focus_script(app: str) -> str:
+    """The script `focus()` would run — captured without a browser."""
+    real = B._run_osa
+    seen = []
+    try:
+        B._run_osa = lambda s: (seen.append(s), _ok())[1]
+        B.focus(B.Tab(app, 1, 2, "http://127.0.0.1:8765/", ""))
+    finally:
+        B._run_osa = real
+    return seen[0] if seen else ""
+
+
+def _ok():
+    import subprocess as sp
+    return sp.CompletedProcess([], 0, "", "")
+
+
 def test_ids_in():
     check("ids_in reads a list of dicts",
           R.ids_in({"buttons": [{"id": "button"}, {"id": "button.2"}]},
@@ -381,6 +531,8 @@ def main():
     test_unpaired_notes()
     test_port_and_discovery()
     test_scsynth_hygiene()
+    test_browser_classification()
+    test_browser_hygiene()
     test_ids_in()
     test_spawn_table_matches_the_protocol()
     test_scenario_grammar()

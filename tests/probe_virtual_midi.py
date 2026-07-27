@@ -11,14 +11,21 @@ an agent to play, and does the engine's own router accept it?
 attached — and `MidiRouter.start()` returns immediately on an empty list, so
 today an agent has no MIDI at all. This creates an rtmidi VIRTUAL port and
 drives the REAL `MidiRouter` against a stub rack: the port shows up in
-`list_inputs()`, `start()`'s own auto-selection picks it, and note / CC /
+`list_inputs()`, the router's own selection rule accepts it, and note / CC /
 sustain / bend arrive through the real rtmidi callback thread with the real
 ±2-semitone bend maths. The rack is stubbed and only the rack is stubbed.
+
+The port name carries this process's PID, and the router is opened with that
+name EXPLICITLY — which is what `Rig.midi_enable()` does. Asserting on
+`start()`'s no-name auto-pick instead would be asserting `hardware[0]`, and
+that is a coin flip the moment another session on this Mac has a virtual
+port of its own open (observed 2026-07-26, and it turned this probe red).
 
 `tests/probe_rig_ws.py` is the same path end to end through a live rig;
 this is the part of it that survives a machine whose audio is broken.
 """
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -60,7 +67,7 @@ class StubRack:
 
 
 def main() -> int:
-    name = R.VIRTUAL_PORT_NAME + " Probe"
+    name = f"{R.VIRTUAL_PORT_BASE} Probe {os.getpid()}"
     before = list_inputs(force=True)
     print(f"inputs before: {before}")
     check("no hardware MIDI is masking the result (informational)", True,
@@ -73,16 +80,22 @@ def main() -> int:
         check("the virtual port is visible to synthbase.list_inputs()",
               any(name in n for n in names), str(names))
 
+        # the router's own filter (midi.py:155) — ours must survive it, but
+        # NOT necessarily be first: another session's port may also be open
         hardware = [n for n in names if "iac" not in n.lower()]
-        check("MidiRouter's own selection rule would pick it",
-              bool(hardware) and name in hardware[0], str(hardware))
+        check("the router's hardware filter keeps it (it is not an IAC bus)",
+              any(name in n for n in hardware), str(hardware))
+        if len(hardware) > 1:
+            print(f"  (note: {len(hardware)} virtual/hardware ports present — "
+                  "auto-pick would be ambiguous, which is why the driver "
+                  "always names its port explicitly)")
 
         rack = StubRack()
         events = []
-        router = MidiRouter(rack, notes_to="target", port_name=None,
+        router = MidiRouter(rack, notes_to="target", port_name=name,
                             verbose=False, on_event=events.append)
         router.start()
-        check("router.start() opened the virtual port with no port_name given",
+        check("router.start() opened OUR port when named explicitly",
               router.active_port is not None and name in router.active_port,
               str(router.active_port))
         if router.active_port is None:

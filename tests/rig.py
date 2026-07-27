@@ -94,12 +94,19 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "tests"))
 
+import browser  # noqa: E402
 from transcript import TranscriptWriter  # noqa: E402
 
 DEFAULT_PORT = 8765
 PIDFILE = Path("/tmp/patchwerk.pid")
 BOOT_TIMEOUT = 40.0          # cold scsynth + device fallback; run.sh allows 20
-VIRTUAL_PORT_NAME = "Patchwerk Agent"
+#: Our virtual MIDI port carries the PID. Several sessions run this machine
+#: at once, and a fixed name collides: `MidiRouter.start()` with no explicit
+#: port picks `hardware[0]`, so two identically-named ports make "which one
+#: did we open" a coin flip — and a leaked port from a killed session is
+#: indistinguishable from a live one. With the pid it is neither.
+VIRTUAL_PORT_BASE = "Patchwerk Agent"
+VIRTUAL_PORT_NAME = f"{VIRTUAL_PORT_BASE} {os.getpid()}"
 
 #: spawn message -> (state section, remove message). Modules are NOT here:
 #: they are added with `spawn_module` and removed with `edit_chain`.
@@ -480,6 +487,7 @@ class Rig:
         self._midi_baseline: tuple | None = None
         self._t0 = time.monotonic()
         self._state_seq = 0               # bumped by the reader per state
+        self._tabs: list = []             # browser tabs WE opened
         self.errors: list[str] = []       # {"type":"error"} the rig sent us
 
     # -- lifecycle ------------------------------------------------------------
@@ -524,6 +532,11 @@ class Rig:
             if self.tw is not None and self.state:
                 self.tw.final(self.state)
         finally:
+            try:
+                if self._tabs:
+                    print(f"[rig] closed {self.close_ui()} tab(s) we opened")
+            except browser.BrowserError as exc:
+                print(f"[rig] could not close our tabs: {exc}")
             self.midi_disable_port()
             if self._reader is not None:
                 self._reader.cancel()
@@ -813,6 +826,31 @@ class Rig:
                 return False
             await self.poke()
 
+    # -- the browser: reuse a tab, and close what we opened -------------------
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.port}/"
+
+    def open_ui(self, tidy: bool = True) -> bool:
+        """Show this rig in Chrome. REUSES the rig's tab if one is open.
+
+        The rig itself never opens one — the driver always launches with
+        `--no-browser`, because `synthbase gui` otherwise opens the default
+        browser on every boot and that is where most of the stacked-up tabs
+        came from. Returns True if an existing tab was reused.
+        """
+        tab, reused = browser.open_or_reuse(self.url, tidy=tidy)
+        if not reused:
+            self._tabs.append(tab)
+        return reused
+
+    def close_ui(self) -> int:
+        """Close only the tabs THIS driver opened."""
+        n = browser.close_tabs(self._tabs) if self._tabs else 0
+        self._tabs.clear()
+        return n
+
     # -- MIDI: a real virtual port, not the websocket note path ---------------
 
     def midi_open_port(self) -> str:
@@ -1081,6 +1119,58 @@ async def _cmd_doctor(args) -> int:
     return 1
 
 
+async def _cmd_tabs(args) -> int:
+    """What Patchwerk tabs are open, and optionally sweep the dead ones."""
+    if not browser.running():
+        inst = browser.installed()
+        print("no browser is running — no tabs to manage."
+              + (f"  (installed: {', '.join(inst)})" if inst else
+                 "  (no scriptable browser installed)"))
+        return 0
+    try:
+        tabs = browser.patchwerk_tabs()
+        stale = {t.url for t in browser.stale_tabs()}
+    except browser.BrowserError as exc:
+        print(exc)
+        return 1
+    if not tabs:
+        print("no Patchwerk tabs open")
+        return 0
+    for t in tabs:
+        print(("  STALE  " if t.url in stale else "  live   ") + str(t))
+    if not args.close_stale:
+        if stale:
+            print(f"\n{len(stale)} stale — close them with: "
+                  "rig.py tabs --close-stale")
+        return 0
+    closed = browser.close_stale()
+    print(f"\nclosed {len(closed)} stale tab(s)")
+    return 0
+
+
+async def _cmd_ui(args) -> int:
+    """Open the rig in Chrome — reusing its tab if one is already open."""
+    p = args.port or rig_port()
+    url = f"http://127.0.0.1:{p}/"
+    if not await is_up(p):
+        print(f"nothing is serving {url} — start a rig first "
+              "(or `rig.py doctor` if it will not boot)")
+        return 1
+    try:
+        tab, reused = browser.open_or_reuse(url)
+    except browser.BrowserError as exc:
+        print(exc)
+        return 1
+    print(f"{'reused' if reused else 'opened'} {tab}")
+    print("Drive it through a DOM-aware browser tool — the claude-in-chrome "
+          "MCP where Chrome exists, otherwise the in-app Claude Browser "
+          "(preview_start + read_page). Never pixel-level control.\n"
+          "Screenshots and headless assertions want Playwright's own "
+          "Chromium instead, which cannot leave a tab behind — "
+          "see tests/browser.py for the split.")
+    return 0
+
+
 async def _cmd_midi(args) -> int:
     """Prove the virtual port round-trips through the REAL router."""
     p = args.port or rig_port()
@@ -1132,12 +1222,16 @@ def main(argv=None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status")
     sub.add_parser("doctor")
+    p_tabs = sub.add_parser("tabs")
+    p_tabs.add_argument("--close-stale", action="store_true",
+                        help="close Patchwerk tabs whose rig is gone")
+    sub.add_parser("ui")
     sub.add_parser("midi")
     p_play = sub.add_parser("play")
     p_play.add_argument("scenario")
     args = ap.parse_args(argv)
-    fn = {"status": _cmd_status, "doctor": _cmd_doctor,
-          "midi": _cmd_midi, "play": _cmd_play}[args.cmd]
+    fn = {"status": _cmd_status, "doctor": _cmd_doctor, "tabs": _cmd_tabs,
+          "ui": _cmd_ui, "midi": _cmd_midi, "play": _cmd_play}[args.cmd]
     return asyncio.run(fn(args))
 
 
