@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from synthbase import audio_session as A  # noqa: E402
 
@@ -77,15 +78,15 @@ with Patch(list_audio_devices=fake_devices(
 # -- 2. resolve() ---------------------------------------------------------------
 
 with Patch(list_audio_devices=fake_devices(["Mic"], ["Speakers"]),
-           input_can_start=lambda force=False: True,
-           probe_start=lambda **kw: True):
+           input_probe=lambda force=False: {"ok": True, "cause": A.READY, "why": "ready"},
+           probe=lambda **kw: {"ready": True, "cause": A.READY, "why": "ready", "rc": None, "devices": True}):
     got = A.resolve(None, None, 2)
     check("4. input that CAN start is left completely alone",
           got == (None, None, 2, None), str(got))
 
 with Patch(list_audio_devices=fake_devices(["Mic"], ["Speakers"]),
-           input_can_start=lambda force=False: False,
-           probe_start=lambda **kw: True):
+           input_probe=lambda force=False: {"ok": False, "cause": A.STALL, "why": "stalled"},
+           probe=lambda **kw: {"ready": True, "cause": A.READY, "why": "ready", "rc": None, "devices": True}):
     in_dev, out_dev, ch, note = A.resolve(None, None, 2)
     # scsynth takes ONE -H. Passing the SAME name as both input and output
     # is what makes supriya render `-H "Speakers"` rather than `-H "" Speakers`,
@@ -97,29 +98,29 @@ with Patch(list_audio_devices=fake_devices(["Mic"], ["Speakers"]),
           bool(note) and "input" in note.lower(), (note or "")[:60])
 
 with Patch(list_audio_devices=fake_devices(["Mic"], ["Speakers"]),
-           input_can_start=lambda force=False: False,
-           probe_start=lambda **kw: True):
+           input_probe=lambda force=False: {"ok": False, "cause": A.STALL, "why": "stalled"},
+           probe=lambda **kw: {"ready": True, "cause": A.READY, "why": "ready", "rc": None, "devices": True}):
     _, _, _, note = A.resolve(None, None, 0)
     check("7. a caller that never wanted input gets no scary note",
           note is None, repr(note))
 
 with Patch(list_audio_devices=fake_devices(["Mic"], ["Speakers", "HDMI"]),
-           input_can_start=lambda force=False: False,
-           probe_start=lambda device=None, **kw: device == "HDMI"):
+           input_probe=lambda force=False: {"ok": False, "cause": A.STALL, "why": "stalled"},
+           probe=lambda device=None, **kw: {"ready": device == "HDMI", "cause": A.STALL, "why": "x", "rc": None, "devices": True}):
     in_dev, _, _, _ = A.resolve(None, None, 2)
     check("8. a candidate that fails to start is skipped for one that works",
           in_dev == "HDMI", repr(in_dev))
 
 with Patch(list_audio_devices=fake_devices(["Mic"], ["Speakers", "HDMI"]),
-           input_can_start=lambda force=False: False,
-           probe_start=lambda device=None, **kw: True):
+           input_probe=lambda force=False: {"ok": False, "cause": A.STALL, "why": "stalled"},
+           probe=lambda device=None, **kw: {"ready": True, "cause": A.READY, "why": "ready", "rc": None, "devices": True}):
     in_dev, _, _, _ = A.resolve(None, "HDMI", 2)
     check("9. an explicitly requested output is tried first",
           in_dev == "HDMI", repr(in_dev))
 
 with Patch(list_audio_devices=fake_devices(["Scarlett"], ["Scarlett"]),
-           input_can_start=lambda force=False: False,
-           probe_start=lambda **kw: False):
+           input_probe=lambda force=False: {"ok": False, "cause": A.STALL, "why": "stalled"},
+           probe=lambda **kw: {"ready": False, "cause": A.STALL, "why": "stalled", "rc": None, "devices": True}):
     try:
         A.resolve(None, None, 2)
         check("10. no startable device RAISES rather than hanging", False)
@@ -135,11 +136,12 @@ calls = []
 
 def counting_probe(**kw):
     calls.append(kw)
-    return False
+    return {"ready": False, "cause": A.STALL, "why": "stalled", "rc": None,
+            "devices": True}
 
 
 with Patch(list_audio_devices=fake_devices(["Mic"], ["Speakers"]),
-           probe_start=counting_probe,
+           probe=counting_probe,
            CACHE_PATH=Path("/tmp/pw-audio-session-test.json")):
     A.clear_cache()
     A.input_can_start()
@@ -171,6 +173,59 @@ with Patch(list_audio_devices=fake_devices(["Mic"], ["Speakers", "HDMI"]),
           A._context_key() != key_same)
 
 Path("/tmp/pw-audio-session-test.json").unlink(missing_ok=True)
+
+
+# -- 4. the cause survives all the way into boot_note ---------------------------
+# This is the whole reason the probe stopped returning a bool. A sample-rate
+# mismatch (24 kHz mic vs 48 kHz output) EXITS rc=-6 in 0.3 s; it is not the
+# stall and it is not a permissions problem, and a boot_note that says
+# "no microphone grant" sends someone to System Settings for nothing.
+
+with Patch(list_audio_devices=fake_devices(["Mic"], ["Speakers"]),
+           input_probe=lambda force=False: {
+               "ok": False, "cause": A.SAMPLE_RATE,
+               "why": A.classify_scsynth(False, True, -6,
+                                         "ERROR: Setting sample rate failed")},
+           probe=lambda device=None, **kw: {
+               "ready": True, "cause": A.READY, "why": "ready",
+               "rc": None, "devices": True}):
+    _, _, _, note = A.resolve(None, None, 2)
+    # It may MENTION permissions — denying the theory is the point — but it
+    # must never blame the microphone, which is what sent Cole to System
+    # Settings for a device mismatch.
+    check("15. a sample-rate mismatch does NOT get blamed on the microphone",
+          "microphone" not in note.lower()
+          and "not a permissions problem" in note.lower(), note)
+    check("16. ...and names sample rate as the actual cause",
+          "sample rate" in note.lower(), note)
+
+with Patch(list_audio_devices=fake_devices(["Mic"], ["Speakers"]),
+           input_probe=lambda force=False: {
+               "ok": False, "cause": A.STALL, "why": "stalled"},
+           probe=lambda device=None, **kw: {
+               "ready": True, "cause": A.READY, "why": "ready",
+               "rc": None, "devices": True}):
+    _, _, _, note = A.resolve(None, None, 2)
+    check("17. the stall DOES name the missing microphone grant",
+          "microphone" in note.lower(), note)
+
+check("18. cause_of and classify_scsynth are one decision, not two",
+      A.cause_of(False, True, -6, "Setting sample rate failed") == A.SAMPLE_RATE
+      and "SAMPLE RATE" in A.classify_scsynth(False, True, -6,
+                                              "Setting sample rate failed"))
+
+# The stall sentence must not claim the session is mute — that was the false
+# conclusion this branch exists to disprove, and rig.py's doctor now checks.
+stall_text = A.classify_scsynth(False, True, None, "Number of Devices: 2")
+check("19. the stall sentence no longer says audio cannot start here",
+      "cannot start" not in stall_text and "output-only" in stall_text,
+      stall_text)
+
+# One classifier, imported — not a second copy that can drift.
+import rig as R  # noqa: E402
+
+check("20. tests/rig.py re-exports THE classifier rather than copying it",
+      R.classify_scsynth is A.classify_scsynth)
 
 print(f"\n{'PASS' if not FAIL else 'FAIL'} — {len(PASS)} ok, {len(FAIL)} failed"
       + (f": {', '.join(FAIL)}" if FAIL else ""))

@@ -1,41 +1,62 @@
 """Pick scsynth device options that can actually START on this machine.
 
-Enumerating CoreAudio devices and *starting* one are two different
-permissions, and they fail apart. A process that is TCC-disclaimed — every
-agent session under Claude Code is, via `Claude.app/Contents/Helpers/
-disclaimer`, which calls `responsibility_spawnattrs_setdisclaim` — can list
-devices freely but has no microphone grant and no way to be prompted for
-one. When scsynth then opens a device that carries an INPUT stream,
-coreaudiod never answers:
+Enumerating CoreAudio devices and *starting* one are two different things,
+and they fail apart. This module decides, before the engine boots, which
+device configuration will come up — and says WHY when it has to change one.
+
+## The device-start stall
+
+A process that is TCC-disclaimed — every agent session under Claude Code is,
+via `Claude.app/Contents/Helpers/disclaimer`, which calls
+`responsibility_spawnattrs_setdisclaim` — can list devices freely but has no
+microphone grant and no way to be prompted for one. When scsynth then opens a
+device carrying an INPUT stream, coreaudiod never answers:
 
     SC_CoreAudioDriver::DriverStart()
       -> AudioDeviceCreateIOProcID
         -> HALC_ProxyIOContext::_TellServerAboutStreamUsage
           -> mach_msg2_trap        <-- blocks forever, no timeout, no error
 
-That is the whole bug. scsynth prints its device list and its sample rate,
-then stops before "SuperCollider 3 server ready", and `Server().boot()`
-waits on a handshake that will never come.
+scsynth prints its device list and its sample rate, then stops short of
+"SuperCollider 3 server ready", and `Server().boot()` waits on a handshake
+that will never come.
 
 Two things this is NOT, both checked directly rather than assumed:
 
-* Not the parent process. A default-args scsynth spawned from launchd —
-  a completely different responsible process — hangs in exactly the same
-  place. Reparenting is not a lever.
-* Not `-i 0`. Disabling input BUSES does not stop scsynth from opening the
-  default input DEVICE, so `-i 0` alone still hangs. The fix is device
-  selection: pin `-H` to a device that has no input streams at all.
+* Not the parent process. A default-args scsynth spawned from launchd — a
+  completely different responsible process — hangs in exactly the same place.
+  Reparenting is not a lever.
+* Not `-i 0`. Disabling input BUSES does not stop scsynth opening the default
+  input DEVICE, so `-i 0` alone still hangs. The fix is device selection: pin
+  `-H` to a device that has no input streams at all.
 
-So the working configuration is `-H "<output-only device>" -i 0`, which is
-what `input_device == output_device == <that device>` renders to. It needs
-no permission, no prompt and no user interaction.
+The working configuration is `-H "<output-only device>" -i 0`, which is what
+`input_device == output_device == <that device>` renders to. It needs no
+permission, no prompt and no user interaction.
 
-We do not force that on everyone: Cole's Terminal HAS a microphone grant,
-`modules/audio_in.py` and the master input meter are real features, and a
-blanket disable would silently remove them. Instead we PROBE — spawn a bare
-scsynth with the requested devices and a short deadline — and only fall back
-when the probe proves input cannot start here. The verdict is cached, so the
-cost is paid once per machine/context rather than on every boot.
+## The stall is only ONE way input fails, and usually not the one
+
+`classify_scsynth` is the single place that names a cause, and it exists
+because a boolean does not. This module's first cut answered yes/no, and a
+sample-rate mismatch — a 24 kHz mic against a 48 kHz output, which EXITS
+`rc=-6` in 0.3 s rather than stalling — got reported as "no microphone
+permission". That sent Cole to System Settings to fix something that was not
+broken. Every distinguishable failure gets its own sentence, and the
+sample-rate one denies the permissions theory in as many words.
+
+The classifier lives HERE, not in `tests/rig.py`, because the engine is what
+writes `boot_note` for the user and so needs the cause too — and `tests/` can
+import `synthbase/` while the reverse would be backwards. `tests/rig.py`
+imports it, so there is one diagnosis path rather than two that drift.
+
+## Why this does not simply force output-only on everyone
+
+Cole's Terminal HAS a microphone grant, and `modules/audio_in.py` and the
+master input meter are real features. So we PROBE — spawn a bare scsynth with
+the requested devices and a short deadline — and fall back only when input is
+proven unstartable here, carrying the reason into `boot_note`. The verdict is
+cached per (device set, host app), so Terminal and a disclaimed session each
+get their own answer and the probe is paid once.
 """
 
 from __future__ import annotations
@@ -50,15 +71,16 @@ from pathlib import Path
 from .audio_devices import list_audio_devices
 
 SCSYNTH_READY = "SuperCollider 3 server ready"
+SCSYNTH_DEVICES = "Number of Devices"
 
 #: How long a probe waits for the ready line. A device that CAN start prints
-#: it in well under a second; the stall never ends, so this only bounds the
-#: failure case.
+#: it in well under a second, and the failures that EXIT do so just as fast;
+#: this only bounds the stall, which never ends on its own.
 PROBE_TIMEOUT = 6.0
 
 #: Grace period after killing a STALLED probe, before the next one. See the
-#: note in `probe_start` — coreaudiod needs it, and skipping it turns a
-#: working fallback into a spurious "no device can start".
+#: note in `probe` — coreaudiod needs it, and skipping it turns a working
+#: fallback into a spurious "no device can start".
 SETTLE_AFTER_STALL = 1.5
 
 #: Attempts per candidate device in `resolve`. One retry is enough for the
@@ -85,7 +107,87 @@ def find_scsynth() -> str | None:
     return which("scsynth")
 
 
-# -- device classification ------------------------------------------------
+# -- naming the cause ---------------------------------------------------------
+
+#: Short tags, for callers that need to BRANCH on the cause rather than print
+#: it. `classify_scsynth` renders the long sentence from the same decision, so
+#: the two can never disagree about what happened.
+READY = "ready"
+SAMPLE_RATE = "sample-rate"
+DEVICE_BUSY = "device-busy"
+EXITED = "exited"
+STALL = "stall"
+NO_DEVICES = "no-devices"
+
+
+def cause_of(ready: bool, devices: bool, rc, text: str) -> str:
+    """The one decision. Everything that names a cause goes through here."""
+    low = (text or "").lower()
+    if ready:
+        return READY
+    if rc is not None:
+        if "sample rate" in low:
+            return SAMPLE_RATE
+        if "could not open" in low or "failed to open" in low:
+            return DEVICE_BUSY
+        return EXITED
+    return STALL if devices else NO_DEVICES
+
+
+def classify_scsynth(ready: bool, devices: bool, rc, text: str) -> str:
+    """Turn a scsynth run into a NAMED cause. Never just "it didn't work".
+
+    The audio session spent hours on `rc=-6, Setting sample rate failed` —
+    a 24 kHz default input against a 48 kHz output — because the probe
+    answered with a bool and somebody guessed "microphone permission". A
+    boolean that collapses four causes into one costs far more time than it
+    saves, so every distinguishable failure gets its own sentence here.
+    """
+    cause = cause_of(ready, devices, rc, text)
+    if cause == READY:
+        return "ready"
+    if cause == SAMPLE_RATE:
+        return (f"scsynth exited rc={rc}: SETTING SAMPLE RATE FAILED — the "
+                "input and output devices disagree (a 24 kHz mic against "
+                "a 48 kHz output does it). This is NOT a permissions "
+                "problem. Boot with input off (`-i 0` / `--in-device`), or "
+                "match the rates in Audio MIDI Setup.")
+    if cause == DEVICE_BUSY:
+        return (f"scsynth exited rc={rc}: could not open the audio device "
+                "— it may be held exclusively, or gone (bluetooth).")
+    if cause == EXITED:
+        if rc == -6:
+            return (f"scsynth aborted (rc={rc}) during startup — read the tail; "
+                    "an abort here is a device negotiation failure, not a crash.")
+        return f"scsynth exited rc={rc} before becoming ready"
+    if cause == STALL:
+        # Deliberately does NOT end with "audio cannot start in this session".
+        # That was the earlier conclusion and it is false: the stall is an
+        # INPUT-stream authorization that an output-only device sidesteps
+        # entirely. `resolve()` does exactly that, automatically.
+        return ("scsynth enumerated CoreAudio devices and never started one — "
+                "the device-start stall. It did not exit and did not become "
+                "ready. That is an INPUT stream waiting on a microphone "
+                "authorization this session cannot be prompted for, so it is "
+                "not a device disagreement and not fatal: an output-only "
+                "device still starts, which is what the engine falls back to.")
+    return "scsynth produced no device list at all — check the SuperCollider install"
+
+
+#: What `boot_note` says, per cause — one clause, because it lands in the GUI
+#: next to a missing input meter and has to read as an explanation, not a log.
+_SHORT = {
+    STALL: "this session cannot start an input device (no microphone grant, "
+           "and no way to request one)",
+    SAMPLE_RATE: "the input and output devices disagree on sample rate — not "
+                 "a permissions problem (see Audio MIDI Setup)",
+    DEVICE_BUSY: "the input device would not open (held exclusively, or gone)",
+    EXITED: "scsynth would not start with input enabled",
+    NO_DEVICES: "no CoreAudio devices were listed",
+}
+
+
+# -- device classification ----------------------------------------------------
 
 
 def output_only_devices() -> list[str]:
@@ -103,23 +205,27 @@ def output_only_devices() -> list[str]:
     return [d["name"] for d in outs]
 
 
-# -- probing --------------------------------------------------------------
+# -- probing ------------------------------------------------------------------
 
 
-def probe_start(
-    device: str | None,
-    input_channels: int,
+def probe(
+    device: str | None = None,
+    input_channels: int = 2,
     timeout: float = PROBE_TIMEOUT,
-) -> bool:
-    """Can a bare scsynth START this device configuration, right now?
+) -> dict:
+    """Can a bare scsynth START this configuration, and if not WHY not?
 
-    No supriya and no Patchwerk in the loop, so a False here is never a
+    No supriya and no Patchwerk in the loop, so a failure here is never a
     Patchwerk regression. The process is killed either way — this only ever
     answers the question, it never leaves a server behind.
+
+    Returns {"ready", "devices", "rc", "cause", "why"}.
     """
     sc = find_scsynth()
     if sc is None:
-        return False
+        return {"ready": False, "devices": False, "rc": None,
+                "cause": NO_DEVICES,
+                "why": "scsynth not found — is SuperCollider installed?"}
     argv = [sc, "-u", str(_free_udp_port()), "-i", str(input_channels), "-o", "2"]
     if device:
         argv += ["-H", device]
@@ -127,12 +233,15 @@ def probe_start(
         proc = subprocess.Popen(
             argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
         )
-    except OSError:
-        return False
-    ready = False
+    except OSError as exc:
+        return {"ready": False, "devices": False, "rc": None,
+                "cause": NO_DEVICES, "why": f"could not run scsynth: {exc}"}
+    ready = devices = False
+    rc = None
+    buf = ""
     try:
         os.set_blocking(proc.stdout.fileno(), False)
-        buf, deadline = "", time.monotonic() + timeout
+        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
                 chunk = proc.stdout.read()
@@ -140,11 +249,19 @@ def probe_start(
                 chunk = None
             if chunk:
                 buf += chunk.decode("utf-8", "replace")
+                devices = devices or SCSYNTH_DEVICES in buf
                 if SCSYNTH_READY in buf:
                     ready = True
                     break
-            elif proc.poll() is not None:
-                break            # died (bad device name) — not a stall
+            elif (rc := proc.poll()) is not None:
+                try:                       # drain whatever it said on the way out
+                    rest = proc.stdout.read()
+                    if rest:
+                        buf += rest.decode("utf-8", "replace")
+                except (BlockingIOError, ValueError):
+                    pass
+                devices = devices or SCSYNTH_DEVICES in buf
+                break                      # it EXITED — a different failure
             else:
                 time.sleep(0.05)
     finally:
@@ -162,7 +279,9 @@ def probe_start(
             # disagreed until this settle was added. Without it the
             # output-only fallback can be wrongly declared impossible.
             time.sleep(SETTLE_AFTER_STALL)
-    return ready
+    return {"ready": ready, "devices": devices, "rc": rc,
+            "cause": cause_of(ready, devices, rc, buf),
+            "why": classify_scsynth(ready, devices, rc, buf)}
 
 
 def _free_udp_port() -> int:
@@ -175,7 +294,7 @@ def _free_udp_port() -> int:
     return port
 
 
-# -- cached verdict -------------------------------------------------------
+# -- cached verdict -----------------------------------------------------------
 
 
 def _context_key() -> str:
@@ -235,25 +354,33 @@ def _save_cache(cache: dict) -> None:
         pass          # a cache we cannot write is a slow probe, not a failure
 
 
-def input_can_start(force: bool = False) -> bool:
-    """Can an input-bearing device start in THIS context? Cached per context.
+def input_probe(force: bool = False) -> dict:
+    """Can an input-bearing device start in THIS context, and why not?
 
-    Probing costs a second when it works and `PROBE_TIMEOUT` when it does
-    not, so the verdict is remembered rather than re-derived on every engine
-    boot (device switches reboot the engine).
+    Cached per context: probing costs a second when it works and
+    `PROBE_TIMEOUT` when it stalls, so the verdict is remembered rather than
+    re-derived on every engine boot (device switches reboot the engine). The
+    CAUSE is cached alongside it — a cached "no" that has forgotten why is
+    the boolean problem again, one layer down.
     """
     key = _context_key()
     if not force:
         hit = _MEM.get(key) or _load_cache().get(key)
         if hit and time.time() - hit.get("t", 0) < CACHE_TTL:
-            return bool(hit["ok"])
-    ok = probe_start(device=None, input_channels=2)
-    entry = {"ok": ok, "t": time.time()}
+            return hit
+    res = probe(device=None, input_channels=2)
+    entry = {"ok": res["ready"], "cause": res["cause"], "why": res["why"],
+             "t": time.time()}
     _MEM[key] = entry
     cache = _load_cache()
     cache[key] = entry
     _save_cache(cache)
-    return ok
+    return entry
+
+
+def input_can_start(force: bool = False) -> bool:
+    """The bare verdict, for callers that genuinely only need the boolean."""
+    return bool(input_probe(force)["ok"])
 
 
 def clear_cache() -> None:
@@ -264,7 +391,7 @@ def clear_cache() -> None:
         pass
 
 
-# -- the decision ---------------------------------------------------------
+# -- the decision -------------------------------------------------------------
 
 
 class NoStartableDevice(RuntimeError):
@@ -278,12 +405,15 @@ def resolve(
 ) -> tuple[str | None, str | None, int, str | None]:
     """Return (input_device, output_device, input_channels, note).
 
-    `note` is None when nothing was overridden, and a human sentence when we
-    had to drop audio input to get a server at all — the GUI surfaces it as
-    `boot_note` so a missing input meter is explained rather than mysterious.
+    `note` is None when nothing was overridden, and a human sentence naming
+    the CAUSE when we had to drop audio input to get a server at all — the
+    GUI surfaces it as `boot_note`, so a missing input meter is explained
+    rather than mysterious, and explained CORRECTLY: a sample-rate mismatch
+    must not read as a permissions problem.
     """
     wants_input = input_channels > 0 or input_device is not None
-    if wants_input and input_can_start():
+    verdict = input_probe() if wants_input else None
+    if verdict and verdict["ok"]:
         return input_device, output_device, input_channels, None
 
     # Output-only. `-i 0` is NOT sufficient on its own: scsynth still opens
@@ -291,28 +421,27 @@ def resolve(
     candidates = output_only_devices()
     if output_device and output_device in candidates:
         candidates = [output_device] + [c for c in candidates if c != output_device]
+    last = None
     for dev in candidates:
-        ok = any(
-            probe_start(device=dev, input_channels=0)
-            for _ in range(PROBE_ATTEMPTS)
-        )
-        if ok:
+        for _ in range(PROBE_ATTEMPTS):
+            last = probe(device=dev, input_channels=0)
+            if last["ready"]:
+                break
+        if last and last["ready"]:
             note = None
             if wants_input:
-                note = (
-                    f"audio input disabled — this session cannot start an "
-                    f"input device (no microphone permission and no way to "
-                    f"request one), so the engine is pinned to {dev!r}, "
-                    f"output only"
-                )
+                cause = (verdict or {}).get("cause", STALL)
+                note = (f"audio input disabled — "
+                        f"{_SHORT.get(cause, _SHORT[EXITED])}, so the engine "
+                        f"is pinned to {dev!r}, output only")
             # scsynth takes ONE -H; passing the same name for both renders it.
             return dev, dev, 0, note
 
     raise NoStartableDevice(
         "no CoreAudio device could be started.\n"
-        "  Every output device on this machine also carries an input stream, "
-        "and this session has no microphone permission, so opening one blocks "
-        "in coreaudiod forever.\n"
-        "  Fix: in Audio MIDI Setup create an output-only device (or make the "
-        "built-in speakers the default output) and try again."
+        f"  with input: {(verdict or {}).get('why', 'not tried')}\n"
+        f"  output-only: {(last or {}).get('why', 'no output-only device exists')}\n"
+        "  Every output device on this machine may also carry an input "
+        "stream. Fix: in Audio MIDI Setup create an output-only device (or "
+        "make the built-in speakers the default output) and try again."
     )

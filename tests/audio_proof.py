@@ -87,7 +87,15 @@ async def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     print(f"== booting {args.patch} with real audio (nobody is at the keyboard) ==")
-    rigmod.kill_scsynth()
+    # NOTHING machine-wide here. An earlier cut opened with a bare
+    # `kill_scsynth()` sweep, which on this machine means killing every other
+    # session's rig — the exact bug that presented as flaky audio. `Rig`
+    # claims its port through rigreg and kills only what it started, so an
+    # scsynth already running is somebody else's and gets left alone.
+    others = len(rigmod.scsynth_alive())
+    if others:
+        print(f"   ({others} scsynth already running — another session's, "
+              "left alone)")
 
     async with Rig(patch=args.patch, transcript=args.out, keep=args.keep,
                    scenario="audio-proof") as rig:
