@@ -620,8 +620,8 @@ def main():
                 const p = nodes.get('tonic').ports.find(q => q.sig === 'bin');
                 return !!p.rowEl && p.rowEl.classList.contains('tapflash');
               })()"""))
-        page.wait_for_timeout(220)
-        check("…and clears after PULSE_MS",
+        page.wait_for_timeout(340)
+        check("…and clears after TAP_FLASH_MS",
               page.evaluate("""(() => {
                 const p = nodes.get('tonic').ports.find(q => q.sig === 'bin');
                 return !p.rowEl.classList.contains('tapflash');
@@ -1804,8 +1804,8 @@ def main():
             # miss it and the handler silently no-ops on the button that
             # matters most
             check(f"deck:{ep_sub} pulse lights button[data-a={data_a}]", lit)
-            page.wait_for_timeout(200)   # let it decay before the next one
-        check("…and the deck buttons are clear again after PULSE_MS",
+            page.wait_for_timeout(340)   # let it decay before the next one
+        check("…and the deck buttons are clear again after TAP_FLASH_MS",
               page.evaluate(
                   "[...nodes.get('deck').el.querySelectorAll('.deckbtns"
                   " button')].every(b => !b.classList.contains('tapflash'))"))
@@ -3714,7 +3714,7 @@ def main():
                 const p = n.ports.find(q => q.ep === 'transport:tap');
                 return !!p.rowEl && p.rowEl.classList.contains('tapflash');
               })()"""))
-        page.wait_for_timeout(220)   # past PULSE_MS
+        page.wait_for_timeout(340)   # past TAP_FLASH_MS
         check("…and clears itself afterwards (it is momentary)",
               page.evaluate("""(() => {
                 const n = nodes.get('ttempo');

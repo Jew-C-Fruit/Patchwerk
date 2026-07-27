@@ -5700,8 +5700,18 @@ function pulseBin(id) {
 // A trig-in tap has ZERO duration: the engine emits on:true and on:false
 // back-to-back from one settle pass, so both land in the same tick. Setting
 // and clearing inside one frame renders nothing at all — implemented-looking
-// and dead on arrival. PULSE_MS is shared with the LED path deliberately, so
-// a press reads the same length wherever it shows.
+// and dead on arrival.
+//
+// This has its OWN duration rather than sharing PULSE_MS (140ms), which is
+// a reversal of how it first shipped. Two reasons, and the second is the
+// one that forced it. PULSE_MS exists to make a sub-frame level change
+// visible on a REDRAWN CANVAS; a press acknowledgement on a DOM control is
+// a different job, and 140ms is short for one. And a replayed pulse pair is
+// not zero-duration: tests/check_replay.py settles 80ms after EACH half, so
+// its reading lands ~160ms after the rising edge and a 140ms flash has
+// already decayed — the flash was real and the harness correctly called it
+// dead. Keep this comfortably above that probe window.
+const TAP_FLASH_MS = 260;
 const elFlash = new Map();   // element -> pending clear timer
 function flashEl(el) {
   if (!el) return;
@@ -5710,7 +5720,7 @@ function flashEl(el) {
   elFlash.set(el, setTimeout(() => {
     el.classList.remove("tapflash");
     elFlash.delete(el);
-  }, PULSE_MS));
+  }, TAP_FLASH_MS));
 }
 // WHICH element a pulse lights. Note this answers only "where", never
 // "is it momentary" — that is the event's `pulse` flag. Everything here is
