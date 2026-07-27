@@ -81,10 +81,22 @@ jobs:
       - name: Drone allocation tests
         run: python tests/test_drone_alloc.py
 
-      # item 37 Phase 1. CI-safe by its own docstring — no rig, no scsynth,
-      # no MIDI, no net — so it gets a job rather than an exemption.
+      # Item 37 Phase 1's headless half — the transcript round-trip, the
+      # normaliser Phase 2 diffs through, the stuck-note walker, the scenario
+      # grammar, and the check that rig.py's spawn/remove table still matches
+      # what server.py dispatches. CI-safe by construction: no rig, no
+      # scsynth, no MIDI, no net (the live half is probe_rig_ws.py, Mac-only).
       - name: Rig driver + transcript tests
         run: python tests/test_rig.py
+
+      # Item 37 Phase 2, EMISSION half. Re-records each scenario against this
+      # commit through tests/silent_rig.py — the real GuiServer over an
+      # engine-less SynthApp — and diffs the event stream against the
+      # committed transcripts. No scsynth, no audio device, ~1 s per
+      # scenario. This is the check that goes red when the backend stops
+      # emitting; the nine suites above stay green through that mutation.
+      - name: Transcript replay — backend emissions
+        run: python tests/check_replay.py --emission
 
   gui-checks:
     name: GUI checks (headless Playwright)
@@ -128,3 +140,14 @@ jobs:
         env:
           PLAYWRIGHT_BROWSERS_PATH: /opt/pw-browsers
         run: python tests/check_real.py
+
+      # Item 37 Phase 2, DOM half. Replays the committed transcripts —
+      # RECORDINGS of what the server said, not messages a check invented —
+      # through check_blocks' websocket stub, and asserts the endpoint x
+      # surface matrix at both edges. Needs no synthbase: this job installs
+      # playwright only, and check_replay reports the emission plane as
+      # skipped rather than failing on the missing import.
+      - name: Transcript replay — GUI surfaces
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: /opt/pw-browsers
+        run: python tests/check_replay.py --dom
