@@ -99,6 +99,7 @@ import asyncio
 import copy
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1144,9 +1145,21 @@ bound with "as". Steps: send | spawn | wire | unwire | midi | midi_enable |
 wait | poke | mark | restore."""
 
 
+#: "$var" or "$var" followed by an endpoint suffix — "$rly:ctl", "$ks:3".
+#: The suffix is NOT part of the variable name: an id is what `spawn` bound,
+#: and ":ctl"/":3" is endpoint grammar layered on top of it. Without this a
+#: scenario cannot address any sub-endpoint of a node it spawned, which is
+#: most of the binary plane (relay circuits, keyshift lanes, ":pwr").
+_VAR_RE = re.compile(r"^\$([A-Za-z_][A-Za-z0-9_]*)(.*)$")
+
+
 def _subst(obj, vars_: dict):
     if isinstance(obj, str):
-        return vars_.get(obj[1:], obj) if obj.startswith("$") else obj
+        m = _VAR_RE.match(obj)
+        if not m:
+            return obj
+        name, suffix = m.group(1), m.group(2)
+        return vars_[name] + suffix if name in vars_ else obj
     if isinstance(obj, list):
         return [_subst(x, vars_) for x in obj]
     if isinstance(obj, dict):
@@ -1200,7 +1213,8 @@ def validate_scenario(scn: dict) -> list[str]:
 
 def _refs(obj) -> list[str]:
     if isinstance(obj, str):
-        return [obj[1:]] if obj.startswith("$") else []
+        m = _VAR_RE.match(obj)
+        return [m.group(1)] if m else []
     if isinstance(obj, list):
         return [r for x in obj for r in _refs(x)]
     if isinstance(obj, dict):

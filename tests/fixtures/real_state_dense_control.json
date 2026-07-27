@@ -1,0 +1,607 @@
+{
+ "type": "state",
+ "patch": null,
+ "patches": [
+  "bells",
+  "demo",
+  "mic_fx",
+  "pad_space",
+  "strings",
+  "vox"
+ ],
+ "chain": [],
+ "volume": 0.8,
+ "devices": {
+  "inputs": [
+   {
+    "name": "MacBook Pro Microphone",
+    "channels": 1,
+    "sample_rate": 48000,
+    "default": true
+   }
+  ],
+  "outputs": [
+   {
+    "name": "MacBook Pro Speakers",
+    "channels": 2,
+    "sample_rate": 48000,
+    "default": true
+   }
+  ]
+ },
+ "current_input": null,
+ "current_output": null,
+ "input_enabled": false,
+ "boot_note": null,
+ "voice_target": null,
+ "voices": [],
+ "tonics": [
+  {
+   "id": "tonic",
+   "every": "1 bar",
+   "everies": [
+    "1 beat",
+    "2 beats",
+    "1 bar",
+    "2 bars",
+    "4 bars",
+    "deck"
+   ],
+   "octave": 2,
+   "root": null,
+   "memory": 6.0,
+   "bass": 0.06,
+   "listening": "triadic",
+   "listenings": [
+    "triadic",
+    "root+fifth",
+    "chromatic"
+   ],
+   "deck_feed": false,
+   "scale": null
+  },
+  {
+   "id": "tonic.2",
+   "every": "1 bar",
+   "everies": [
+    "1 beat",
+    "2 beats",
+    "1 bar",
+    "2 bars",
+    "4 bars",
+    "deck"
+   ],
+   "octave": 2,
+   "root": null,
+   "memory": 6.0,
+   "bass": 0.06,
+   "listening": "triadic",
+   "listenings": [
+    "triadic",
+    "root+fifth",
+    "chromatic"
+   ],
+   "deck_feed": false,
+   "scale": null
+  }
+ ],
+ "literals": [
+  {
+   "id": "literal",
+   "every": "immediate",
+   "everies": [
+    "immediate",
+    "1 beat",
+    "2 beats",
+    "1 bar",
+    "2 bars",
+    "4 bars"
+   ],
+   "extract": "lowest-held",
+   "extracts": [
+    "lowest-held",
+    "highest-held",
+    "last-played",
+    "first-played"
+   ],
+   "place": "absolute",
+   "places": [
+    "absolute",
+    "fold",
+    "transpose"
+   ],
+   "fold_octave": 3,
+   "transpose": 0,
+   "hold_on_empty": true,
+   "note": null
+  },
+  {
+   "id": "literal.2",
+   "every": "immediate",
+   "everies": [
+    "immediate",
+    "1 beat",
+    "2 beats",
+    "1 bar",
+    "2 bars",
+    "4 bars"
+   ],
+   "extract": "lowest-held",
+   "extracts": [
+    "lowest-held",
+    "highest-held",
+    "last-played",
+    "first-played"
+   ],
+   "place": "absolute",
+   "places": [
+    "absolute",
+    "fold",
+    "transpose"
+   ],
+   "fold_octave": 3,
+   "transpose": 0,
+   "hold_on_empty": true,
+   "note": null
+  }
+ ],
+ "keyshifts": [
+  {
+   "id": "keyshift",
+   "key": 0,
+   "length": 8,
+   "steps": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "active": 0
+  },
+  {
+   "id": "keyshift.2",
+   "key": 0,
+   "length": 8,
+   "steps": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "active": 0
+  }
+ ],
+ "buttons": [
+  {
+   "id": "button",
+   "binding": null,
+   "armed": false,
+   "latch": true,
+   "on": false
+  },
+  {
+   "id": "button.2",
+   "binding": null,
+   "armed": false,
+   "latch": true,
+   "on": false
+  },
+  {
+   "id": "button.3",
+   "binding": null,
+   "armed": false,
+   "latch": true,
+   "on": false
+  },
+  {
+   "id": "button.4",
+   "binding": null,
+   "armed": false,
+   "latch": false,
+   "on": false
+  },
+  {
+   "id": "button.5",
+   "binding": null,
+   "armed": false,
+   "latch": false,
+   "on": false
+  },
+  {
+   "id": "button.6",
+   "binding": null,
+   "armed": false,
+   "latch": false,
+   "on": false
+  }
+ ],
+ "clocks": [
+  {
+   "id": "clock",
+   "division": "1/4",
+   "divisions": [
+    "8/1",
+    "4/1",
+    "2/1",
+    "1/1",
+    "1/2",
+    "1/4.",
+    "1/4",
+    "1/4T",
+    "1/8.",
+    "1/8",
+    "1/8T",
+    "1/16",
+    "1/16T",
+    "1/32"
+   ]
+  },
+  {
+   "id": "clock.2",
+   "division": "1/4",
+   "divisions": [
+    "8/1",
+    "4/1",
+    "2/1",
+    "1/1",
+    "1/2",
+    "1/4.",
+    "1/4",
+    "1/4T",
+    "1/8.",
+    "1/8",
+    "1/8T",
+    "1/16",
+    "1/16T",
+    "1/32"
+   ]
+  },
+  {
+   "id": "clock.3",
+   "division": "1/4",
+   "divisions": [
+    "8/1",
+    "4/1",
+    "2/1",
+    "1/1",
+    "1/2",
+    "1/4.",
+    "1/4",
+    "1/4T",
+    "1/8.",
+    "1/8",
+    "1/8T",
+    "1/16",
+    "1/16T",
+    "1/32"
+   ]
+  }
+ ],
+ "transpose": 0,
+ "midi_inputs": [],
+ "midi_port": null,
+ "midi_enabled": false,
+ "wires": [],
+ "ctl_wires": [
+  {
+   "from": "keys",
+   "to": "arp"
+  },
+  {
+   "from": "arp",
+   "to": "voice"
+  },
+  {
+   "from": "arp",
+   "to": "deck"
+  },
+  {
+   "from": "deck",
+   "to": "voice"
+  },
+  {
+   "from": "button",
+   "to": "logic:a"
+  },
+  {
+   "from": "button.2",
+   "to": "logic:b"
+  },
+  {
+   "from": "clock",
+   "to": "logic.2:a"
+  },
+  {
+   "from": "button.3",
+   "to": "logic.2:b"
+  },
+  {
+   "from": "logic",
+   "to": "logic.3:a"
+  },
+  {
+   "from": "logic.2",
+   "to": "logic.3:b"
+  },
+  {
+   "from": "logic.3",
+   "to": "transport:run"
+  },
+  {
+   "from": "button.4",
+   "to": "transport:click"
+  },
+  {
+   "from": "button.5",
+   "to": "relay:ctl"
+  },
+  {
+   "from": "button.6",
+   "to": "relay.2:ctl"
+  },
+  {
+   "from": "clock.2",
+   "to": "tonic"
+  },
+  {
+   "from": "clock.3",
+   "to": "deck:rec"
+  },
+  {
+   "from": "keys",
+   "to": "keyshift:1"
+  },
+  {
+   "from": "keyshift:1",
+   "to": "tonic"
+  },
+  {
+   "from": "tonic",
+   "to": "keyshift.2:1"
+  },
+  {
+   "from": "keys",
+   "to": "keyshift.2:2"
+  },
+  {
+   "from": "keyshift.2:2",
+   "to": "literal"
+  },
+  {
+   "from": "literal",
+   "to": "deck"
+  },
+  {
+   "from": "keys",
+   "to": "tonic.2"
+  },
+  {
+   "from": "tonic.2",
+   "to": "literal.2"
+  },
+  {
+   "from": "literal.2",
+   "to": "arp"
+  },
+  {
+   "from": "arp",
+   "to": "tonic.2"
+  },
+  {
+   "from": "deck",
+   "to": "keyshift:3"
+  }
+ ],
+ "drums_target": "master",
+ "arp": null,
+ "transport": {
+  "bpm": 100.0,
+  "beats_per_bar": 4,
+  "click": false,
+  "accent": true,
+  "downbeat": 0,
+  "running": false,
+  "divisions": [
+   "1/1",
+   "1/2",
+   "1/4.",
+   "1/4",
+   "1/4T",
+   "1/8.",
+   "1/8",
+   "1/8T",
+   "1/16",
+   "1/16T",
+   "1/32"
+  ]
+ },
+ "transport_cards": [
+  "play",
+  "tempo"
+ ],
+ "drone": {
+  "enabled": false,
+  "every": "1 bar",
+  "everies": [
+   "1 beat",
+   "2 beats",
+   "1 bar",
+   "2 bars",
+   "4 bars"
+  ],
+  "octave": 2,
+  "root": null
+ },
+ "drums": {
+  "enabled": false,
+  "patterns": {
+   "kick": [
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "snare": [
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0
+   ],
+   "hat": [
+    1,
+    0,
+    1,
+    0,
+    1,
+    0,
+    1,
+    0,
+    1,
+    0,
+    1,
+    0,
+    1,
+    0,
+    1,
+    1
+   ],
+   "clap": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "levels": {
+   "kick": 0.8,
+   "snare": 0.7,
+   "hat": 0.6,
+   "clap": 0.7
+  },
+  "target": "master",
+  "to_chain": false,
+  "lanes": [
+   "kick",
+   "snare",
+   "hat",
+   "clap"
+  ],
+  "steps": 16
+ },
+ "looper": {
+  "state": "empty",
+  "bars": 2,
+  "level": 0.9,
+  "overdub": false,
+  "midi": true,
+  "position": "post",
+  "loop_beats": 8.0,
+  "notes": [],
+  "events": 0
+ },
+ "lfos": [],
+ "thresholds": [],
+ "logics": [
+  {
+   "id": "logic",
+   "op": "AND",
+   "ops": [
+    "AND",
+    "OR",
+    "NOR",
+    "XOR",
+    "SR latch",
+    "T latch"
+   ],
+   "out": false
+  },
+  {
+   "id": "logic.2",
+   "op": "AND",
+   "ops": [
+    "AND",
+    "OR",
+    "NOR",
+    "XOR",
+    "SR latch",
+    "T latch"
+   ],
+   "out": false
+  },
+  {
+   "id": "logic.3",
+   "op": "AND",
+   "ops": [
+    "AND",
+    "OR",
+    "NOR",
+    "XOR",
+    "SR latch",
+    "T latch"
+   ],
+   "out": false
+  }
+ ],
+ "relays": [
+  {
+   "id": "relay",
+   "closed": false,
+   "circuits": {}
+  },
+  {
+   "id": "relay.2",
+   "closed": false,
+   "circuits": {}
+  }
+ ],
+ "mod_wires": [],
+ "presets": [
+  "spring_steel"
+ ],
+ "available": [],
+ "module_errors": {}
+}
