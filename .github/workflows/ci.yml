@@ -47,6 +47,14 @@ jobs:
       - name: Transport card tests
         run: python tests/test_transport.py
 
+      # Item 37 Phase 1's headless half — the transcript round-trip, the
+      # normaliser Phase 2 diffs through, the stuck-note walker, the scenario
+      # grammar, and the check that rig.py's spawn/remove table still matches
+      # what server.py dispatches. CI-safe by construction: no rig, no
+      # scsynth, no MIDI, no net (the live half is probe_rig_ws.py, Mac-only).
+      - name: Rig driver + transcript tests
+        run: python tests/test_rig.py
+
       # Item 37 Phase 2, EMISSION half. Re-records each scenario against this
       # commit through tests/silent_rig.py — the real GuiServer over an
       # engine-less SynthApp — and diffs the event stream against the

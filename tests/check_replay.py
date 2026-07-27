@@ -261,14 +261,38 @@ MATRIX = [
 
 #: Endpoints the contract deliberately gives NO level-driven surface. Listed
 #: so `NO ROW` stays meaningful: an endpoint absent from both is a gap.
+#: Endpoints with no level-driven surface row, each carrying its OWN reason
+#: and its OWN staleness test — `CI_EXEMPT`'s shape (batch-merge-protocol
+#: 1.3): the excuse lives with the thing it excuses, so the two cannot
+#: quietly disagree, and the excuse dies when its premise does.
+#:
+#: `stale_when` is a predicate over the transcript. When it fires, the
+#: exemption's premise has stopped holding and the check FAILS asking for a
+#: real matrix row. Without it an exemption is just an uncovered indicator
+#: with a sentence attached — which is what the matrix exists to prevent, so
+#: exempting a row from the matrix must not exempt it from that.
+#: `backed_by` names the check that carries the endpoint instead, or None
+#: when nothing does; `None` is the honest admission of a coverage gap and
+#: is reported as one.
 NO_SURFACE_BY_DESIGN = {
     # handoff 2.1: the relay card's indicator is its `closed` state, which
-    # arrives as {"kind":"gate"}. Asserted separately, in check_relay_gate.
-    "relay:ctl": "driven by {'kind':'gate'}, not by the level tap",
-    # `arp:pwr` HAS a surface (the Arp card's stripe) but the card only
-    # exists when state.arp is non-null, which needs a rack. Emission is
-    # covered; the surface is not reachable on a silent rig.
-    "arp:pwr": "no Arp card on a rackless board — emission covered, surface not",
+    # arrives as {"kind":"gate"}, so the level tap is not its driver.
+    "relay:ctl": dict(
+        why="driven by {'kind':'gate'}, not by the level tap",
+        backed_by="check_relay_gate",
+        # Stale if the tap ever starts carrying the surface itself — which
+        # would show up as the level handler being expected to act on it.
+        stale_when=None),
+    # `arp:pwr` HAS a surface (the Arp card's stripe); the card only exists
+    # when state.arp is non-null, and that needs a rack. So this is a real
+    # coverage GAP, honestly bounded, not a design decision like relay:ctl.
+    "arp:pwr": dict(
+        why="no Arp card on a rackless board — emission covered, surface not",
+        backed_by=None,
+        # The premise, tested: no state in the recording carries an arp. The
+        # day a recording does, the card renders, the surface is reachable,
+        # and this exemption has to become a matrix row.
+        stale_when=lambda t: any(m.get("arp") for m in t.recv("state"))),
 }
 
 
@@ -607,9 +631,18 @@ def _report_matrix(by_driver: dict, t: Transcript) -> None:
     gaps = sorted(seen_eps - covered)
     check("every level endpoint in the recording has a matrix row "
           "or a by-design exemption", not gaps, f"NO ROW: {gaps}")
-    for ep, why in sorted(NO_SURFACE_BY_DESIGN.items()):
-        if ep in seen_eps:
-            note(f"{ep}: no level-driven surface by design — {why}")
+    for ep, ex in sorted(NO_SURFACE_BY_DESIGN.items()):
+        if ep not in seen_eps:
+            continue
+        note(f"{ep}: no level-driven surface row — {ex['why']}"
+             + (f" (covered by {ex['backed_by']})" if ex["backed_by"]
+                else " — UNCOVERED, bounded on purpose"))
+        if ex["stale_when"] is not None:
+            check(f"{ep}: its exemption's premise still holds",
+                  not ex["stale_when"](t),
+                  f"the premise stopped holding ({ex['why']}) — this endpoint "
+                  f"now has a reachable surface; give it a MATRIX row and "
+                  f"delete its NO_SURFACE_BY_DESIGN entry")
 
 
 def _report_steady(row, mine, tag) -> None:
