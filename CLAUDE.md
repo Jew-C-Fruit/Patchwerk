@@ -178,33 +178,25 @@ mirror to.
 
 ## Writing a new module (the main vibecoding activity)
 
-> ⚠ **The `dual` kind is REAL but DORMANT — no module is currently
-> `dual`** (2026-07-27). Item 11 merged, so `KINDS = ("source", "effect",
-> "dual")` and the `generates()`/`takes_audio_in()` predicates are live and
-> load-bearing: `rack.py` branches on them in nine places, so **the
-> three-kind table in rule 3 is what the code does today** and must not be
-> reverted to the old binary rule. What went away is the only module that
-> USED the third kind — `power_shaper` shipped as the first dual and was
-> reverted to `kind="effect"` on 2026-07-27.
+> ⚠ **The `dual` kind is LIVE on `main`** (2026-07-27):
+> `KINDS = ("source", "effect", "dual")`, the
+> `generates()`/`takes_audio_in()` predicates are load-bearing —
+> `rack.py` branches on them in nine places — and `power_shaper` declares
+> `kind="dual"`. **The three-kind table in rule 3 is what the code does
+> today**; do not revert it to the old binary rule.
 >
-> **This is a deferral, not a repudiation.** The DSP was never the problem
-> and neither was the shape. `app.py` has FOUR playability tests that
-> compare `kind == "source"` by strict equality (`app.py:471`, `:924`,
-> `:1153`, `:1579`); item 11 widened `rack.py` to the predicates but never
-> widened these, so **no voice would ever aim at a dual module** — and a
-> playable source spawns `gate=0`, so the envelope never opened. Digital
-> silence, from a four-line omission rather than a wrong design.
+> **Gen mode is under active repair, so treat the details as moving.** It
+> shipped SILENT (see the playability landmine below) and was briefly
+> reverted to `kind="effect"` on a branch; Cole's call was to fix it
+> properly instead, so that revert is not on `main` and is not the
+> direction. Until the item 11 session reports, **read the code for ground
+> truth, not this banner**: `KINDS` in `synthbase/module.py`, and
+> `grep -l 'kind="dual"' modules/`. `power-shaper-dual-v1` tags the
+> pre-revert module and `continuity/item11-gen-mode-failure.md` holds the
+> post-mortem.
 >
-> **Recovery path**, when it comes back:
->
->     git checkout power-shaper-dual-v1 -- modules/power_shaper.py
->
-> then widen those four predicates to `generates(inst.module.kind)`. Full
-> post-mortem: `continuity/item11-gen-mode-failure.md`.
->
-> **Check `KINDS` in `synthbase/module.py` and `grep -l 'kind="dual"'
-> modules/` if you need to know which world you are in** — the kind
-> existing and a module using it are now two different questions.
+> The kind existing and a module using it are separate questions — check
+> both.
 
 Copy an existing file in `modules/` and change the body. The contract:
 
@@ -250,9 +242,7 @@ Rules:
    ⚠ **A dual changes what an incoming audio wire means.** A wire into a
    plain source SUMS into the running bus (see the landmine below); a wire
    into a dual lands on its `in_bus` instead (`Rack._dst_bus`). Don't
-   generalise the fan-in rule across kinds. **DORMANT 2026-07-27**: true of
-   the kind, and `_dst_bus` still implements it, but unreachable while no
-   module declares `dual`.
+   generalise the fan-in rule across kinds.
 4. **Every human-facing knob goes in `params`** with a sensible range and
    `curve="exp"` for frequencies/times. Defaults in the function signature
    should match the param defaults.
@@ -269,11 +259,7 @@ Rules:
    ratios — convert inside the DSP with `.semitones_to_ratio()` (e.g.
    `(cents / 100).semitones_to_ratio()`). Voice-level pitch bend already
    follows this convention (±2 semitones).
-10. **A dual module's `mode` is DERIVED — never a param.** ⚠ **DORMANT as
-    of 2026-07-27** — still true, and `App._sync_dual_modes` is still live,
-    but NO module is `dual`, so nothing exercises this today. Kept because
-    it is the contract the next dual must satisfy, and because the machinery
-    it describes is still running. It is a plain
+10. **A dual module's `mode` is DERIVED — never a param.** It is a plain
     synthdef arg (`mode=0`), and `App._sync_dual_modes` pushes it from the
     AUDIO GRAPH: a stored wire whose destination is this instance means FX
     (`mode=1`), no wire means GENERATE (`mode=0`). Putting it in `params`
@@ -448,12 +434,10 @@ nets keep their last healthy state. Restore first, then diff.
 - Playable sources must spawn `gate=0` (the synthdef default of 1 leaves
   idle voices droning after every rebuild).
 - Extra sources SUM into the running bus — a fresh bus orphans everything
-  upstream ("generators go dead"). **This is kind-specific, but DORMANT as
-  of 2026-07-27**: a wire into a `dual` module goes to its `in_bus` instead
-  of summing, and `Rack._dst_bus` still implements exactly that — it is
-  simply unreachable while no module declares `dual`. So the summing
-  assumption happens to hold everywhere today, which is precisely why it is
-  worth not baking in: `_dst_bus` decides, not the destination's identity.
+  upstream ("generators go dead"). **This is KIND-SPECIFIC**: a wire into a
+  `dual` module goes to its `in_bus` instead of summing. Never infer the
+  destination's behaviour from the fact that it is a destination —
+  `Rack._dst_bus` decides, and it is the only thing that does.
 - **NOTHING ASSERTS THAT A PLAYABLE MODULE IS REACHABLE BY A VOICE.** Not
   one of the 18 Python or 3 Playwright suites. That is how item 11's
   Power Shaper — a module that **could never make a sound** — shipped
