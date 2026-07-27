@@ -66,6 +66,100 @@ child environment — which is the variable supriya's own finder reads first.
 
 ---
 
+## There is no permission step — and that is the fix
+
+**Cole, 2026-07-26:** *"Seeing that first run setup throws a permission error,
+but doesn't indicate how to grant permission."*
+
+Reproduced, and the first run was wrong in two ways at once.
+
+**It asked for a permission Patchwerk does not need.** Item 38 established
+that the working configuration is `-H "<output-only device>" -i 0`, which
+needs "no permission, no prompt and no user interaction at all". Measured
+again here on Cole's Mac:
+
+| configuration | result |
+| --- | --- |
+| `-i 2` (default devices) | fails in 0.4 s |
+| `-i 0` alone | fails in 10.5 s |
+| `-H "MacBook Pro Speakers" -i 0` | **ready in 0.2 s** |
+
+So gating first run behind a microphone grant was demanding something the
+product never required. The fix is not a better error message — it is
+**deleting the gate**. First run is now SuperCollider, then the engine.
+
+The permission is still obtainable; it is simply requested by the code that
+wants it, when it wants it. The engine's own probe opens an input-bearing
+device, and because the bundle carries the three things above, macOS shows a
+real dialog naming Patchwerk at that moment. Decline it and item 38 falls
+back to output-only and says so via `boot_note`. One surface, owned by the
+code that needs it.
+
+**And it blamed the wrong thing.** The error Cole hit was never a permission
+problem. The real cause: the default input and output were BOTH
+"Cole's AirPods Pro" — but the microphone side runs at **24,000 Hz** while
+playback runs at **48,000 Hz**, and scsynth refuses a pair that disagrees.
+The screen nonetheless said *"Audio input is not available"* above
+SuperCollider's own advice to run `s.options.sampleRate = <rate>;` — sclang
+the user cannot run, in a language this project deliberately does not use —
+with a "grant Microphone access" hint underneath that would have fixed
+nothing.
+
+### Failures now carry a remedy, not a log
+
+`boot_core.classify()` / `remedy()` turn a failure into named steps plus a
+button that opens the exact place to fix it:
+
+| kind | what the user is told |
+| --- | --- |
+| `permission` | the stall signature — Privacy & Security › Microphone, turn on Patchwerk |
+| `sample-rate` | **names the devices and both rates**, and which specific input to switch to |
+| `device-busy` | another scsynth we did not start holds the device — quit it |
+| `refused` / `unknown` | SuperCollider's message, with Audio MIDI Setup |
+| `engine` | not an audio fault at all — the log is the answer |
+
+What Cole's machine produces now, verbatim:
+
+> **Your headset's microphone and speaker run at different sample rates**
+> Your sound output 'Cole's AirPods Pro' runs at 48,000 Hz, but the
+> microphone side of 'Cole's AirPods Pro' runs at 24,000 Hz… They are the
+> same device: a Bluetooth headset drops its microphone to a low rate while
+> its mic is in use… This is not a permissions problem — nothing needs
+> granting.
+> 1. Open System Settings › Sound › Input.
+> 2. Choose 'MacBook Pro Microphone' (48,000 Hz) instead of 'Cole's AirPods
+>    Pro' (24,000 Hz).
+> 3. Come back here and press Try again.
+> **[Open Sound settings] [Try again] [Quit Patchwerk]**
+
+Four rules this had to learn, each from getting it wrong first:
+
+* **Never assert a cause you have not verified.** The first version claimed
+  "sample rates disagree" on a machine where the two visible devices were
+  both at 48 kHz. Rates are now read from `synthbase.audio_devices` and
+  named; when they cannot be read, the wording goes generic instead of
+  inventing detail.
+* **Only diagnose audio when the failure was audio.** Probing scsynth after a
+  bad patch name and printing its verdict would re-commit the original sin
+  somewhere new. Non-audio failures get the log and say so.
+* **An empty engine log is evidence, not an absence.** Zero bytes means the
+  engine hung rather than crashed — `tests/rig.py::_boot_hint` reads it the
+  same way — so it triggers a probe rather than a shrug.
+* **The button must open what the steps name.** Steps that say Sound settings
+  with a button that opens Audio MIDI Setup is a remedy arguing with itself.
+
+### Recovery, verified end to end
+
+`Try again` re-runs discovery and the engine in place. Proven in one
+continuous run: **ready → engine killed underneath the app → remedy page →
+Try again → ready + HTTP 200.** No quitting, no rerunning setup, no guessing
+whether it took. The app also **no longer vanishes when the engine dies after
+startup** — a Bluetooth headset reconnecting was enough to do that during
+testing, and the app simply disappeared. It now stays up and explains itself,
+which is why the failure page carries an explicit **Quit Patchwerk**.
+
+---
+
 ## First run, step by step
 
 1. **Already running?** If something answers on the app port, this is a
@@ -75,11 +169,9 @@ child environment — which is the variable supriya's own finder reads first.
    `http.server` from the stdlib — no Tk, which is the dependency most likely
    to be missing or broken on the machines this has to work on.
 3. **SuperCollider** — detect, or the guide page above.
-4. **Microphone permission (macOS only, first run)** — explained *before* it
-   happens, then triggered, then verified. See the next section.
-5. **The engine starts** — `python -m synthbase gui pad_space --port 8765
-   --no-browser`, with a bounded wait for HTTP 200.
-6. **The page redirects to the app.** Quitting Patchwerk stops the engine and
+4. **The engine starts** — `python -m synthbase gui pad_space --port 8765
+   --no-browser`, with a bounded wait for HTTP 200. No permission gate.
+5. **The page redirects to the app.** Quitting Patchwerk stops the engine and
    the scsynth it started.
 
 Logs, which are the first thing to ask for when someone is stuck:
@@ -171,12 +263,41 @@ Two traps for whoever touches this next:
 * The bundled interpreter is 3.12.13 and imports supriya 26.3b0, mido,
   aiohttp, rtmidi and watchdog.
 
+Added 2026-07-26 after Cole's report:
+
+* First run reaches **ready** with no permission step at all.
+* Every remedy class was exercised against a real failure, not constructed:
+  `sample-rate` (named the AirPods and both rates), `device-busy` (a parallel
+  session's server held the device), `engine` (non-audio failure).
+* The **Open Sound settings** and **Open Microphone settings** buttons both
+  bring System Settings to the front (Sequoia 15.5).
+* Killing the engine under a running app leaves the app up with a remedy.
+* `Try again` recovers to a working app in one continuous run.
+* The remedy's promise was checked rather than assumed: scsynth with the
+  built-in mic and speakers (both 48 kHz) reaches "SuperCollider 3 server
+  ready", so switching the input as instructed does resolve it.
+
 ### NOT verified
 
 * **The microphone dialog was never accepted.** Granting a permission on
-  Cole's machine is Cole's call, so the run stops at "macOS is now willing to
-  prompt". **Cole should do one first launch and click Allow**, then confirm
-  the wizard reports input as available.
+  Cole's machine is Cole's call. This now matters much less — nothing in
+  first run needs it — but audio INPUT (`modules/audio_in.py`, the input
+  meter) still does.
+
+### ⚠ Known blocker on `main`, owned by item 38
+
+On a Mac whose default device cannot start, `synthbase/engine.py`'s last
+resort is `input_bus_channel_count=0, input_device=None` — i.e. `-i 0` with
+no `-H`, **the exact variant item 38 proved still fails** (10.5 s, measured
+above). So on `main` today the engine can fail to boot where
+`synthbase/audio_session.py` on `feat/p38-audio-session` would succeed.
+
+This branch deliberately does **not** fork that fix: device selection is item
+38's, and the CLI cannot reach the working configuration anyway (`--in-device`
+/`--out-device` exist, but input CHANNELS are not exposed, and
+`-H <device> -i 2` fails — only `-i 0` works). What this branch does instead
+is make the failure legible and recoverable. **When item 38 merges, rebuild
+the DMG and this class of failure should disappear.**
 * **Everything Windows.** The payload is staged and correct by inspection
   (`pythonw.exe` present, `cp312-win_amd64` `.pyd` extensions, no macOS
   `.so`), but no Windows machine exists here: `patchwerk.iss` has never been

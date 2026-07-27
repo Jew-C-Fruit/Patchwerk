@@ -453,6 +453,250 @@ def scsynth_check(
             "tail": "\n".join(lines[-8:])}
 
 
+# -- turning a failure into something a person can DO ------------------------
+#
+# scsynth's own failure text is written for someone holding sclang. It
+# literally offers `s.options.sampleRate = <rate>;` as the fix — code the
+# user cannot run, in a language this project deliberately does not use
+# (CLAUDE.md, "Don'ts"). Showing that raw is how a first run ends with a
+# stuck user, which is exactly what Cole hit on 2026-07-26.
+#
+# So failures get CLASSIFIED, and each class carries a remedy in the user's
+# language: what is wrong, where to fix it, and which button opens that
+# place. `open_target` names a pane the launcher can actually open.
+
+#: macOS deep links. Verified on Sequoia 15.5 — this legacy-style URL still
+#: brings System Settings to the front on the right pane.
+PANE_MICROPHONE = ("x-apple.systempreferences:"
+                   "com.apple.preference.security?Privacy_Microphone")
+PANE_SOUND = "x-apple.systempreferences:com.apple.preference.sound"
+
+
+def classify(check: dict) -> str:
+    """What KIND of failure is this? Drives the remedy the user is shown.
+
+    * "ok"          — audio starts.
+    * "no-scsynth"  — SuperCollider is not installed / not runnable.
+    * "permission"  — the CoreAudio stall: enumerated devices, then hung
+                      rather than failed. Item 38's signature.
+    * "sample-rate" — refused because input and output disagree on rate.
+    * "refused"     — refused for some other reason it printed.
+    * "unknown"     — no device list at all.
+    """
+    if check.get("ready"):
+        return "ok"
+    tail = (check.get("tail") or "").lower()
+    if "not found" in tail and not check.get("devices"):
+        return "no-scsynth"
+    if check.get("exited"):
+        if "sample rate" in tail:
+            return "sample-rate"
+        return "refused" if check.get("devices") else "unknown"
+    if check.get("devices"):
+        return "permission"        # still running, never got ready
+    return "unknown"
+
+
+def _hz(n) -> str:
+    try:
+        return f"{int(n):,} Hz"
+    except (TypeError, ValueError):
+        return "an unknown rate"
+
+
+def _builtin(name: str) -> bool:
+    """Does this look like the machine's own microphone?"""
+    low = name.lower()
+    return any(k in low for k in ("macbook", "built-in", "imac", "mac mini",
+                                  "mac studio", "internal"))
+
+
+def _default(entries: list) -> dict | None:
+    for e in entries or []:
+        if e.get("default"):
+            return e
+    return (entries or [None])[0]
+
+
+def _sample_rate_remedy(devices: dict | None) -> dict:
+    """Name the actual devices and rates, or admit we could not read them.
+
+    A remedy that says "make your devices match" is barely better than the
+    sclang it replaced — the user still has to work out WHICH devices and
+    WHICH rate. When the device list is readable we name the offender, the
+    two rates, and a specific input that would work. When it is not, we say
+    so instead of inventing detail.
+
+    Cole's actual case, 2026-07-26: input and output were BOTH "AirPods
+    Pro" — the same device — but its microphone side runs at 24,000 Hz
+    while playback runs at 48,000 Hz. A generic "your input and output
+    disagree" reads as nonsense when they are visibly the same device, which
+    is exactly why this names the rates.
+    """
+    generic = {
+        "kind": "sample-rate",
+        "title": "Your audio input and output are running at different "
+                 "sample rates",
+        "steps": [
+            "Open Audio MIDI Setup (in Applications › Utilities).",
+            "Click your input device and note its Format, e.g. 48,000 Hz.",
+            "Click your output device and set the SAME rate.",
+            "Come back here and press Try again.",
+        ],
+        "note": "SuperCollider will not start until they match. This is not "
+                "a permissions problem — nothing needs granting.",
+        "open_target": "audio-midi-setup",
+        "open_label": "Open Audio MIDI Setup",
+    }
+    if not devices:
+        return generic
+    din, dout = _default(devices.get("inputs")), _default(devices.get("outputs"))
+    if not din or not dout:
+        return generic
+    in_rate, out_rate = din.get("sample_rate"), dout.get("sample_rate")
+    if not in_rate or not out_rate or in_rate == out_rate:
+        return generic
+
+    # A different input that already matches the output is the one-click fix.
+    # Prefer the BUILT-IN mic: the candidate list also contains Continuity
+    # devices (an iPhone advertises itself as a microphone), and telling
+    # someone to route their synth through their phone is a worse answer than
+    # the mic already in the machine.
+    cands = [d for d in devices.get("inputs", [])
+             if d.get("sample_rate") == out_rate and d is not din]
+    cands.sort(key=lambda d: 0 if _builtin(d.get("name", "")) else 1)
+    alt = cands[0] if cands else None
+    same_device = din.get("name") == dout.get("name")
+    steps = ["Open System Settings › Sound › Input."]
+    if alt:
+        steps.append(f"Choose {alt['name']!r} ({_hz(out_rate)}) instead of "
+                     f"{din['name']!r} ({_hz(in_rate)}).")
+    else:
+        steps.append(f"Choose an input that runs at {_hz(out_rate)} — "
+                     f"{din['name']!r} is at {_hz(in_rate)}.")
+    steps.append("Come back here and press Try again.")
+    note = (
+        f"Your sound output {dout['name']!r} runs at {_hz(out_rate)}, but the "
+        f"microphone side of {din['name']!r} runs at {_hz(in_rate)}, and "
+        f"SuperCollider will not start a device pair that disagrees."
+    )
+    if same_device:
+        note += (" They are the same device: a Bluetooth headset drops its "
+                 "microphone to a low rate while its mic is in use, which is "
+                 "why the two halves differ.")
+    note += " This is not a permissions problem — nothing needs granting."
+    # The button must open what step 1 NAMES. These steps say System Settings
+    # › Sound, so sending the user to Audio MIDI Setup would be a button that
+    # contradicts its own instructions.
+    return {"kind": "sample-rate", "title": "Your headset's microphone and "
+            "speaker run at different sample rates" if same_device else
+            "Your audio input and output are running at different sample "
+            "rates",
+            "steps": steps, "note": note,
+            "open_target": "sound-input",
+            "open_label": "Open Sound settings"}
+
+
+def remedy(check: dict, others_running: int = 0,
+           devices: dict | None = None) -> dict:
+    """A fixable description of a failure: {kind, title, steps, open_target}.
+
+    `steps` are imperative and specific — pane names and toggle names, not
+    "check your settings". `open_target` is None or a key the launcher knows
+    how to open, so the remedy has a button instead of a paragraph.
+
+    `others_running` is how many scsynth servers we did NOT start. It has to
+    be checked before the sample-rate reading, because CoreAudio reports a
+    device already claimed by another program as "Setting sample rate
+    failed" — the same words. Sending someone to Audio MIDI Setup to fix
+    rates that are already identical is the same class of wrong answer this
+    whole function exists to stop.
+    """
+    kind = classify(check)
+    if others_running and kind in ("sample-rate", "refused", "permission"):
+        return {
+            "kind": "device-busy",
+            "title": "Another program is already using your audio device",
+            "steps": [
+                "Quit any other copy of Patchwerk, and the SuperCollider "
+                "app if it is open.",
+                "Then press Try again.",
+            ],
+            "note": f"{others_running} SuperCollider audio server"
+                    f"{'s are' if others_running > 1 else ' is'} already "
+                    "running that Patchwerk did not start. macOS reports a "
+                    "device claimed by someone else as a sample-rate "
+                    "failure, which is why the message below mentions rates.",
+            "open_target": None, "open_label": "",
+        }
+    if kind == "permission":
+        return {
+            "kind": kind,
+            "title": "macOS is blocking Patchwerk from using an audio input "
+                     "device",
+            "steps": [
+                "Open System Settings › Privacy & Security › Microphone.",
+                "Turn ON the switch next to Patchwerk.",
+                "Come back here and press Try again.",
+            ],
+            "note": "macOS puts every audio INPUT device behind the "
+                    "Microphone permission, even when you only want to play "
+                    "sound. Patchwerk does not record you.",
+            "open_target": "microphone",
+            "open_label": "Open Microphone settings",
+        }
+    if kind == "sample-rate":
+        return _sample_rate_remedy(devices)
+    if kind == "no-scsynth":
+        return {
+            "kind": kind,
+            "title": "SuperCollider could not be run",
+            "steps": ["Reinstall SuperCollider, then press Try again."],
+            "note": "", "open_target": None, "open_label": "",
+        }
+    if kind == "refused":
+        return {
+            "kind": kind,
+            "title": "SuperCollider refused to start your audio device",
+            "steps": [
+                "Check that another program is not holding the audio device "
+                "exclusively.",
+                "In Audio MIDI Setup, confirm your output device is present "
+                "and enabled.",
+                "Press Try again.",
+            ],
+            "note": "SuperCollider's own message is below.",
+            "open_target": "audio-midi-setup",
+            "open_label": "Open Audio MIDI Setup",
+        }
+    return {
+        "kind": kind,
+        "title": "Patchwerk could not start the audio engine",
+        "steps": ["Press Try again.",
+                  "If it keeps failing, send the details below."],
+        "note": "", "open_target": None, "open_label": "",
+    }
+
+
+def open_pane(target: str) -> bool:
+    """Open a settings pane / utility for a remedy button. macOS only."""
+    if not IS_MAC:
+        return False
+    if target == "microphone":
+        arg = PANE_MICROPHONE
+    elif target == "sound-input":
+        arg = PANE_SOUND
+    elif target == "audio-midi-setup":
+        arg = "/System/Applications/Utilities/Audio MIDI Setup.app"
+    else:
+        return False
+    try:
+        subprocess.run(["open", arg], capture_output=True, timeout=10)
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def diagnose(check: dict | None = None) -> str:
     """Why audio did not come up, in the two signals that distinguish it.
 
