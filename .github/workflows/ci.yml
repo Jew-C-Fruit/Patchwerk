@@ -81,6 +81,16 @@ jobs:
       - name: Drone allocation tests
         run: python tests/test_drone_alloc.py
 
+      # The join nothing asserted: a module that DECLARES itself playable
+      # (freq + gate in its synthdef) must be REACHABLE by a voice. Item 11's
+      # Power Shaper shipped through every gate as a module that could not
+      # make a sound — correct DSP, but four `kind == "source"` predicates
+      # meant no voice would ever aim at a `dual`. Derived from the registry
+      # and from KINDS, so a new module or a new kind is covered the day it
+      # lands rather than the day someone remembers to add it here.
+      - name: Playable-module reachability
+        run: python tests/test_playable.py
+
       # The agent's EAR, calibrated. tests/analysis.py is what turns a
       # capture into numbers, so everything measured about the rig inherits
       # its accuracy: each check feeds it a signal whose features are known
