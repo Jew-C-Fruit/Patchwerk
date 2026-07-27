@@ -26,6 +26,8 @@ from .ping import ButtonTrigger, ClockTrigger
 from . import relay as relay_mod
 from .relay import RelayNode
 from .threshold import ThresholdManager
+from .capture import CaptureManager
+from .inject import InputInjector
 from .scope import Scope
 from .looper import Looper
 from . import presets as presets_mod
@@ -306,6 +308,10 @@ class SynthApp:
         self.gates = GateManager(self)   # the binary plane (logic + effects)
         self.looper = Looper(self)
         self.scope = Scope(self)
+        # the internal listener (capture.py) and the file-as-microphone
+        # injector (inject.py): audio testing without hardware in the loop
+        self.capture = CaptureManager(self)
+        self.injector = InputInjector(self)
         # control plane: wires among {keys, arp, deck, voice ids, tonic ids,
         # drone ids}. Survive rebuilds (like graph_wires); reset to default
         # on select_patch.
@@ -1916,6 +1922,9 @@ class SynthApp:
             self.thresholds.reset()
             self.lfos.reset()
             self.relay_audio.reset()
+            # same rule: these hold a server OBJECT and a live node
+            self.capture.reset()
+            self.injector.reset()
             for d in (*self.tonics.values(), *self.literals.values()):
                 d.shutdown()
             for ks in self.keyshifts.values():

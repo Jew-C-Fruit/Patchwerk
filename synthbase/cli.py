@@ -1,6 +1,7 @@
 """Command-line entry points.
 
     python -m synthbase devices            # list MIDI inputs / audio device help
+    python -m synthbase mic-doctor         # why is audio input disabled?
     python -m synthbase test               # boot engine, play a 2s test tone
     python -m synthbase play patches/demo.py [--no-midi] [--no-reload]
 """
@@ -38,6 +39,11 @@ def _engine_from_args(args) -> Engine:
         output_device=getattr(args, "out_device", None),
         hardware_buffer_size=getattr(args, "hw_buffer", None) or 256,
     )
+
+
+def cmd_mic_doctor(args) -> None:
+    from .mic_doctor import main as doctor
+    raise SystemExit(doctor(["--json"] if getattr(args, "json", False) else []))
 
 
 def cmd_devices(args) -> None:
@@ -166,6 +172,12 @@ def main(argv=None) -> None:
 
     p_devices = sub.add_parser("devices", help="list MIDI inputs")
     p_devices.set_defaults(func=cmd_devices)
+
+    p_mic = sub.add_parser(
+        "mic-doctor",
+        help="why audio input is disabled, and whether it is really permission")
+    p_mic.add_argument("--json", action="store_true")
+    p_mic.set_defaults(func=cmd_mic_doctor)
 
     p_test = sub.add_parser("test", help="boot the engine and play a test tone")
     p_test.add_argument("--in-device", dest="in_device")

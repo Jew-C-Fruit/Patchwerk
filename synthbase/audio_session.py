@@ -68,7 +68,7 @@ import sys
 import time
 from pathlib import Path
 
-from .audio_devices import list_audio_devices
+from .audio_devices import find_rate_matched_input, list_audio_devices
 
 SCSYNTH_READY = "SuperCollider 3 server ready"
 SCSYNTH_DEVICES = "Number of Devices"
@@ -212,12 +212,20 @@ def probe(
     device: str | None = None,
     input_channels: int = 2,
     timeout: float = PROBE_TIMEOUT,
+    output_device: str | None = None,
 ) -> dict:
     """Can a bare scsynth START this configuration, and if not WHY not?
 
     No supriya and no Patchwerk in the loop, so a failure here is never a
     Patchwerk regression. The process is killed either way — this only ever
     answers the question, it never leaves a server behind.
+
+    `output_device` exists for the one case where input and output are
+    DIFFERENT devices — the rate-matched recovery in `resolve` below.
+    supriya renders that as scsynth's two-argument `-H "<in>" "<out>"`
+    (`Options.serialize`), which is a materially different thing to start
+    than either device alone, so probing one of them would be probing a
+    configuration we are not going to boot. Omit it and nothing changes.
 
     Returns {"ready", "devices", "rc", "cause", "why"}.
     """
@@ -227,7 +235,9 @@ def probe(
                 "cause": NO_DEVICES,
                 "why": "scsynth not found — is SuperCollider installed?"}
     argv = [sc, "-u", str(_free_udp_port()), "-i", str(input_channels), "-o", "2"]
-    if device:
+    if output_device is not None and output_device != device:
+        argv += ["-H", device or "", output_device]
+    elif device:
         argv += ["-H", device]
     try:
         proc = subprocess.Popen(
@@ -415,6 +425,26 @@ def resolve(
     verdict = input_probe() if wants_input else None
     if verdict and verdict["ok"]:
         return input_device, output_device, input_channels, None
+
+    # A SAMPLE-RATE failure has a recovery that the stall does not: pick an
+    # input whose rate matches the output and KEEP audio input, rather than
+    # dropping it. `Engine.boot` has always had this fallback, and it has
+    # never once run — it keys off an exception from `Server().boot()`, and
+    # preflight now settles the devices before that call, so the boot it
+    # would have caught never happens. Doing it here is what makes the
+    # cause worth naming: `stall` cannot be recovered from, `sample-rate`
+    # can, and collapsing them was the whole complaint.
+    if (wants_input and input_device is None
+            and (verdict or {}).get("cause") == SAMPLE_RATE):
+        match = find_rate_matched_input(output_device)
+        # Probe the PAIR, not the input alone — two devices render the
+        # two-argument -H, and that is what we would be booting.
+        if match and probe(device=match, input_channels=input_channels,
+                           output_device=output_device)["ready"]:
+            return match, output_device, input_channels, (
+                f"default input's sample rate can't pair with the output — "
+                f"using {match!r} instead"
+            )
 
     # Output-only. `-i 0` is NOT sufficient on its own: scsynth still opens
     # the default INPUT device unless -H pins it to one that has no input.
