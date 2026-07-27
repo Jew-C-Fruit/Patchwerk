@@ -178,7 +178,22 @@ def _port_row(gid, ep):
 #: Narrowing the transport handler in blocks.html to dodge the collision was
 #: also considered and rejected: handoff 1.2 asks for that refresh, so
 #: removing it would be changing the code to fit the test.
-DRIVERS_DEFAULT = ("level",)
+#: A row's drivers, mapped to a per-driver status OVERRIDE (or None to
+#: inherit the row's). Status has to be per-driver, not per-row: on a base
+#: without item 11's `gui/blocks.html`, `transport:run -> Play/Stop card` is
+#: LIVE via the level tap and has no transport handler to follow at all. One
+#: row-level flag cannot say that, and forcing the whole row to `pending`
+#: would stop asserting a level path that demonstrably works.
+DRIVERS_DEFAULT = {"level": None}
+
+#: `{"kind":"transport"}` is handled only where item 11's GUI half has
+#: landed. On this base `onMidi` has no branch for the kind at all, so the
+#: event moves nothing and the driver is PENDING — the same status the pulse
+#: rows carry here, for the same reason, resolved by the same merge.
+PENDING_TRANSPORT = dict(
+    status="pending",
+    owner="gui/blocks.html — no onTransportEvent on this base; lands with "
+          "item 11 (handoff 1.2)")
 
 #: For the `transport` driver, which field of the event payload each
 #: endpoint's surface must follow. One event carries all three, so exactly
@@ -190,21 +205,21 @@ TRANSPORT_FIELD = {"transport:run": "running", "transport:click": "click",
 MATRIX = [
     # ---- steady level-ins ---------------------------------------------------
     dict(ep="transport:run", mode="level", status="live",
-         drivers=("level", "transport"),
+         drivers={"level": None, "transport": PENDING_TRANSPORT},
          surface="Play/Stop card",
          js="(() => { const n = nodes.get('tplay');"
             " return n ? n.el.classList.contains('playing') : null; })()"),
     dict(ep="transport:run", mode="level", status="live",
-         drivers=("level", "transport"),
+         drivers={"level": None, "transport": PENDING_TRANSPORT},
          surface="top bar #play-btn",
          js="(() => { const e = document.getElementById('play-btn');"
             " return e ? e.textContent === '\\u23f9' : null; })()"),
 
     dict(ep="transport:click", mode="level", status="live",
-         drivers=("level", "transport"),
+         drivers={"level": None, "transport": PENDING_TRANSPORT},
          surface="Tempo card click LED", js=_row_led("ttempo", "click")),
     dict(ep="transport:click", mode="level", status="pending",
-         drivers=("level", "transport"),
+         drivers={"level": None, "transport": PENDING_TRANSPORT},
          owner="feat/p11-dual-mode — syncTopBarClick(), already written there",
          surface="top bar #click-on",
          js="(() => { const e = document.getElementById('click-on');"
@@ -214,7 +229,7 @@ MATRIX = [
     # element exists, so there is nothing to mirror. A row asserting a
     # top-bar accent control would be asserting a fiction — do not add one.
     dict(ep="transport:accent", mode="level", status="live",
-         drivers=("level", "transport"),
+         drivers={"level": None, "transport": PENDING_TRANSPORT},
          surface="Tempo card accent LED", js=_row_led("ttempo", "accent")),
 
     dict(ep="drums:pwr", mode="level", status="live",
@@ -517,6 +532,16 @@ def check_dense_board(rp: R.ReplayPage, t: Transcript) -> None:
     check("dense board: no card overflows its box", not over, str(over[:3]))
 
 
+def _driver_status(row, driver):
+    """(status, owner) for ONE driver of one row — the override if it has
+    one, else the row's own. A row can be live via one driver and pending
+    via another; see DRIVERS_DEFAULT."""
+    over = (row.get("drivers") or DRIVERS_DEFAULT).get(driver)
+    if over:
+        return over["status"], over.get("owner")
+    return row["status"], row.get("owner")
+
+
 def _rows_for(driver: str) -> list[dict]:
     return [r for r in MATRIX
             if driver in r.get("drivers", DRIVERS_DEFAULT)]
@@ -620,10 +645,11 @@ def _report_matrix(by_driver: dict, t: Transcript) -> None:
                       "selector stale")
                 continue
 
+            status, owner = _driver_status(row, driver)
             if row["mode"] == "level":
-                _report_steady(row, mine, tag)
+                _report_steady(row, mine, tag, status, owner)
             else:
-                _report_pulse(row, mine, tag)
+                _report_pulse(row, mine, tag, status, owner)
 
     # An endpoint the engine emits with no row and no by-design exemption is
     # an uncovered indicator — exactly what the matrix exists to prevent.
@@ -645,7 +671,7 @@ def _report_matrix(by_driver: dict, t: Transcript) -> None:
                   f"delete its NO_SURFACE_BY_DESIGN entry")
 
 
-def _report_steady(row, mine, tag) -> None:
+def _report_steady(row, mine, tag, status, owner) -> None:
     """Steady endpoints: assert BOTH edges, and only on evidence.
 
     The falling edge is the one that bites. On the rising edge the surface is
@@ -663,17 +689,17 @@ def _report_steady(row, mine, tag) -> None:
                   f"already read {want} every time")
             continue
         ok = all(o.reacted for o in good)
-        if row["status"] == "live":
+        if status == "live":
             check(f"{tag}: follows the {edge} edge", ok,
                   f"pre={good[0].pre} post={good[0].post} want={want} "
                   f"@mark={good[0].mark}")
         else:
-            check(f"{tag}: {edge} edge still PENDING ({row['owner']})", not ok,
+            check(f"{tag}: {edge} edge still PENDING ({owner})", not ok,
                   "XPASS — the GUI now handles this; change status to 'live' "
                   f"for {tag} in tests/check_replay.py's MATRIX")
 
 
-def _report_pulse(row, mine, tag) -> None:
+def _report_pulse(row, mine, tag, status, owner) -> None:
     """Pulse endpoints: the pair, not the halves.
 
     A pulse has ZERO duration — both halves are emitted from the same settle
@@ -696,12 +722,12 @@ def _report_pulse(row, mine, tag) -> None:
     # read before the rising half.
     lit_after_pair = any(f.post is not None and f.post != r.pre
                          for r, f in zip(rising, falling))
-    if row["status"] == "live":
+    if status == "live":
         check(f"{tag}: flashes and SURVIVES the zero-duration pair",
               lit_after_pair,
               f"pre={rising[0].pre!r} after-pair={falling[0].post!r}")
     else:
-        check(f"{tag}: still PENDING ({row['owner']})", not lit_after_pair,
+        check(f"{tag}: still PENDING ({owner})", not lit_after_pair,
               "XPASS — the GUI now flashes this; change status to 'live' "
               f"for {tag} in tests/check_replay.py's MATRIX")
 
