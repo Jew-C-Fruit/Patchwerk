@@ -1499,6 +1499,24 @@ def test_dual_bus_and_wire_derivation():
     check("…and its own output still derives normally",
           {"from": "power_shaper", "to": "master"} in rack.audio_wires())
 
+    # THE LANDMINE, through the path a user actually takes. `_dst_bus` above
+    # is the derivation; this is the REWIRE, which is what would silently
+    # bypass the dual's DSP if the summing rule were ever generalised across
+    # kinds. It was unreachable while no module was `dual`; it is not now.
+    src = rack.find("pluck")
+    dual = rack.find("power_shaper")
+    rack.audio_rewire("pluck", "power_shaper")
+    check("rewiring INTO a dual points the source at the dual's in_bus",
+          int(src.settings["out"]) == int(dual.settings["in_bus"]))
+    check("…and NOT at the dual's out bus, which would bypass its DSP",
+          int(src.settings["out"]) != int(dual.settings.get("out", -1)))
+    # the contrast: a plain source still SUMS, which is the behaviour the
+    # "generators go dead" landmine exists to protect
+    rack.audio_rewire("pluck", "wobble_saw")
+    other = rack.find("wobble_saw")
+    check("rewiring into a plain SOURCE still sums onto its out bus",
+          int(src.settings["out"]) == int(other.settings["out"]))
+
 
 def test_dual_mode_follows_wires_and_emits_tap():
     """The mode is DERIVED, pushed to the node, and ANNOUNCED.

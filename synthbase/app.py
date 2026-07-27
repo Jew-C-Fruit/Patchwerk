@@ -38,7 +38,7 @@ from .master import MasterSection
 from .allocation import MAX_POLY_VOICES, Allocation, Hold, MonoLatest, Poly
 from .midi import MidiRouter, MonoVoice
 from .midi import list_inputs as _list_midi_inputs
-from .module import load_all_modules
+from .module import generates, load_all_modules
 from .rack import Rack, alloc_id, type_of
 from .watcher import Reloader
 
@@ -468,7 +468,7 @@ class SynthApp:
                     continue
                 try:
                     inst = self.rack.find(cand)
-                    if inst.module.kind == "source" and "gate" in inst.settings:
+                    if self._is_playable(inst):
                         target = inst.key
                         break
                 except KeyError:
@@ -921,8 +921,7 @@ class SynthApp:
                            if vid not in self.voices]
                 if missing:
                     inst = self.rack.find(new_id)
-                    if inst.module.kind == "source" and "gate" in inst.settings \
-                            and "freq" in inst.settings:
+                    if self._is_playable(inst):
                         for vid in missing:
                             self.voices[vid] = self._new_allocation(vid, inst.key)
                             self._voice_targets[vid] = inst.key
@@ -1150,8 +1149,7 @@ class SynthApp:
             if not self.rack:
                 raise RuntimeError("no rack running")
             inst = self.rack.find(key)
-            if inst.module.kind != "source" or "gate" not in inst.settings \
-                    or "freq" not in inst.settings:
+            if not self._is_playable(inst):
                 raise ValueError(f"{key} is not a note-playable source")
             v = self.voices.get(voice)
             if v is None:
@@ -1571,12 +1569,32 @@ class SynthApp:
                 raise KeyError(f"no key shifter {kid!r}")
             ks.configure(**settings)
 
+    #: NOTE-PLAYABLE: can a voice drive this instance?
+    #:
+    #: Two conditions, and both matter. It must GENERATE — `source` or
+    #: `dual`; an effect has no envelope to gate — and its synthdef must
+    #: expose the two controls a voice actually writes, `freq` and `gate`.
+    #:
+    #: This is ONE predicate because it used to be FOUR, and they drifted.
+    #: All four tested `kind == "source"`, which quietly made every `dual`
+    #: module unreachable: no voice would aim at one, so its gate never
+    #: opened and item 11's Power Shaper was SILENT in GEN mode while its
+    #: DSP was provably correct. Three of the four also tested `freq`; the
+    #: override path tested `gate` alone. Whenever a new kind appears, this
+    #: is the single place that decides whether it can be played — and
+    #: tests/test_playable.py asserts the decision is reachable in practice.
+    #: See continuity/item11-gen-mode-failure.md.
+    @staticmethod
+    def _is_playable(inst) -> bool:
+        return (generates(inst.module.kind)
+                and "freq" in inst.settings and "gate" in inst.settings)
+
     def _guess_voice_target(self) -> str | None:
         """First source in the chain that looks note-playable (freq + gate)."""
         if not self.rack:
             return None
         for inst in self.rack.instances:
-            if inst.module.kind == "source" and "freq" in inst.settings and "gate" in inst.settings:
+            if self._is_playable(inst):
                 return inst.key
         return None
 
