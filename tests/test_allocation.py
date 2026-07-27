@@ -116,6 +116,11 @@ def make_rack(playable=("pad",), server=None):
             settings={"out": 16, "freq": 220.0, "gate": 0, "cutoff": 800.0},
             service=False, node=FakeNode(), enabled=True, type=type_of(k),
             bus_group=None,
+            # item 11 added a SECOND owned bus group to Instance: a dual
+            # module at the chain head owns a private in-bus as well as its
+            # out-bus, and detach_instance/remove_instance free both. This
+            # fake enumerates Instance's fields, so it needs the new one.
+            in_bus_group=None,
         )
         for k in playable
     ]
