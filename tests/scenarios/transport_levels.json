@@ -1,0 +1,29 @@
+{
+  "name": "transport-levels",
+  "patch": "pad_space",
+  "note": "Item 37 §3.2/§3.4. Latched buttons into transport:run and transport:click, toggled. Every fire must produce a {\"kind\":\"level\"} event; the transcript is what makes that assertable, and Phase 2 replays it at EVERY surface that displays the endpoint (card LED and top bar both).",
+  "steps": [
+    {"do": "mark", "label": "setup"},
+    {"do": "spawn", "type": "spawn_button", "as": "run"},
+    {"do": "spawn", "type": "spawn_button", "as": "clk"},
+    {"do": "send", "msg": {"type": "set_button", "id": "$run", "latch": true}},
+    {"do": "send", "msg": {"type": "set_button", "id": "$clk", "latch": true}},
+    {"do": "wire", "from": "$run", "to": "transport:run"},
+    {"do": "wire", "from": "$clk", "to": "transport:click"},
+    {"do": "mark", "label": "run-on"},
+    {"do": "send", "msg": {"type": "fire_button", "id": "$run"}, "poke": false},
+    {"do": "wait", "s": 0.4},
+    {"do": "mark", "label": "click-on"},
+    {"do": "send", "msg": {"type": "fire_button", "id": "$clk"}, "poke": false},
+    {"do": "wait", "s": 0.4},
+    {"do": "mark", "label": "click-off"},
+    {"do": "send", "msg": {"type": "fire_button", "id": "$clk"}, "poke": false},
+    {"do": "wait", "s": 0.4},
+    {"do": "mark", "label": "run-off"},
+    {"do": "send", "msg": {"type": "fire_button", "id": "$run"}, "poke": false},
+    {"do": "wait", "s": 0.4},
+    {"do": "mark", "label": "settled"},
+    {"do": "poke"},
+    {"do": "restore"}
+  ]
+}

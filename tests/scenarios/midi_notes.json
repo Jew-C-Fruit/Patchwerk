@@ -1,0 +1,30 @@
+{
+  "name": "midi-notes",
+  "patch": "pad_space",
+  "note": "Real MIDI through a virtual rtmidi port: the rtmidi callback thread, velocity, CC 64 sustain and the +/-2 semitone bend. None of that is reachable through the websocket note path, which enters at SynthApp.note_on. Every note-on here is closed, so the transcript must contain no unpaired taps.",
+  "steps": [
+    {"do": "midi_enable"},
+    {"do": "mark", "label": "notes"},
+    {"do": "midi", "kind": "note_on", "note": 60, "velocity": 96},
+    {"do": "wait", "s": 0.3},
+    {"do": "midi", "kind": "note_on", "note": 64, "velocity": 96},
+    {"do": "wait", "s": 0.3},
+    {"do": "mark", "label": "bend"},
+    {"do": "midi", "kind": "bend", "semitones": 1.0},
+    {"do": "wait", "s": 0.2},
+    {"do": "midi", "kind": "bend", "semitones": 0.0},
+    {"do": "mark", "label": "sustain"},
+    {"do": "midi", "kind": "sustain", "on": true},
+    {"do": "midi", "kind": "note_off", "note": 64},
+    {"do": "midi", "kind": "note_off", "note": 60},
+    {"do": "wait", "s": 0.3},
+    {"do": "midi", "kind": "sustain", "on": false},
+    {"do": "wait", "s": 0.3},
+    {"do": "mark", "label": "cc"},
+    {"do": "midi", "kind": "cc", "cc": 74, "value": 100},
+    {"do": "wait", "s": 0.3},
+    {"do": "mark", "label": "settled"},
+    {"do": "poke"},
+    {"do": "restore"}
+  ]
+}
