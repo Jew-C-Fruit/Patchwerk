@@ -330,8 +330,21 @@ class _FakeSubprocess:
     TimeoutExpired = Exception
 
 
-with Patch(subprocess=_FakeSubprocess):
+# `find_scsynth` must be patched alongside `subprocess`, not just it. It
+# resolves the binary off the SuperCollider.app paths and then PATH, so on a
+# machine with no SuperCollider installed — which is exactly the CI runner —
+# `probe()` returns its not-found verdict and NEVER reaches Popen. The three
+# checks below then read an empty argv and fail, having asserted nothing about
+# argv rendering. Green on a dev Mac, red in CI, for a reason that is about the
+# host and not about the code under test.
+with Patch(subprocess=_FakeSubprocess, find_scsynth=lambda: "/nonexistent/scsynth"):
     A.probe(device="In", input_channels=2, output_device="Out")
+    # Guard the guard: if probe() ever short-circuits before Popen again, fail
+    # HERE with a clear cause rather than three confusing empty-argv mismatches.
+    check("27b. the argv checks below actually reached scsynth's launch",
+          _RecordingPopen.argv is not None,
+          "" if _RecordingPopen.argv is not None
+          else "probe() returned before Popen — argv never recorded")
     argv = _RecordingPopen.argv or []
     check("28. differing devices render scsynth's TWO-ARGUMENT -H",
           argv[-3:] == ["-H", "In", "Out"], str(argv[-4:]))
