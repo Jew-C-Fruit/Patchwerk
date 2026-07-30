@@ -1,0 +1,1182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Patchwerk Manual — design proof — Ch 3 The interface</title>
+<!-- ===========================================================================
+     DESIGN PROOF. Not manual content.
+
+     The <style> block below is a VERBATIM INLINE SNAPSHOT of
+     ../style/manual.css, which is canonical. It is inlined so this file opens
+     standalone from anywhere. If you edit the design, edit manual.css and
+     re-inline; never edit the snapshot here.
+     =========================================================================== -->
+<style>
+/* ===========================================================================
+   Patchwerk User Manual — canonical stylesheet
+   Implements docs/manual/DESIGN.md. Read that first; this file is its
+   mechanical half and the spec is the reasoning half.
+
+   SCAFFOLD: the manual has no content yet. This stylesheet is real and
+   usable, but it has only ever been exercised against the Chapter 3 proof.
+
+   Palette provenance: every --pw-* value below is copied VERBATIM from
+   gui/blocks.html. Do not tune these by eye — re-copy them when the GUI
+   changes. Line refs are to blocks.html @ 687692b.
+   =========================================================================== */
+
+:root {
+  /* ── Patchwerk GUI surfaces — blocks.html:8-22 ────────────────────────── */
+  --pw-plane:    #0d0d0d;   /* canvas */
+  --pw-surface:  #1a1a19;   /* palette / chrome */
+  --pw-card:     #202020;
+  --pw-ink-1:    #f2f1ea;   /* GUI primary text */
+  --pw-ink-2:    #a9a89e;   /* GUI secondary text */
+  --pw-hairline: #2c2c2a;
+  --pw-border:   rgba(255,255,255,0.10);
+  --pw-grid:     rgba(255,255,255,0.045);
+  --pw-danger:   #e34948;
+  --pw-meter:    #1baf7a;
+
+  /* ── The four signal planes — blocks.html:11-20, 820-821 ──────────────── */
+  /* TRUE values. Use ONLY on dark plates (inside figures), where they are
+     the same colour the reader sees on screen. */
+  --pw-audio:    #3987e5;
+  --pw-ctl:      #1baf7a;
+  --pw-mod:      #9085e9;
+  --pw-bin:      #e6c34a;
+  --pw-binlatch: #ee9338;
+
+  /* Paper-contrast variants. Hue and saturation preserved, lightness lowered
+     until the colour clears WCAG AA (4.5:1) against --paper as small text.
+     Use in body text, tokens, rules, marginalia — anywhere NOT on a dark
+     plate. See DESIGN.md §4.3. Measured ratios on #f7f6f1 in the comments;
+     all target ~5.2:1 so antialiasing and paper tint have headroom.
+     Derived arithmetically from the GUI value, NOT picked by eye — rerun the
+     solver in DESIGN.md §4.3 if a GUI colour changes. */
+  --audio-ink:  #2a68b4;   /* 5.19:1  from --audio    */
+  --ctl-ink:    #127653;   /* 5.19:1  from --ctl      */
+  --mod-ink:    #5f52c0;   /* 5.62:1  from --mod      */
+  --bin-ink:    #7e6511;   /* 5.17:1  from --bin      */
+  --latch-ink:  #9e550d;   /* 5.16:1  from --binlatch */
+  --danger-ink: #b8302f;   /* 5.54:1  from --danger   */
+
+  /* ── Handle pastels — blocks.html:826-827 ─────────────────────────────── */
+  --pw-audio-pastel: #9dc4f2;
+  --pw-ctl-pastel:   #8fdcb8;
+  --pw-mod-pastel:   #f0a9a8;   /* NB: pastel of the WARM mod line, not of
+                                   --mod violet. Known discrepancy — see
+                                   DESIGN.md §12, open decision D-3. */
+  --pw-bin-pastel:   #f2dc9a;
+  --pw-any-pastel:   #bcbbb2;
+
+  /* ── Module family colours — blocks.html:795-800 ──────────────────────── */
+  --fam-voice:#3987e5; --fam-input:#1baf7a; --fam-filter:#eda100;
+  --fam-time:#199e70;  --fam-dirt:#eb6834;  --fam-dyn:#e87ba4;
+  --fam-vox:#e34948;   --fam-service:#9085e9; --fam-io:#c3c2b7;
+  --fam-psine:#22b8d4;
+
+  /* ── Manual paper. The reciprocity: the GUI's ink is the manual's paper.
+        --paper is a lightened --pw-ink-1; --ink is --pw-surface verbatim. ── */
+  --paper:     #f7f6f1;
+  --paper-2:   #efeee7;
+  --ink:       #1a1a19;
+  --ink-mute:  #6b6a63;
+  --rule:      #dedcd2;
+  --rule-soft: #e8e6dd;
+
+  /* ── Type ─────────────────────────────────────────────────────────────── */
+  --serif: "Charter","Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+  --ui:    system-ui,-apple-system,"Segoe UI",sans-serif;  /* = blocks.html:26 */
+  --mono:  ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+
+  /* ── Measure and rail ─────────────────────────────────────────────────── */
+  --measure: 33rem;
+  --rail:    11rem;
+  --gap:     2.25rem;
+
+  /* ── Figure aspect classes — DESIGN.md §6.2 ───────────────────────────── */
+  --ar-page:    16/10;  /* full-window screenshot, 1440x900 */
+  --ar-wide:    16/9;   /* wide diagram */
+  --ar-diagram: 4/3;    /* standard diagram */
+  --ar-pair:    2/1;    /* side-by-side comparison */
+  --ar-seq:     3/1;    /* three-frame sequence */
+  --ar-card:    3/2;    /* module card portrait plate */
+
+  /* ── Interface geometry, true scale — blocks.html:1264-1286 ───────────── */
+  --u: 16px;            /* one unit / grid square */
+  --blk: 10;            /* units per block */
+  --gut: 2;             /* units per gutter */
+}
+
+/* ===========================================================================
+   1. Base
+   =========================================================================== */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.65;
+  font-kerning: normal;
+  font-variant-numeric: oldstyle-nums proportional-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+p { margin: 0 0 1.15em; }
+p + p { text-indent: 0; }
+
+a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--rule);
+}
+a:hover { text-decoration-color: currentColor; }
+
+strong { font-weight: 650; }
+
+/* ===========================================================================
+   2. Layout — the band. Narrow rail for marginalia, wide column for prose.
+      Mirrors the GUI's own palette-rail-beside-board arrangement.
+   =========================================================================== */
+
+.sheet { padding: 0 1.5rem 6rem; }
+
+.band {
+  display: grid;
+  grid-template-columns: var(--rail) var(--gap) minmax(0, var(--measure));
+  justify-content: center;
+  column-gap: 0;
+}
+.band > *          { grid-column: 3; }
+.band > .rail      { grid-column: 1; }
+.band > .full      { grid-column: 1 / -1; }
+
+/* marginalia */
+.rail {
+  font-family: var(--ui);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--ink-mute);
+  text-align: right;
+  padding-top: 0.42rem;
+  padding-right: 0.1rem;
+}
+.rail .k {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink);
+  margin-bottom: 0.15rem;
+}
+.rail + * { margin-top: 0; }
+
+@media (max-width: 950px) {
+  .band { grid-template-columns: minmax(0, var(--measure)); }
+  .band > *, .band > .rail, .band > .full { grid-column: 1; }
+  .rail {
+    text-align: left;
+    border-left: 2px solid var(--rule);
+    padding: 0.3rem 0 0.3rem 0.8rem;
+    margin: 0 0 1.1rem;
+  }
+}
+
+/* ===========================================================================
+   3. Type hierarchy
+   =========================================================================== */
+
+.ch-open { padding: 4.5rem 0 0; }
+
+.ch-num {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+h1 {
+  font-family: var(--serif);
+  font-size: 2.7rem;
+  line-height: 1.06;
+  font-weight: 600;
+  letter-spacing: -0.017em;
+  margin: 0.4rem 0 0;
+}
+
+.standfirst {
+  font-family: var(--ui);
+  font-size: 1.02rem;
+  line-height: 1.55;
+  color: var(--ink-mute);
+  margin: 1rem 0 0;
+  max-width: 30rem;
+}
+
+/* h2 spans the full band so its rule is a true divider and its number sits
+   out in the rail, aligned with the marginalia below it. */
+h2 {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: var(--rail) var(--gap) minmax(0, var(--measure));
+  justify-content: center;
+  font-family: var(--serif);
+  font-size: 1.6rem;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 3.4rem 0 1.1rem;
+  padding-top: 1.15rem;
+  border-top: 1px solid var(--rule);
+}
+h2 > .num {
+  grid-column: 1;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--ink-mute);
+  text-align: right;
+  padding-top: 0.55rem;
+}
+h2 > .t { grid-column: 3; }
+
+h3 {
+  font-family: var(--serif);
+  font-size: 1.17rem;
+  font-weight: 650;
+  line-height: 1.3;
+  margin: 2.2rem 0 0.55rem;
+}
+h3 > .num {
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  font-weight: 500;
+  color: var(--ink-mute);
+  margin-right: 0.5em;
+  letter-spacing: 0.05em;
+}
+
+h4 {
+  font-family: var(--ui);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  margin: 1.7rem 0 0.4rem;
+}
+
+@media (max-width: 950px) {
+  h2 { grid-template-columns: minmax(0, var(--measure)); }
+  h2 > .num { grid-column: 1; text-align: left; padding: 0 0 0.15rem; display: block; }
+  h2 > .t   { grid-column: 1; }
+}
+
+/* ===========================================================================
+   4. Inline conventions
+      When the manual NAMES something on screen, it wears the interface's
+      typeface. That is the whole rule. DESIGN.md §5.4.
+   =========================================================================== */
+
+.ui {                          /* an on-screen control, card or label */
+  font-family: var(--ui);
+  font-weight: 600;
+  font-size: 0.93em;
+  letter-spacing: -0.005em;
+}
+
+code, .key {                   /* module keys, commands, endpoint grammar */
+  font-family: var(--mono);
+  font-size: 0.86em;
+  background: var(--paper-2);
+  border: 1px solid var(--rule-soft);
+  border-radius: 4px;
+  padding: 0.06em 0.34em;
+}
+
+.xref {                        /* a REFERENCE.md citation */
+  font-family: var(--ui);
+  font-size: 0.82em;
+  color: var(--ink-mute);
+  white-space: nowrap;
+}
+
+.todo {                        /* scaffold marker — must not survive to print */
+  font-family: var(--mono);
+  font-size: 0.72em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: #fdf3d0;
+  border: 1px solid #e6d190;
+  border-radius: 3px;
+  padding: 0.1em 0.38em;
+  color: #7a601a;
+}
+
+/* ===========================================================================
+   5. Plane tokens — triple-encoded: colour + stroke pattern + word.
+      Never colour alone. DESIGN.md §7.
+   =========================================================================== */
+
+.plane {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42em;
+  font-family: var(--ui);
+  font-size: 0.66rem;
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  padding: 0.16em 0.55em 0.16em 0.42em;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.plane::before {
+  content: "";
+  width: 1.25em;
+  height: 0;
+  border-top: 2px currentColor;
+  border-top-style: var(--stroke);
+}
+.plane.audio { color: var(--audio-ink); --stroke: solid; }
+.plane.notes { color: var(--ctl-ink);   --stroke: dashed; }
+.plane.mod   { color: var(--mod-ink);   --stroke: dotted; }
+.plane.bin   { color: var(--bin-ink);   --stroke: double; }
+
+/* on a dark plate the TRUE GUI values are used instead */
+.plate .plane.audio { color: var(--pw-audio); }
+.plate .plane.notes { color: var(--pw-ctl); }
+.plate .plane.mod   { color: var(--pw-mod); }
+.plate .plane.bin   { color: var(--pw-bin); }
+
+/* SVG stroke recipes for authored diagrams */
+.stroke-audio { stroke: var(--pw-audio); stroke-width: 2; stroke-dasharray: none; }
+.stroke-notes { stroke: var(--pw-ctl);   stroke-width: 2; stroke-dasharray: 10 3; }
+.stroke-mod   { stroke: var(--pw-mod);   stroke-width: 2; stroke-dasharray: 2 3; }
+.stroke-bin   { stroke: var(--pw-bin);   stroke-width: 2; stroke-dasharray: 9 3 2 3; }
+
+/* ===========================================================================
+   6. Figures
+      A figure is a dark PLATE with the artwork inside it. Screenshots of a
+      dark interface sitting directly on light paper read as holes; the plate
+      makes them deliberate. DESIGN.md §6.
+   =========================================================================== */
+
+figure.fig { margin: 2.5rem 0; }
+
+.plate {
+  position: relative;
+  background: var(--pw-plane);
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  padding: 14px;
+  box-shadow: 0 8px 26px rgba(26,26,25,0.11), 0 1px 0 rgba(26,26,25,0.04);
+}
+
+/* the artwork area. Carries the GUI's own 24px canvas grid so an empty
+   placeholder still reads as "a piece of Patchwerk goes here". */
+.shot {
+  position: relative;
+  aspect-ratio: var(--ar, 16/10);
+  border: 1px solid var(--pw-hairline);
+  border-radius: 7px;
+  background-color: var(--pw-plane);
+  background-image:
+    linear-gradient(var(--pw-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--pw-grid) 1px, transparent 1px);
+  background-size: 24px 24px;
+  overflow: hidden;
+}
+.shot > img { width: 100%; height: 100%; object-fit: contain; display: block; }
+
+/* The artwork layer. A BACKGROUND image, not an <img>, on purpose: captured
+   figures live in a gitignored folder (see img/README.md), so on a fresh
+   clone the file is absent. A missing background simply does not paint and
+   the .ph placeholder underneath shows through — where a missing <img> would
+   render a broken-image icon over it. Degrades to the scaffold, not to a
+   glyph. */
+.art {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background-size: contain;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+.ph { z-index: 0; }
+
+/* placeholder contents, scaffold only — deleted as captures land */
+.ph {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  gap: 0.42rem;
+  text-align: center;
+  padding: 1.5rem;
+  font-family: var(--ui);
+  color: var(--pw-ink-2);
+}
+.ph .id {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.16em;
+  color: var(--pw-ink-1);
+  font-weight: 600;
+}
+.ph .meta {
+  font-size: 0.62rem;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: #6f6e66;
+}
+.ph .desc {
+  font-size: 0.8rem;
+  line-height: 1.45;
+  max-width: 34ch;
+  margin: 0 auto;
+  color: var(--pw-ink-2);
+}
+.ph .tag {
+  display: inline-block;
+  font-size: 0.58rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  border: 1px solid #3a3a37;
+  border-radius: 999px;
+  padding: 0.15em 0.6em;
+  color: #8a8980;
+}
+.ph .tag.rig { border-color: #6a5a2a; color: #b39a4e; }
+
+figcaption {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.65rem;
+  margin-top: 0.75rem;
+  font-family: var(--ui);
+  font-size: 0.81rem;
+  line-height: 1.5;
+  color: var(--ink-mute);
+}
+figcaption .figid {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink);
+  white-space: nowrap;
+  padding-top: 0.16em;
+}
+figcaption .cap-plane { margin-left: 0.4em; vertical-align: 1px; }
+
+/* numbered callout legend under an annotated figure */
+ol.legend {
+  grid-column: 2;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: cal;
+  columns: 2;
+  column-gap: 1.4rem;
+  font-size: 0.78rem;
+}
+ol.legend li {
+  counter-increment: cal;
+  break-inside: avoid;
+  margin: 0 0 0.28rem;
+  padding-left: 1.5rem;
+  position: relative;
+}
+ol.legend li::before {
+  content: counter(cal);
+  position: absolute;
+  left: 0;
+  top: 0.12em;
+  width: 1.05rem;
+  height: 1.05rem;
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 0.6rem;
+  font-weight: 700;
+  display: grid;
+  place-content: center;
+}
+
+/* ===========================================================================
+   7. Screenshot annotation
+      ACHROMATIC by law: callouts must never introduce a hue that could be
+      mistaken for a signal plane. The only coloured annotation is --pw-danger,
+      which means the same thing here as it does in the GUI. DESIGN.md §8.
+   =========================================================================== */
+
+.cal {                          /* numbered callout marker */
+  position: absolute;
+  width: 22px; height: 22px;
+  margin: -11px 0 0 -11px;
+  border-radius: 50%;
+  background: var(--pw-ink-1);
+  color: var(--pw-plane);
+  font-family: var(--ui);
+  font-size: 12px;
+  font-weight: 700;
+  display: grid;
+  place-content: center;
+  box-shadow: 0 0 0 2.5px rgba(13,13,13,0.6);
+  z-index: 3;
+}
+
+.lead {                         /* leader line — orthogonal only, no arrowhead */
+  position: absolute;
+  background: rgba(242,241,234,0.85);
+  z-index: 2;
+}
+.lead.h { height: 1.5px; }
+.lead.v { width: 1.5px; }
+
+.hl {                           /* region highlight, mirrors .splice-target */
+  position: absolute;
+  border: 1.5px solid rgba(255,255,255,0.85);
+  border-radius: 6px;
+  box-shadow: 0 0 0 1.5px rgba(255,255,255,0.35);
+  z-index: 2;
+}
+.hl.danger {                    /* mirrors .replace-hi */
+  border-color: var(--pw-danger);
+  box-shadow: 0 0 0 2px var(--pw-danger),
+              0 0 18px color-mix(in srgb, var(--pw-danger) 60%, transparent);
+}
+
+.scrim {                        /* dims everything except the highlighted region */
+  position: absolute;
+  inset: 0;
+  background: rgba(13,13,13,0.55);
+  z-index: 1;
+}
+
+/* ===========================================================================
+   8. Prose callouts
+      Achromatic rules of varying weight. The single exception is .warn.
+   =========================================================================== */
+
+.callout {
+  border-left: 2px solid var(--rule);
+  padding: 0.1rem 0 0.1rem 1.05rem;
+  margin: 1.6rem 0;
+}
+.callout > .lbl {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  margin-bottom: 0.28rem;
+}
+.callout > p:last-child { margin-bottom: 0; }
+.callout.try  { border-left-width: 5px; }
+.callout.warn { border-left-color: var(--danger-ink); }
+.callout.warn > .lbl { color: var(--danger-ink); }
+
+/* the scaffold's stub directive — deleted when the section is written */
+.stub {
+  background: var(--paper-2);
+  border: 1px dashed #ccc9bd;
+  border-radius: 8px;
+  padding: 0.85rem 1.05rem;
+  margin: 1.3rem 0;
+  font-family: var(--ui);
+  font-size: 0.85rem;
+  line-height: 1.55;
+  color: var(--ink-mute);
+}
+.stub > .lbl {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #96938a;
+  margin-bottom: 0.3rem;
+}
+.stub :last-child { margin-bottom: 0; }
+
+/* ===========================================================================
+   9. Tables
+   =========================================================================== */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--ui);
+  font-size: 0.85rem;
+  margin: 1.5rem 0;
+}
+th, td {
+  text-align: left;
+  padding: 0.5rem 0.7rem 0.5rem 0;
+  border-bottom: 1px solid var(--rule-soft);
+  vertical-align: top;
+}
+thead th {
+  font-size: 0.66rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  font-weight: 700;
+  border-bottom: 1px solid var(--rule);
+}
+
+/* ===========================================================================
+   10. True-scale interface geometry
+       Blocks-geometry diagrams are drawn 1:1 with the running UI — one CSS
+       pixel is one interface pixel. A reader can hold the page against the
+       screen. DESIGN.md §9.
+   =========================================================================== */
+
+.geo { display: flex; align-items: flex-end; gap: calc(var(--gut) * var(--u)); }
+.geo .sz {
+  border: 1px solid var(--pw-border);
+  border-radius: 9px;                     /* = .mod border-radius */
+  background: var(--pw-card);
+  box-shadow: 0 3px 14px rgba(0,0,0,0.45); /* = .mod box-shadow */
+  position: relative;
+  display: grid;
+  place-content: center;
+  font-family: var(--ui);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--pw-ink-2);
+}
+.geo .sz.xs { width: 72px;  height: 72px;  }   /* 4.5 x 4.5 u */
+.geo .sz.s  { width: 160px; height: 72px;  }   /* 10  x 4.5 u */
+.geo .sz.m  { width: 160px; height: 160px; }   /* 10  x 10  u */
+.geo .sz.l  { width: 352px; height: 160px; }   /* 22  x 10  u */
+.geo .sz::before {                              /* the power stripe */
+  content: "";
+  position: absolute;
+  left: 9px; top: 9px; bottom: 9px;
+  width: 4px;
+  border-radius: 3px;
+  background: var(--stripe, var(--fam-voice));
+}
+
+/* ===========================================================================
+   11. Proof-page furniture — NOT part of the manual design.
+   =========================================================================== */
+
+.proofbar {
+  background: #fdf3d0;
+  border-bottom: 1px solid #e6d190;
+  color: #6d5514;
+  font-family: var(--ui);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  padding: 0.7rem 1.5rem;
+  text-align: center;
+}
+.proofbar strong { color: #4d3b0a; }
+.specimen-note {
+  font-family: var(--ui);
+  font-size: 0.72rem;
+  color: #9a978d;
+  font-style: normal;
+}
+.lorem { color: #4a4943; }
+
+/* ===========================================================================
+   12. Print
+   =========================================================================== */
+
+@page { margin: 18mm 16mm; }
+
+@media print {
+  body { font-size: 10.5pt; background: #fff; }
+  .proofbar, .todo { display: none !important; }
+  .band { grid-template-columns: 8rem 1.4rem minmax(0, 30rem); }
+  h2 { break-after: avoid; }
+  h3, h4 { break-after: avoid; }
+  figure.fig { break-inside: avoid; }
+  .plate { box-shadow: none; border-color: #ccc; }
+  .callout, table { break-inside: avoid; }
+  a { text-decoration: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="proofbar">
+  <strong>DESIGN PROOF — not documentation.</strong>
+  Body paragraphs are <em>lorem ipsum</em>, used deliberately so no sentence here
+  can be mistaken for manual content. Headings and figure slots are real, taken
+  from the Chapter&nbsp;3 scaffold. <strong>FIG-03-01 is a real capture</strong>
+  from a live instance (2026-07-26) proving the pipeline; the remaining grey
+  boxes are placeholders at their true aspect ratios. Captured images are
+  gitignored — if FIG-03-01 shows a placeholder for you, regenerate it with
+  <code>docs/manual/capture.py</code>.
+</div>
+
+<div class="sheet">
+
+<!-- ══════════════════════════════════════════════════════════════ opener ── -->
+<div class="band">
+  <div class="ch-open full">
+    <div class="band" style="padding:0">
+      <div class="rail">
+        <span class="k">Cross-refs</span>
+        tracked in<br><code style="font-size:.62rem">continuity/<wbr>manual-xref.md</code>
+      </div>
+      <div>
+        <div class="ch-num">Chapter 3</div>
+        <h1>The interface</h1>
+        <p class="standfirst">Names every thing on screen, so the rest of the
+        manual can point at it without re-explaining. This is the vocabulary
+        chapter for the interface, exactly as Chapter&nbsp;4 is for signal.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════ 3.1 ── -->
+<div class="band">
+  <h2><span class="num">3.1</span><span class="t">One page, two geometry modes</span></h2>
+
+  <div class="rail">
+    <span class="k">Figures</span>
+    FIG-03-01<br>FIG-03-05
+  </div>
+  <div>
+    <p class="lorem">Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed
+    do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad
+    minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex
+    ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate
+    velit esse cillum dolore eu fugiat nulla pariatur.</p>
+
+    <p class="lorem">Excepteur sint occaecat cupidatat non proident, sunt in
+    culpa qui officia deserunt mollit anim id est laborum. Sed ut perspiciatis
+    unde omnis iste natus error sit <span class="ui">Blocks</span> voluptatem
+    accusantium doloremque laudantium, totam rem aperiam eaque ipsa quae ab illo
+    inventore veritatis et quasi architecto <span class="ui">Flex</span> beatae
+    vitae dicta sunt explicabo.</p>
+  </div>
+
+  <!-- FIG-03-01 — REAL CAPTURE, annotated. Captured 2026-07-26 from a live
+       rig by docs/manual/capture.py at the settled conventions (1440x900,
+       2x, blocks mode, chrome cropped). The .ph block is kept UNDERNEATH as
+       the fallback for anyone without the gitignored image. -->
+  <figure class="fig full">
+    <div class="plate">
+      <div class="shot" style="--ar:var(--ar-page)">
+        <div class="ph">
+          <span class="id">FIG-03-01</span>
+          <span class="meta">16 : 10 &nbsp;·&nbsp; annotated composite</span>
+          <span class="desc">Whole page with numbered callouts naming every
+            region — the map the rest of the manual points back to.</span>
+          <span><span class="tag rig">image not present — see img/README.md</span></span>
+        </div>
+        <div class="art" style="background-image:url(../img/fig-03-01.png)"></div>
+
+        <!-- callouts sited on the real capture: achromatic, reading order,
+             each in empty canvas with a short orthogonal leader -->
+        <div class="lead v" style="left:72%;  top:3.4%;  height:2.2%"></div>
+        <div class="cal"    style="left:72%;  top:6.2%">1</div>
+
+        <div class="lead h" style="left:33.5%; top:5.7%; width:3.5%"></div>
+        <div class="cal"    style="left:38.5%; top:5.7%">2</div>
+
+        <div class="lead h" style="left:54.5%; top:13%;  width:2%"></div>
+        <div class="cal"    style="left:57.5%; top:13%">3</div>
+
+        <div class="lead h" style="left:11.5%; top:45%;  width:1.5%"></div>
+        <div class="cal"    style="left:13.5%; top:45%">4</div>
+
+        <div class="lead v" style="left:77%;  top:28.5%; height:3.5%"></div>
+        <div class="cal"    style="left:77%;  top:27%">5</div>
+
+        <div class="lead h" style="left:34%;  top:58%;  width:2.5%"></div>
+        <div class="cal"    style="left:37.5%; top:58%">6</div>
+
+        <div class="lead h" style="left:54.5%; top:91%;  width:2%"></div>
+        <div class="cal"    style="left:57.5%; top:91%">7</div>
+      </div>
+    </div>
+    <figcaption>
+      <span class="figid">FIG-03-01</span>
+      <span>The page at a glance — a real capture from a running instance.
+        Callout markers are achromatic by law: a coloured marker would be read
+        as a signal plane. Leaders are orthogonal, matching the interface's own
+        gutter-routed wires.</span>
+      <ol class="legend">
+        <li>Top bar — transport, tempo, master: all global</li>
+        <li>Wire-kind legend — the four planes, named</li>
+        <li>A module card</li>
+        <li>Palette rail, grouped by family</li>
+        <li>An audio wire, gutter-routed</li>
+        <li>A banner card — the binary family wears a coloured head</li>
+        <li>Master Out — where sound leaves</li>
+      </ol>
+    </figcaption>
+  </figure>
+
+  <div class="rail"><span class="k">Compare</span>blocks ↔ flex</div>
+  <div>
+    <p class="lorem">Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut
+    odit aut fugit, sed quia consequuntur magni dolores eos qui ratione
+    voluptatem sequi nesciunt.</p>
+  </div>
+
+  <!-- FIG-03-05 — pair, 2:1 -->
+  <figure class="fig full">
+    <div class="plate">
+      <div class="shot" style="--ar:var(--ar-pair)">
+        <div class="ph">
+          <span class="id">FIG-03-05</span>
+          <span class="meta">2 : 1 &nbsp;·&nbsp; pair</span>
+          <span class="desc">The same patch in blocks mode and flex mode, side
+            by side.</span>
+          <span><span class="tag rig">needs rig</span></span>
+        </div>
+      </div>
+    </div>
+    <figcaption>
+      <span class="figid">FIG-03-05</span>
+      <span>One page, two geometry modes. Pairs always use the 2:1 plate so
+        comparisons across the manual stay the same shape.</span>
+    </figcaption>
+  </figure>
+
+  <div class="stub full" style="max-width:var(--measure);margin-left:auto;margin-right:auto">
+    <span class="lbl">Scaffold — stub directive</span>
+    <p>There is one page. Blocks (the snapping grid) and flex (free positions,
+    automatic height) are two modes inside it, swapped from the top bar. Say
+    plainly that the archived pages under <code>gui/legacy/</code> are not
+    served and not to be used — readers who find them in the repo will ask.</p>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════ 3.2 ── -->
+<div class="band">
+  <h2><span class="num">3.2</span><span class="t">The top bar</span></h2>
+
+  <div class="rail">
+    <span class="k">See also</span>
+    §4.4 global vs wired
+  </div>
+  <div>
+    <p class="lorem">At vero eos et accusamus et iusto odio dignissimos ducimus
+    qui blanditiis praesentium voluptatum deleniti atque corrupti quos dolores
+    et quas molestias excepturi sint occaecati cupiditate non provident.</p>
+  </div>
+
+  <figure class="fig full">
+    <div class="plate">
+      <div class="shot" style="--ar:var(--ar-seq)">
+        <div class="ph">
+          <span class="id">FIG-03-02</span>
+          <span class="meta">3 : 1 &nbsp;·&nbsp; sequence plate</span>
+          <span class="desc">Top bar, annotated control by control.</span>
+          <span><span class="tag rig">needs rig</span></span>
+        </div>
+      </div>
+    </div>
+    <figcaption>
+      <span class="figid">FIG-03-02</span>
+      <span>The top bar. Everything here is global — it is not wired to
+        anything and it affects everything.</span>
+    </figcaption>
+  </figure>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════ 3.3 ── -->
+<div class="band">
+  <h2><span class="num">3.3</span><span class="t">Anatomy of a card</span></h2>
+
+  <div class="rail">
+    <span class="k">Figures</span>
+    FIG-03-03<br>FIG-03-12<br>FIG-03-08<br>FIG-03-04
+  </div>
+  <div>
+    <p class="lorem">Et harum quidem rerum facilis est et expedita distinctio.
+    Nam libero tempore, cum soluta nobis est eligendi optio cumque nihil impedit
+    quo minus id quod maxime placeat facere possimus.</p>
+  </div>
+
+  <figure class="fig full">
+    <div class="plate">
+      <div class="shot" style="--ar:var(--ar-card)">
+        <div class="ph">
+          <span class="id">FIG-03-03</span>
+          <span class="meta">3 : 2 &nbsp;·&nbsp; card portrait</span>
+          <span class="desc">One card, every part labelled: colour bar, body,
+            param rows, in/out handles, size chips.</span>
+          <span><span class="tag rig">needs rig</span></span>
+        </div>
+      </div>
+    </div>
+    <figcaption>
+      <span class="figid">FIG-03-03</span>
+      <span>Card anatomy. All thirty card portraits share this 3:2 plate with
+        the card centred at natural size — the plate never changes shape, so
+        the module chapters do not look ragged.</span>
+    </figcaption>
+  </figure>
+
+  <h3><span class="num">3.3.1</span>The colour bar is the power switch</h3>
+  <div class="rail"><span class="k">Idiom</span>outline = off<br>filled = on</div>
+  <div>
+    <p class="lorem">Temporibus autem quibusdam et aut officiis debitis aut
+    rerum necessitatibus saepe eveniet ut et voluptates repudiandae sint et
+    molestiae non recusandae.</p>
+
+    <div class="callout warn">
+      <span class="lbl">Watch out</span>
+      <p>There is no round head LED any more. Readers working from older
+      screenshots will look for one and not find it.</p>
+    </div>
+  </div>
+
+  <figure class="fig full">
+    <div class="plate">
+      <div class="shot" style="--ar:var(--ar-pair)">
+        <div class="ph">
+          <span class="id">FIG-03-12</span>
+          <span class="meta">2 : 1 &nbsp;·&nbsp; pair</span>
+          <span class="desc">Colour bar outline vs filled — the power indicator
+            in both states.</span>
+          <span><span class="tag rig">needs rig</span></span>
+        </div>
+      </div>
+    </div>
+    <figcaption>
+      <span class="figid">FIG-03-12</span>
+      <span>Power off and power on.</span>
+    </figcaption>
+  </figure>
+
+  <h3><span class="num">3.3.2</span>Handles and what they tell you</h3>
+  <div class="rail"><span class="k">Planes</span>pastel of the data colour</div>
+  <div>
+    <p class="lorem">Itaque earum rerum hic tenetur a sapiente delectus, ut aut
+    reiciendis voluptatibus maiores alias consequatur aut perferendis doloribus
+    asperiores repellat. Hovering declares <code>notes &gt; cutoff</code>.</p>
+
+    <p>
+      <span class="plane audio">audio</span>
+      <span class="plane notes">notes</span>
+      <span class="plane mod">mod</span>
+      <span class="plane bin">binary</span>
+    </p>
+    <p class="specimen-note">Plane tokens in running text use the
+    paper-contrast variants; inside a figure plate the true GUI values are
+    used. Each token is encoded three ways — colour, stroke pattern, word.</p>
+  </div>
+
+  <figure class="fig full">
+    <div class="plate">
+      <div class="shot" style="--ar:var(--ar-card)">
+        <div class="ph">
+          <span class="id">FIG-03-08</span>
+          <span class="meta">3 : 2 &nbsp;·&nbsp; card portrait</span>
+          <span class="desc">A hovered input handle showing its
+            “data type &gt; target name” label.</span>
+          <span><span class="tag rig">needs rig</span></span>
+        </div>
+      </div>
+    </div>
+    <figcaption>
+      <span class="figid">FIG-03-08</span>
+      <span>A handle never names its own card; the wire label does that.</span>
+      <span class="cap-plane"></span>
+    </figcaption>
+  </figure>
+
+  <h3><span class="num">3.3.3</span>Card sizes</h3>
+  <div class="rail"><span class="k">True scale</span>1 px = 1 interface px</div>
+  <div>
+    <p class="lorem">Nam libero tempore, cum soluta nobis est eligendi optio.
+    A <strong>unit</strong> is one 16px grid square; a <strong>block</strong> is
+    ten units square; blocks are separated by two-unit gutters.</p>
+  </div>
+
+  <!-- FIG-03-04 — rendered true-scale STYLE SPECIMEN, not final art -->
+  <figure class="fig full">
+    <div class="plate">
+      <div class="shot" style="--ar:var(--ar-wide);display:grid;place-content:center">
+        <div class="geo">
+          <div class="sz xs" style="--stripe:var(--fam-io)">XS</div>
+          <div class="sz s"  style="--stripe:var(--fam-filter)">S</div>
+          <div class="sz m"  style="--stripe:var(--fam-voice)">M</div>
+          <div class="sz l"  style="--stripe:var(--fam-time)">L</div>
+        </div>
+      </div>
+    </div>
+    <figcaption>
+      <span class="figid">FIG-03-04</span>
+      <span><strong>Style specimen — final art still to be drawn.</strong>
+        The four size classes at true scale: XS 72×72, S 160×72, M 160×160,
+        L 352×160&nbsp;px. Radius, border, shadow and the 4&nbsp;px power stripe
+        are copied from <code>.mod</code>. At 100% zoom you can hold this
+        against the running interface and the cards line up.</span>
+    </figcaption>
+  </figure>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════ 3.5 ── -->
+<div class="band">
+  <h2><span class="num">3.5</span><span class="t">Wires</span></h2>
+
+  <h3><span class="num">3.5.1</span>Drawing one</h3>
+  <div class="rail"><span class="k">Figure</span>FIG-03-06</div>
+  <div>
+    <p class="lorem">Quis autem vel eum iure reprehenderit qui in ea voluptate
+    velit esse quam nihil molestiae consequatur, vel illum qui dolorem eum
+    fugiat quo voluptas nulla pariatur.</p>
+
+    <div class="callout try">
+      <span class="lbl">Try this</span>
+      <p>Achromatic rule, heavier weight. “Try this” blocks are the one
+      recurring instruction format in the module chapters.</p>
+    </div>
+  </div>
+
+  <figure class="fig full">
+    <div class="plate">
+      <div class="shot" style="--ar:var(--ar-seq)">
+        <div class="ph">
+          <span class="id">FIG-03-06</span>
+          <span class="meta">3 : 1 &nbsp;·&nbsp; three-frame sequence</span>
+          <span class="desc">Grab an out handle, drag, land on an in
+            handle.</span>
+          <span><span class="tag rig">needs rig</span></span>
+        </div>
+      </div>
+    </div>
+    <figcaption>
+      <span class="figid">FIG-03-06</span>
+      <span>Drawing a wire. Sequences read left to right in the 3:1
+        plate.</span>
+    </figcaption>
+  </figure>
+
+  <h3><span class="num">3.5.2</span>Reading one</h3>
+  <div class="rail"><span class="k">Authored</span>no rig needed</div>
+  <div>
+    <p class="lorem">Ut enim ad minima veniam, quis nostrum exercitationem
+    ullam corporis suscipit laboriosam, nisi ut aliquid ex ea commodi
+    consequatur.</p>
+  </div>
+
+  <figure class="fig full">
+    <div class="plate">
+      <div class="shot" style="--ar:var(--ar-diagram)">
+        <div class="ph">
+          <span class="id">FIG-03-07</span>
+          <span class="meta">4 : 3 &nbsp;·&nbsp; diagram</span>
+          <span class="desc">Gutter routing and fan nesting — why wires look
+            like a subway map.</span>
+          <span><span class="tag">authored</span></span>
+        </div>
+      </div>
+    </div>
+    <figcaption>
+      <span class="figid">FIG-03-07</span>
+      <span>Wire routing. Authored diagrams need no running instance and are
+        the sensible place to start work.</span>
+    </figcaption>
+  </figure>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ style specimen ── -->
+<div class="band">
+  <h2><span class="num">§</span><span class="t">Style specimen</span></h2>
+  <div class="rail"><span class="k">Not part of</span>the chapter</div>
+  <div>
+    <p class="specimen-note">Everything below demonstrates the design system
+    itself and would not appear in the finished manual.</p>
+
+    <h4>Type scale</h4>
+    <table>
+      <thead><tr><th>Element</th><th>Size</th><th>Face</th></tr></thead>
+      <tbody>
+        <tr><td>Chapter title</td><td>2.7rem / 1.06</td><td>serif 600</td></tr>
+        <tr><td>Section <code>h2</code></td><td>1.6rem</td><td>serif 600</td></tr>
+        <tr><td>Subsection <code>h3</code></td><td>1.17rem</td><td>serif 650</td></tr>
+        <tr><td>Body</td><td>17px / 1.65</td><td>serif</td></tr>
+        <tr><td>Caption</td><td>0.81rem</td><td>system-ui</td></tr>
+        <tr><td>Figure ID</td><td>0.7rem caps</td><td>mono 650</td></tr>
+      </tbody>
+    </table>
+
+    <h4>Inline conventions</h4>
+    <p>An on-screen control is <span class="ui">Master Out</span>; a module key
+    is <code>pulse_pad</code>; an endpoint is <code>keyshift.2:3</code>; a
+    citation is <span class="xref">REFERENCE §4.6</span>; a scaffold marker is
+    <span class="todo">TODO</span> and is hidden in print.</p>
+
+    <h4>Prose callouts</h4>
+    <div class="callout">
+      <span class="lbl">Note</span>
+      <p>Default: 2px grey rule. Achromatic, like all page furniture.</p>
+    </div>
+    <div class="callout warn">
+      <span class="lbl">Watch out</span>
+      <p>The one prose element that carries hue — and only because
+      <code>--danger</code> means the same thing in the manual as it does in
+      the interface.</p>
+    </div>
+  </div>
+
+  <!-- plane legend specimen, TRUE values on a dark plate -->
+  <figure class="fig full">
+    <div class="plate">
+      <div class="shot" style="--ar:var(--ar-wide);display:grid;place-content:center;padding:2rem">
+        <svg width="440" height="200" viewBox="0 0 440 200" fill="none"
+             font-family="system-ui, sans-serif">
+          <g class="stroke-audio"><line x1="20" y1="30"  x2="200" y2="30"/></g>
+          <g class="stroke-notes"><line x1="20" y1="80"  x2="200" y2="80"/></g>
+          <g class="stroke-mod">  <line x1="20" y1="130" x2="200" y2="130"/></g>
+          <g class="stroke-bin">  <line x1="20" y1="180" x2="200" y2="180"/></g>
+          <text x="216" y="34"  fill="#3987e5" font-size="13" font-weight="650"
+                letter-spacing="1.4">audio</text>
+          <text x="216" y="84"  fill="#1baf7a" font-size="13" font-weight="650"
+                letter-spacing="1.4">notes</text>
+          <text x="216" y="134" fill="#9085e9" font-size="13" font-weight="650"
+                letter-spacing="1.4">mod</text>
+          <text x="216" y="184" fill="#e6c34a" font-size="13" font-weight="650"
+                letter-spacing="1.4">binary</text>
+          <text x="300" y="34"  fill="#6f6e66" font-size="11">solid</text>
+          <text x="300" y="84"  fill="#6f6e66" font-size="11">dashed</text>
+          <text x="300" y="134" fill="#6f6e66" font-size="11">dotted</text>
+          <text x="300" y="184" fill="#6f6e66" font-size="11">dash-dot</text>
+        </svg>
+      </div>
+    </div>
+    <figcaption>
+      <span class="figid">FIG-04-02</span>
+      <span><strong>Style specimen.</strong> The plane legend, showing all
+        three encodings at once — colour, stroke pattern, word. Colours here
+        are the true GUI values because the legend sits on a dark plate.
+        A greyscale print still reads correctly.</span>
+    </figcaption>
+  </figure>
+</div>
+
+</div><!-- /.sheet -->
+</body>
+</html>
