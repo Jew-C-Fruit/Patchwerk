@@ -487,6 +487,10 @@
   #helppop kbd { font: 600 9.5px ui-monospace, SFMono-Regular, Menlo, monospace;
     background: var(--hairline); color: var(--ink-1); border-radius: 3px;
     padding: 1px 4px; white-space: nowrap; }
+  #helppop .manlink { display: block; margin-top: 10px; padding-top: 8px;
+    border-top: 1px solid var(--hairline); color: var(--ink-1);
+    text-decoration: none; font-size: 10.5px; letter-spacing: 0.02em; }
+  #helppop .manlink:hover { color: var(--audio); }
   #helppop .none { color: var(--ink-2); opacity: 0.7; font-style: italic; }
   #toast { position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
     z-index: 60; font-size: 11px; color: var(--ink-1); background: #2c2c2a;
@@ -3981,7 +3985,11 @@ function renderHelpPop() {
       ? `<dl>` + binds.map(([k, v, bound]) =>
           `<dt><kbd>${esc(bound ? k : "unpaired")}</kbd></dt>` +
           `<dd${bound ? "" : ' class="none"'}>${esc(v)}</dd>`).join("") + `</dl>`
-      : `<div class="none">no trigger cards on the canvas</div>`);
+      : `<div class="none">no trigger cards on the canvas</div>`) +
+    // The manual is served by this process at /manual. NEW TAB on purpose:
+    // navigating away drops the websocket and the rig's whole client state.
+    `<a class="manlink" href="/manual" target="_blank" rel="noopener">` +
+    `User manual &nbsp;\u2197</a>`;
 }
 function toggleHelpPop(show) {
   const pop = $("helppop"), btn = $("helpbtn");

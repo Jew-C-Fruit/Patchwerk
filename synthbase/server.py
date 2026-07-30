@@ -250,6 +250,7 @@ class GuiServer:
         self.web_app = web.Application()
         self.web_app.router.add_get("/", self._index)
         self.web_app.router.add_get("/blocks", self._blocks)
+        self.web_app.router.add_get("/manual", self._manual)
         self.web_app.router.add_post("/restart", self._restart)
         self.web_app.router.add_get("/ws", self._ws)
 
@@ -289,6 +290,26 @@ class GuiServer:
         return web.FileResponse(
             GUI_DIR / "blocks.html", headers={"Cache-Control": "no-store"},
         )
+
+    async def _manual(self, request: web.Request) -> web.StreamResponse:
+        """The user manual, served from the instrument itself.
+
+        ONE self-contained file — every figure is inline HTML/CSS, so there is
+        nothing to serve alongside it and it works with no network. Built by
+        `python docs/manual/build.py`, which writes it here.
+
+        It is a BUILD OUTPUT, so a fresh clone will not have it. Say so plainly
+        rather than raising a 404 the reader has to interpret.
+        """
+        path = GUI_DIR / "manual.html"
+        if not path.exists():
+            return web.Response(
+                status=404, content_type="text/html",
+                text="<h1>No manual built yet</h1><p>Run "
+                     "<code>python docs/manual/build.py</code> and reload.</p>",
+            )
+        # Cacheable, unlike the GUI: it only changes when the manual is rebuilt.
+        return web.FileResponse(path)
 
     # -- websocket --------------------------------------------------------------
 

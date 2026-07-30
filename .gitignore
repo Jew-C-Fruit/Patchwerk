@@ -22,3 +22,6 @@ continuity/
 
 # transcript sidecars — a partial recording, never a committed one
 .*.jsonl.partial-*
+
+# built by docs/manual/build.py, served at /manual
+gui/manual.html
