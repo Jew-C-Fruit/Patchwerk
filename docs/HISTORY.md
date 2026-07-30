@@ -4,8 +4,14 @@ A version-by-version account of how this instrument came to be: the thinking
 behind each step, what changed, how the sound and interaction changed, and —
 because they're the best part of the story — the bugs and their fixes.
 
-Every version below is a git tag. To run any legacy version without touching
-your working copy:
+Every heading below is a git tag. (Three were corrected in 2026-07-30: the
+chapters drafted as *recall*, *conductor* and *deck* are tagged
+`v0.10-history`, `v1.0-nightshift` and `v1.1-patchable` — and `conductor`
+is separately the name of `v1.2`.) **Chapters for `v1.2-conductor` through
+`v2.1-rewire` were never written; the Flex Arc below covers that ground
+thematically and `v2.2-polyphony` resumes the per-release form.**
+
+To run any legacy version without touching your working copy:
 
 ```bash
 git worktree add /tmp/patchwerk-v0.2 v0.2-gui
@@ -171,7 +177,7 @@ changes and a pidfile-based restart.
 
 ---
 
-## v0.10-recall — presets, LFOs, and the drum machine
+## v0.10-history — presets, LFOs, and the drum machine
 
 **What changed.** Presets (full settings recall as git-friendly JSON), the
 LFO system — engine-native control buses mapped onto any param, the patch
@@ -182,7 +188,7 @@ picture of the instrument as a *graph* rather than a list.
 
 ---
 
-## v1.0-conductor — play/stop, and the page that heals itself
+## v1.0-nightshift — play/stop, and the page that heals itself
 
 **Thinking.** An instrument you perform with needs a conductor's gestures:
 stop the world, start the world, and never make the player debug a socket.
@@ -203,7 +209,7 @@ doubled voices. Everything since routes by explicit bus + node order.
 
 ---
 
-## v1.1-deck — the loop deck saga
+## v1.1-patchable — the loop deck saga
 
 **Thinking.** A looper is the fastest path from "instrument" to "band". The
 first attempt recorded *audio* into scsynth buffers; supriya's buffer reads
@@ -361,6 +367,108 @@ badge, drop it on a compatible module, and the module splices into that
 wire. And the drone's tonic-in moved to the card's upper-left corner — a
 fixed amber socket that can no longer hide under a param handle (it had
 been overlapping one by 2.5 px).
+
+---
+
+## v2.2-polyphony — more than one note at a time
+
+More than one note at a time, and one framework for deciding which. Plus an
+entire signal plane that was not there before, and a third kind of module.
+
+At **v2.0 "Wavetable"** there was no `allocation.py`. Mono voices, the arp and
+the drone each carried their own copy of the same question — how many notes may
+sound, and what a new one displaces — and answered it three different ways.
+There was also no `gate.py`, no `ping.py`, no `relay.py` and no `threshold.py`:
+a patch could make sound and be played, but it could not decide anything.
+
+### Patch notes
+
+#### Allocation (new)
+
+- **Three policies on one framework.** Mono, poly and drone differ on exactly
+  one axis: how many notes may sound at once, which sounding note a new note
+  displaces, and what an empty hold does. Everything else about them is shared.
+- **Poly voices** sound 1–16 notes, set by a slider on the card. Shrinking it
+  closes whatever was sounding on the slots that go away. A parameter moved on
+  a poly voice moves across every note it is holding.
+- **One card renders mono and poly**, and the policy is read from the server
+  rather than guessed from the id.
+- **The drone is now an allocation** with its own card and a power input,
+  rather than a special case wired in beside the note path. It follows
+  transpose, which it did not before — a saved patch with a non-zero transpose
+  will sound different.
+- Voice leaks fixed in three places at once: removing a module, stealing a
+  note, and disposing a voice while it was sounding.
+
+#### The binary plane (new)
+
+- **One hi/lo signal kind.** Buttons, clocks, thresholds, logic gates and
+  relays all speak it, and every edge — a trigger, a ping — is derived from a
+  level changing rather than sent separately. Wires carry it in yellow.
+- **Buttons** are momentary or latching, bindable to a computer key or a MIDI
+  CC. **Clocks** fire on a division of the transport. **Thresholds** turn a
+  modulation value into a hi/lo level, with hysteresis so a slow sweep does not
+  chatter at the crossing.
+- **Logic gates** — AND, OR, NOR, XOR, SR latch, T latch — on one card whose
+  banner *is* the operator selector. The inputs stay `:a` and `:b` whichever
+  operation you pick, so changing the op never drops a wire.
+- **Relays**: up to nine independent circuits plus one control input that opens
+  and closes all of them together. A circuit takes the kind of whatever lands
+  on it first, then enforces it. Audio circuits are permanent lagged-gate
+  synths, so opening one is clickless and the stored wiring is what every
+  client draws.
+- **Power inputs.** Modules, the arp and the drums expose a quiet binary
+  level-in, so a patch can switch parts of itself on and off while you play.
+
+#### A third module kind
+
+- **`dual`** generates when nothing is wired into its audio input and processes
+  when something is — and it decides which from the audio graph, not from a
+  switch you set. Both chains are computed and crossfaded through a lagged
+  mode, so a wire landing mid-note is click-free.
+- **`power_shaper`** is the first: the psine law applied either to its own
+  oscillator or to whatever you send it. Note-playable while generating.
+
+#### Transport and boot
+
+- **A fresh launch comes up stopped.** Nothing clocked runs until you press
+  play, and the keys are live regardless — so you can plug in and play without
+  starting a transport you did not ask for. The shipped default patch keeps an
+  intact `midi → voice → source → master` path.
+- **Audio boots unattended**, and a boot that fails explains itself instead of
+  hanging. The long-standing "enumerates devices but never starts one" failure
+  is diagnosed in the engine rather than left to the operator.
+
+#### Packaging
+
+- **A macOS disk image and a Windows setup wizard.**
+
+#### Testing
+
+- **Audio is testable without hardware** — an internal listener, a file as the
+  microphone.
+- **Transcript replay**: real server→client traffic is recorded through a
+  silent rig and replayed into the real page, so a broken emission fails a test
+  instead of failing silently in front of a player.
+- **A rig driver with virtual MIDI**, and a reachability test that would have
+  caught the dual kind shipping unplayable.
+
+### Carried over from v2.0 "Wavetable"
+
+The Blocks interface, the psine oscillator family, and visible modulation. The
+v2.2 manual documents these alongside the new work; `docs/RELEASE_WAVETABLE.md`
+has their original notes.
+
+### The manual
+
+v2.2 ships a **user manual** — `docs/manual/`, built to a single self-contained
+HTML file and served by the instrument itself at `/manual`, linked from the `?`
+button. Every figure is drawn in HTML and CSS from the GUI's own colour and
+geometry tokens; there are no screenshots to go stale.
+
+Its companion is `docs/REFERENCE-v2.2-polyphony.md`, the frozen snapshot of
+REFERENCE taken at this release. `docs/REFERENCE.md` remains the living
+document and will diverge from it.
 
 ---
 
