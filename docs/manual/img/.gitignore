@@ -1,0 +1,21 @@
+# docs/manual/img/ — THE single folder for every manual figure.
+# There are no per-chapter image directories; every figure reference in the
+# manual resolves here.
+#
+# Rasters are REGENERATED, not committed: screenshots come off a running rig
+# via docs/manual/capture.py, diagram PNGs are rendered from their .svg
+# source. See README.md in this folder for how to obtain them.
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+
+# ...but diagram SOURCE is not regenerable — losing a hand-drawn .svg means
+# redrawing it. Sources stay tracked. (If Cole wants the folder ignored with
+# no exceptions, delete the three lines below and move the .svg sources out.)
+!*.svg
+
+# and the folder's own files
+!.gitignore
+!README.md
