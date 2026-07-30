@@ -1,3 +1,30 @@
+# Patchwerk Reference — frozen snapshot, v2.2 "Polyphony"
+
+> **FROZEN RELEASE SNAPSHOT — do not edit.** This is the pinned companion
+> to the **Patchwerk v2.2 "Polyphony"** user manual, frozen **2026-07-28**
+> against `main` @ `5564ddc`. The manual cross-references THIS file's
+> section numbers, and they are fixed here for the life of the release.
+>
+> **The living document is `docs/REFERENCE.md`.** It continues to track
+> `main` and **will diverge from this file.** For what the code does today,
+> read the living doc; read this one only to resolve a v2.2 manual
+> reference. Corrections belong in `docs/REFERENCE.md` — a fix applied here
+> would break the very pinning this file exists to provide.
+>
+> **What v2.2 adds over v2.0 "Wavetable":** the allocation framework and poly
+> voices (`allocation.py`), the whole binary plane (`gate.py`, `ping.py`,
+> `relay.py`, `threshold.py`) — none of which existed at the v2.0 tag — and
+> the `dual` module kind. `power_shaper` is `kind="dual"`; playability is
+> decided by `App._is_playable` (`app.py:1587`), which asks `generates(kind)`
+> rather than `kind == "source"`, so duals are note-playable.
+>
+> Everything below this line is `docs/REFERENCE.md` reproduced VERBATIM as
+> it stood at the freeze — including its own "LIVING DOCUMENT" blockquote
+> and verified-against stamp. Those describe the living file, not this copy:
+> this one is never revised, only superseded by the next release's snapshot.
+
+---
+
 # Patchwerk Reference — the single source of truth
 
 > **LIVING DOCUMENT — revision policy.** This file is the canonical,
