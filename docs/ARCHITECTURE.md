@@ -55,7 +55,7 @@ A fifth principle emerged later and now drives most of the design:
 
 1. **Module** (`modules/*.py`, 26 of them) — one small Python file.
    Declares a SynthDef (the DSP) plus metadata: display name, `kind`
-   (source/effect — and `dual` once item 11 lands, see below), params
+   (source/effect/`dual` — item 11 HAS landed, see below), params
    (name, range, default, curve). This is the main vibecoding surface —
    see `CLAUDE.md` for the contract.
 2. **Patch** (`patches/*.py`, or the GUI's live graph) — which module

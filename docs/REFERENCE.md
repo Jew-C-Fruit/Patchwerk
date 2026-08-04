@@ -10,24 +10,22 @@
 > numbers, so renumber only at a major restructure. When this doc and the
 > code disagree, the code wins and this doc has a bug: fix it here.
 >
-> **The user manual is IN PROGRESS — it is not published yet.** Section
-> numbers here were frozen in PR #45 so it could cite them, and it is
-> being drafted on the `docs/manual-scaffold` branch: 17 chapters plus
-> `DESIGN.md`, `FIGURES.md` and a headless `capture.py`. Its cross-
-> references into this file are tracked as `XREF-TODO` anchors and are
-> **not yet resolved**, so nothing outside this repo should link to a
-> manual section by number yet. Until it lands, THIS file is the only
-> reference — a pointer here to "the manual" is a statement of intent,
-> not of something a reader can go and open.
+> **The user manual is PUBLISHED.** 17 chapters and 107 figures, built by
+> `docs/manual/build.py` and served by the instrument itself at `/manual`.
+> Its cross-references into this file are **resolved** — there are no open
+> `XREF-TODO` anchors — and it cites the section numbers of the pinned
+> companion `docs/REFERENCE-v2.2-polyphony.md`, not of this living file.
+> A pointer here to "the manual" is something a reader can go and open.
 >
-> **Verified against:** `main` @ `5564ddc`, 2026-07-27 — which CONTAINS
-> item 11's dual-mode fix `34cab5e` (`fix/p11-dual-playable`, merged),
-> where §10.3.1's live numbers come from. `power_shaper` is `kind="dual"`
-> and WORKING; a brief revert to `kind="effect"` was reversed by Cole
-> ("run it properly") and never reached `main`. **No release is cut yet —
-> the manual is a hard gate.**
-> When one is, the stamp moves to the release commit *in that commit*, and
-> the narrative goes into `HISTORY.md` as a chapter rather than a new
+> **Verified against:** the **v2.2 "Polyphony"** release commit on `main`,
+> 2026-08-04 — *this* commit, the one carrying this stamp, which is exactly
+> what the `v2.2-polyphony` tag points at. The stamp and the tag therefore
+> cannot disagree; that is the whole point of updating it here rather than
+> afterwards. It CONTAINS item 11's dual-mode fix `34cab5e`
+> (`fix/p11-dual-playable`, merged), where §10.3.1's live numbers come from.
+> `power_shaper` is `kind="dual"` and WORKING; a brief revert to
+> `kind="effect"` was reversed by Cole ("run it properly") and never reached
+> `main`. The release narrative is a chapter in `HISTORY.md`, not a new
 > release file. First written against `eb360ef` and re-verified
 > forward through PRs #37–#44: Batch B blocks polish, P4 mod-handle
 > linkage, the item-20 top-margin REVERT (#40), tidy-into-frame (#41),
@@ -1384,7 +1382,7 @@ key/name/kind/family, sources first), `module_errors`.
 > **SHIPPED 2026-07-26 — `voices[]` gained two fields.** Each
 > entry becomes `{id, target, policy, slots}`: there is ONE entry per
 > ALLOCATION, mono or poly alike. `policy` is the allocation policy
-> (`mono-latest`, `poly`, and `hold` once item 29 lands) and tells the GUI
+> (`mono-latest`, `poly` and `hold` — item 29 HAS landed) and tells the GUI
 > which card to draw; `slots` is how many notes that allocation can sound at
 > once, and is always 1 for `mono-latest`. **The card reads the policy off
 > this field and never guesses it from the id** — which is what lets item

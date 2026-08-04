@@ -3,9 +3,9 @@
 | | |
 | --- | --- |
 | Status | Content complete — figures complete |
-| Release | **Patchwerk v2.0 “Wavetable” (pre-release)** |
+| Release | **Patchwerk v2.2 “Polyphony”** |
 | Date | 2026-07-27 |
-| Companion reference | `docs/REFERENCE-v2.0-wavetable.md` (frozen) |
+| Companion reference | [`docs/REFERENCE-v2.2-polyphony.md`](../REFERENCE-v2.2-polyphony.md) (frozen) |
 | Figures | 119 — all drawn in HTML/CSS, no image files |
 | Design | settled — [`DESIGN.md`](DESIGN.md), proof at [`proof/chapter-03-proof.html`](proof/chapter-03-proof.html) |
 

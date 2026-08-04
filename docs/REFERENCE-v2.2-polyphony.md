@@ -11,6 +11,21 @@
 > reference. Corrections belong in `docs/REFERENCE.md` — a fix applied here
 > would break the very pinning this file exists to provide.
 >
+> ---
+>
+> **ERRATA (2026-08-04, added at the v2.2 release cut).** One known-false
+> line is preserved in the body BECAUSE this file is frozen; it is recorded
+> here rather than corrected there, so the section numbering the manual
+> cites stays fixed:
+>
+> - **§11.3, the `voices[]` entry.** Reads *"`mono-latest`, `poly`, and
+>   `hold` once item 29 lands"*. **Item 29 HAS landed** — `hold` is a
+>   shipped policy in v2.2, and the Drone Voice card is part of this
+>   release. The living doc is corrected.
+>
+> Errata are appended to this header at release cuts only. The body below
+> is not edited.
+>
 > **What v2.2 adds over v2.0 "Wavetable":** the allocation framework and poly
 > voices (`allocation.py`), the whole binary plane (`gate.py`, `ping.py`,
 > `relay.py`, `threshold.py`) — none of which existed at the v2.0 tag — and

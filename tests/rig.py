@@ -114,6 +114,12 @@ import browser  # noqa: E402
 import rigreg  # noqa: E402
 from transcript import TranscriptWriter  # noqa: E402
 
+# mido is imported HERE, at module scope, not lazily inside midi_open_port()
+# and _midi_send(). Importing it from inside a method races mido's own lazy
+# backend load under Python 3.14 and flaked live_dual_mode roughly 1 run in 4.
+# Not a Patchwerk defect, but not something to flake through a release either.
+import mido  # noqa: E402
+
 DEFAULT_PORT = 8765
 PIDFILE = Path("/tmp/patchwerk.pid")
 BOOT_TIMEOUT = 40.0          # a cold scsynth plus a device fallback
@@ -991,7 +997,6 @@ class Rig:
 
     def midi_open_port(self) -> str:
         """Create the rtmidi virtual port. Returns the name it took."""
-        import mido
         if self._midi_out is not None:
             return self.midi_name
         self._midi_out = mido.open_output(self.midi_name, virtual=True)
@@ -1027,7 +1032,6 @@ class Rig:
         return full
 
     def _midi_send(self, **msg) -> None:
-        import mido
         if self._midi_out is None:
             raise RigError("no virtual MIDI port — call midi_enable() first")
         m = mido.Message(**msg)

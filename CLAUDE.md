@@ -320,9 +320,17 @@ instance ids, multi-voice, tonic→drone, keyshift lanes, tap-closure and
 snip-heal) · `test_looper.py` (deck timing, take pairing) · `test_gate`,
 `test_ping`, `test_deriver`, `test_lfo`, `test_threshold`, `test_transport`,
 `test_allocation`, `test_drone_alloc`, `test_reactive`, `test_audio_session`,
-`test_rig`, `test_power_sine` — eighteen on `main`, and `test_playable`
-(**a module declaring `freq`+`gate` is REACHABLE by a voice** — the join
-nothing used to test) makes nineteen once `fix/p11-dual-playable` lands.
+`test_rig`, `test_power_sine`, `test_analysis`, `test_capture`,
+`test_replay`, and `test_playable` (**a module declaring `freq`+`gate` is
+REACHABLE by a voice** — the join nothing used to test).
+
+**The census, as of v2.2:** `tests/test_*.py` has **19** files. CI runs
+**18** of them; the nineteenth is `test_mixed_sources.py`, which declares
+`CI_EXEMPT` because it needs a live server with real audio on `:8765`.
+`smoke.py` enforces that every suite is either wired into `ci.yml` or
+declares that exemption — so this count cannot silently drift again. Note
+what it does NOT check: that every job in `ci.yml` resolves to a real file.
+The rule runs one direction only.
 
 **2. Playwright suites — the RENDER**, driven against mock state/events.
 `check_blocks.py` (blocks geometry — sections 1–10 are the regression net) ·

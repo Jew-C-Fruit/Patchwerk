@@ -23,5 +23,15 @@ continuity/
 # transcript sidecars — a partial recording, never a committed one
 .*.jsonl.partial-*
 
-# built by docs/manual/build.py, served at /manual
-gui/manual.html
+# gui/manual.html is BUILT by docs/manual/build.py and served at /manual — and
+# it is TRACKED, deliberately, from v2.2 on. It is a release deliverable under
+# the docs policy, so a fresh clone and the DMG must both have one; while it
+# was ignored, each showed "No manual built yet". packaging/build.py also
+# rebuilds it at package time, so the shipped copy is never older than its
+# sources. Regenerate and commit it as part of cutting a release.
+
+# docs/manual/build.py also writes a DATED copy beside the sources. It is
+# byte-identical to gui/manual.html (which IS tracked), so tracking it too
+# would add a fresh 0.55 MB duplicate on every build. The served copy is the
+# deliverable; this one is a local convenience.
+docs/manual/MANUAL-*.html

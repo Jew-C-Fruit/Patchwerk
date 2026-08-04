@@ -56,7 +56,7 @@ CACHE = HERE / ".cache"
 WORK = Path(os.environ.get("PATCHWERK_BUILD")
             or (tempfile.gettempdir() + "/patchwerk-build"))
 
-VERSION = "0.1.0"
+VERSION = "2.2.0"
 BUNDLE_ID = "com.patchwerk.app"
 
 #: python-build-standalone. Pinned: an installer that builds differently next
@@ -118,12 +118,32 @@ def fetch_python(key: str) -> Path:
 
 # -- payload ------------------------------------------------------------------
 
+def build_manual() -> None:
+    """Rebuild `gui/manual.html` before it is copied into the payload.
+
+    The manual is a RELEASE DELIVERABLE under the docs policy, and `/manual`
+    is served from the instrument itself — so a DMG whose `gui/manual.html`
+    is missing or stale ships a product with a dead menu item. The built
+    file is tracked at the release commit as well, so a clean clone has one
+    too; this rebuild is the belt to that braces, and it keeps a build from
+    packaging a manual older than the sources beside it.
+    """
+    src = REPO / "docs" / "manual" / "build.py"
+    if not src.is_file():
+        step("manual builder absent — skipping (gui/manual.html as committed)")
+        return
+    step("building the user manual")
+    subprocess.run([sys.executable, str(src)], cwd=REPO, check=True)
+
+
 def stage_payload(root: Path, key: str) -> None:
     """Lay out python/ + app/ + the launcher under `root`."""
     step(f"staging payload for {key}")
     if root.exists():
         shutil.rmtree(root)
     root.mkdir(parents=True)
+
+    build_manual()
 
     src_py = fetch_python(key)
     shutil.copytree(src_py, root / "python", symlinks=True)
