@@ -21,7 +21,11 @@
 > 2026-08-04 — *this* commit, the one carrying this stamp, which is exactly
 > what the `v2.2-polyphony` tag points at. The stamp and the tag therefore
 > cannot disagree; that is the whole point of updating it here rather than
-> afterwards. It CONTAINS item 11's dual-mode fix `34cab5e`
+> afterwards. **Re-cut once**, before publication, to take
+> `fix/p39-drone-check8` — and the stamp moved with it, which is the
+> property being demonstrated: a stamp that names its own commit has to be
+> re-stated on every re-cut, and cannot silently describe an earlier tree.
+> It CONTAINS item 11's dual-mode fix `34cab5e`
 > (`fix/p11-dual-playable`, merged), where §10.3.1's live numbers come from.
 > `power_shaper` is `kind="dual"` and WORKING; a brief revert to
 > `kind="effect"` was reversed by Cole ("run it properly") and never reached

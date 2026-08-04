@@ -53,6 +53,18 @@ SOUNDING = 0.02
 SILENT = 0.006
 BYPASS = ("drive", "lowpass", "echo", "reverb", "autopan")
 
+#: Window for the RATIO measurement in check 8. The rest of the probe
+#: compares against SOUNDING/SILENT, where a short window is fine; a ratio
+#: divides two measurements and inherits both their spreads, so the summed
+#: case wants long enough to reach its constructive peak. Measured floor of
+#: `both`/`drone_only` by window, with pwm and detune pinned off:
+#:
+#:     0.8 s -> 2.67x        2.5 s -> 2.84x
+#:
+#: Most of the work is done by the two pinned params, not by the window —
+#: this is margin, cheaply bought.
+RATIO_WINDOW = 2.5
+
 FAILURES: list[str] = []
 
 
@@ -157,6 +169,25 @@ async def main(argv=None) -> int:
         await rig.poke()
         await set_abs(rig, pad, "attack", 0.02)
         await set_abs(rig, pad, "release", 0.06)
+        # PWM OFF, or every amplitude here is sampling a moving target.
+        # `pulse_pad` sets `width = 0.5 + SinOsc.kr(frequency=0.3) * pwm` —
+        # a 3.33-SECOND cycle. Measuring it through a sub-second window
+        # samples a different phase every time: one sustained voice, traced
+        # for 12 s, gave 0.020-0.091 with no plateau, i.e. a 1.30x spread on
+        # a signal that is not changing. At pwm=0 the same voice measures
+        # 0.06723..0.06852 — a 1.02x spread, effectively deterministic.
+        # This is why check 8 was flaky, and it is NOT a settle race: the
+        # trace oscillates just as much after 12 s as in its first second.
+        await set_abs(rig, pad, "pwm", 0.0)
+        # DETUNE OFF for the same reason, one level down. Each voice runs
+        # three oscillators at +/- `detune` cents, so a voice beats with
+        # ITSELF at a few Hz; three voices give several slow beat components
+        # and no practical window averages them out. With pwm already off,
+        # dropping detune collapses the spread of the SUMMED case from 1.40x
+        # to 1.07x. Neither knob is what check 8 is about — like the
+        # bypassed effects above, they are measurement conditioning, chosen
+        # so amplitude means what it looks like.
+        await set_abs(rig, pad, "detune", 0.0)
         await rig.poke()
         # isolate: keep the patch's own mono voice off the keys for now
         await rig.unwire("arp", "voice")
@@ -252,18 +283,31 @@ async def main(argv=None) -> int:
         await rig.send({"type": "fire_button", "id": btn})   # power back on
         await rig.poke()
         await asyncio.sleep(0.6)
-        drone_only = await listen(rig, 0.8)
+        drone_only = await listen(rig, RATIO_WINDOW)
         poly = await rig.spawn("spawn_poly", "voices", voices=2)
         await rig.wire("keys", poly)
         print(f"   sharing {pad!r}: drone {drone!r} + poly {poly!r} (2 slots)")
         rig.note_on(64, 100)
         rig.note_on(71, 100)
         await asyncio.sleep(0.7)
-        both = await listen(rig, 0.8)
+        both = await listen(rig, RATIO_WINDOW)
+        # 1.4x is DERIVED, and it is deliberately UNCHANGED. The failure
+        # being excluded — the poly contributing nothing because it never
+        # got its own slots — sits at exactly 1.00x. The measured floor of
+        # correct behaviour is now ~2.7x. 1.4 sits between them with ~40%
+        # margin above the failure and ~48% below the floor.
+        #
+        # The threshold was never the problem. As shipped, PWM and detune
+        # made the floor 1.21x — BELOW the 1.4 threshold — so the check
+        # could fail with everything working perfectly, and 1.37x was an
+        # ordinary sample of that range rather than a race or a regression.
+        # Conditioning the measurement moved the floor from 1.21x to ~2.7x
+        # and the number stayed exactly where it was.
         check("8. a drone and a poly share ONE source on separate slots",
               both > drone_only * 1.4,
               f"drone alone {drone_only} -> drone + 2 poly notes {both} "
-              f"({both / max(drone_only, 1e-9):.2f}x)")
+              f"({both / max(drone_only, 1e-9):.2f}x; poly silent = 1.00x, "
+              f"measured floor ~2.7x)")
 
         # power the drone DOWN with the poly notes still held
         await rig.send({"type": "fire_button", "id": btn})
@@ -297,6 +341,7 @@ async def main(argv=None) -> int:
         await rig.poke()
         await set_abs(rig, pad2, "attack", 0.02)
         await set_abs(rig, pad2, "release", 0.06)
+        await set_abs(rig, pad2, "pwm", 0.0)      # check 9b reads its level
         # the patch's mono voice back on the keys, on the ORIGINAL pad, so
         # the two can be compared under one transpose
         await rig.wire("keys", "voice")
