@@ -1,4 +1,8 @@
-"""Web GUI server: serves gui/index.html and a websocket control channel.
+"""Web GUI server: serves gui/blocks.html and a websocket control channel.
+
+blocks.html is the ONLY page served — at "/" and at "/blocks" (an alias kept
+for bookmarks). The earlier pages are archived under gui/legacy/, unserved
+and unmaintained; there is no /legacy route.
 
 Protocol (JSON messages):
 
@@ -10,6 +14,30 @@ Protocol (JSON messages):
     {"type": "set_volume", "volume": 0.8}
     {"type": "note_on", "note": 60} / {"type": "note_off", "note": 60}
     {"type": "all_notes_off"}
+    {"type": "sustain", "on": true}
+        (GLOBAL pedal — the arp latch plus every mono voice. Global by
+         doctrine, not wire-defined, like panic and the transport.)
+    {"type": "set_transpose", "semitones": 0}   (GLOBAL pitch reference)
+    {"type": "edit_chain", "action": "add"|"remove"|"move",
+     "key": "lowpass.2", "index": 3}
+        (linear-chain edit; runs in an executor since it rebuilds nodes.
+         Wires survive — removal splice-heals A->X->B to A->B.)
+    {"type": "set_looper", "action": "rec"|"play"|"stop"|"clear",
+     "bars": 4, "level": 1.0, "overdub": true}
+        (the Loop Deck, §9. A "position" key from old clients is accepted
+         and IGNORED — pre/post is decided by wiring, not by a field.)
+    {"type": "scope", "key": "scope.2"}
+        (poll one scope for a capture. A capture BLOCKS — server sync plus
+         a ~46 ms record window — so it runs as a background task and is
+         COALESCED PER KEY: one capture in flight per scope, and a poll for
+         a key already capturing is dropped. Replies {"type": "scope_data"}
+         to the REQUESTING socket only, not broadcast.)
+    {"type": "save_preset", "name": "..."} /
+    {"type": "load_preset", "name": "..."} /
+    {"type": "delete_preset", "name": "..."}
+        (named presets carry no transport play state by design, so loading
+         one mid-performance can neither stop nor start the rig. Only the
+         .resume.json restart block carries "running" — see item 32.)
     {"type": "select_patch", "patch": "demo"}
     {"type": "set_devices", "input": "MacBook Pro Microphone", "output": null}
     {"type": "set_midi", "port": "CP88/CP73 Port1", "enabled": true}
@@ -42,6 +70,24 @@ Protocol (JSON messages):
          card: swap the instance's module type IN PLACE — same id, buses,
          wires, node order; shared params carry over, the rest reset)
     {"type": "spawn_voice"} / {"type": "remove_voice", "id": "voice.2"}
+    {"type": "spawn_poly", "voices": 8}                 (a POLY voice:
+         "poly", "poly.2", ... — N notes at once on ONE target source,
+         stealing the oldest when full. Removed with remove_voice, and a
+         ctl-wire destination exactly like a mono voice.)
+    {"type": "set_poly_voices", "id": "poly", "voices": 8}   (1..16; notes
+         sounding on slots that go away are closed)
+    {"type": "spawn_drone_voice"}                       (item 29: a DRONE
+         voice, ids "hold", "hold.2", ... — last-note priority, NO gate from
+         the note stream, an empty held set HOLDS the last root. Its TONE in
+         is an ordinary ctl-wire destination; its POWER in is the binary
+         level-in "<id>:pwr". Removed with remove_voice. The id type is
+         "hold", not "drone", because "drone" is a module type and a ctl
+         node sharing an id with a rack instance would shadow it.)
+    {"type": "set_drone_power", "id": "hold", "on": true}    (POWER: hold the
+         target source's gate open. The effective gate is this AND
+         transport.running — item 32's invariant. Emits
+         {"kind": "level", "ep": "hold:pwr", "on": …} from BOTH routes, so
+         the card indicator reacts to logic input as well as to a click.)
     {"type": "spawn_tonic"} / {"type": "remove_tonic", "id": "tonic.2"}
     {"type": "set_tonic", "id": "tonic", "every": "1 bar", "octave": 2,
      "memory": 6.0, "bass": 0.06, "listening": "triadic", "deck_feed": false}
@@ -51,15 +97,18 @@ Protocol (JSON messages):
          {"type": "deriver", "id", ...} for the card histogram + scale
          readout)
     {"type": "spawn_logic"} / {"type": "remove_logic", "id": "logic.2"}
-    {"type": "set_logic", "id": "logic", "op": "AND"|"OR"|"NOR"|"XOR"|"SR latch"}
+    {"type": "set_logic", "id": "logic",
+     "op": "AND"|"OR"|"NOR"|"XOR"|"SR latch"|"T latch"}
         (the BINARY plane: ONE hi/lo signal kind — sources own levels,
          edges derive from level changes; trig-ins fire on RISING edges.
          Binary wires ride ctl_wires, kind inferred from the source
          (button/clock/threshold/logic, binary relay circuits). Logic ins
          are ALWAYS the two single-input endpoints "<id>:a"/"<id>:b"
-         for every op (SR latch: a=set, b=reset; NOR with one wired leg
-         acts as NOT; occupied ins steal; legacy :set/:reset remapped).
-         Other dsts: "<key>:pwr", "arp:pwr", "drums:pwr" (level follows),
+         for every op (SR latch: a=set, b=reset; T latch: a=toggle on
+         RISING edge, b=reset and wins; NOR with one wired leg acts as
+         NOT; occupied ins steal; legacy :set/:reset remapped).
+         Other dsts: "<key>:pwr", "arp:pwr", "drums:pwr",
+         "<drone voice>:pwr" (level follows),
          "deck:rec|play|stop|clear" + deriver ids (rising edge fires),
          relay circuit ins + "relay:ctl". Level changes emit
          {"kind": "gate", "id", "on"} taps for the GUI LEDs.)
@@ -134,6 +183,44 @@ Protocol (JSON messages):
     {"type": "state", ...full snapshot...}       (on connect and after changes)
     {"type": "meters", "out": [l, r], "in": x}   (~15 Hz)
     {"type": "error", "message": "..."}
+    {"type": "param", "key": "lowpass.2", "name": "cutoff", ...}
+        (a param moved from somewhere OTHER than the sending client — MIDI
+         CC, an LFO, a preset load — so knobs track without a full state
+         round-trip. The originating socket is excluded.)
+    {"type": "beat", "bar": b, "beat": n, ...}   (transport tick)
+    {"type": "tonic", ...}      (every 4th meter tick, ~5 Hz — the legacy
+                                 header strip: first deriver's normalized
+                                 weights + root)
+    {"type": "deriver", "id", ...}
+        (~5 Hz per tonic deriver: weights/scores/leading/confidence/scale
+         for the card histogram + scale readout)
+    {"type": "midi", "event": {...}}    (raw MIDI in, for the monitors)
+    {"type": "scope_data", ...}
+        (one scope capture, sent ONLY to the socket that polled for it)
+
+  server -> client EVENT TAPS — the note/binary/monitor plane. Each is a
+  {"kind": ...} envelope, routed by the GUI to whichever monitor is local
+  to that path (or to the global feed when the monitor is unwired):
+    "tap"                  one per SOURCE FIRE, tagged {"src": <node id>} —
+                           one per fire, NOT one per outgoing edge
+    "key" / "voiced"       raw controller input / post-voicing notes
+    "keyshift"             a key shifter's lane output
+    "tonic_out"            a deriver's amber TONIC out
+    "loop_note" / "looper" deck replay notes / deck transport state
+    "gate"                 a logic gate's output level changed (LED)
+    "level"                {"ep", "on"} — the REACTIVE-INDICATOR tap. State
+                           applied inside the gate settle pass does not
+                           broadcast, so the backend emits this itself; it
+                           is what makes the power stripe, the Play/Stop
+                           card and the click/accent LEDs react to LOGIC
+                           input and not merely to clicks.
+    "ping" / "ping_bound"  a trigger fired / a ping endpoint was bound
+    "cc" / "bend" / "sustain"    MIDI controller traffic
+    "drum_step"            the 16-step drum machine's position
+
+    EVERY silencing path must close its open notes AND their taps (panic,
+    arp stop, deck stop, rebuilds, record-window exits): an unpaired "on"
+    is both a stuck note and a stuck monitor bar.
 """
 
 from __future__ import annotations
@@ -163,6 +250,7 @@ class GuiServer:
         self.web_app = web.Application()
         self.web_app.router.add_get("/", self._index)
         self.web_app.router.add_get("/blocks", self._blocks)
+        self.web_app.router.add_get("/manual", self._manual)
         self.web_app.router.add_post("/restart", self._restart)
         self.web_app.router.add_get("/ws", self._ws)
 
@@ -202,6 +290,26 @@ class GuiServer:
         return web.FileResponse(
             GUI_DIR / "blocks.html", headers={"Cache-Control": "no-store"},
         )
+
+    async def _manual(self, request: web.Request) -> web.StreamResponse:
+        """The user manual, served from the instrument itself.
+
+        ONE self-contained file — every figure is inline HTML/CSS, so there is
+        nothing to serve alongside it and it works with no network. Built by
+        `python docs/manual/build.py`, which writes it here.
+
+        It is a BUILD OUTPUT, so a fresh clone will not have it. Say so plainly
+        rather than raising a 404 the reader has to interpret.
+        """
+        path = GUI_DIR / "manual.html"
+        if not path.exists():
+            return web.Response(
+                status=404, content_type="text/html",
+                text="<h1>No manual built yet</h1><p>Run "
+                     "<code>python docs/manual/build.py</code> and reload.</p>",
+            )
+        # Cacheable, unlike the GUI: it only changes when the manual is rebuilt.
+        return web.FileResponse(path)
 
     # -- websocket --------------------------------------------------------------
 
@@ -271,6 +379,18 @@ class GuiServer:
             await self._broadcast_state()
         elif t == "spawn_voice":
             self.synth.spawn_voice()
+            await self._broadcast_state()
+        elif t == "spawn_poly":
+            self.synth.spawn_poly(int(m.get("voices", 8)))
+            await self._broadcast_state()
+        elif t == "set_poly_voices":
+            self.synth.set_poly_voices(m["id"], int(m["voices"]))
+            await self._broadcast_state()
+        elif t == "spawn_drone_voice":
+            self.synth.spawn_drone_voice()
+            await self._broadcast_state()
+        elif t == "set_drone_power":
+            self.synth.set_drone_power(m["id"], bool(m["on"]))
             await self._broadcast_state()
         elif t == "remove_voice":
             self.synth.remove_voice(m["id"])
@@ -468,6 +588,45 @@ class GuiServer:
             if key not in self._scope_inflight:
                 self._scope_inflight.add(key)
                 asyncio.create_task(self._run_scope(key, sender))
+        elif t == "capture":
+            # The internal listener. Recording and, especially, WRITING the
+            # buffer are blocking OSC round-trips, so they go to the executor
+            # exactly like a scope capture — a 4-second record awaited on the
+            # message loop would stall every note behind it.
+            act = m.get("action", "record")
+            if act == "arm":
+                res = self.synth.capture.arm(
+                    m.get("target", "master"), float(m.get("seconds", 4.0)),
+                    m.get("path"))
+            elif act == "stop":
+                res = await loop.run_in_executor(
+                    None, self.synth.capture.stop, m.get("path"))
+            elif act == "status":
+                res = self.synth.capture.status()
+            else:
+                res = await loop.run_in_executor(
+                    None, lambda: self.synth.capture.record(
+                        m.get("target", "master"),
+                        float(m.get("seconds", 4.0)), m.get("path")))
+            if sender is not None:
+                await sender.send_json({"type": "capture_done", **res})
+        elif t == "inject":
+            # File as microphone. Unicast the reply for the same reason the
+            # scope does: it answers the asker's question, and no other
+            # client asked it.
+            act = m.get("action", "play")
+            if act == "play":
+                res = self.synth.injector.play(
+                    m["path"], float(m.get("gain", 1.0)),
+                    bool(m.get("loop", False)))
+            elif act == "stop":
+                res = self.synth.injector.stop()
+            elif act == "gain":
+                res = self.synth.injector.set_gain(float(m["gain"]))
+            else:
+                res = self.synth.injector.status()
+            if sender is not None:
+                await sender.send_json({"type": "inject_state", **res})
         elif t == "sustain":
             # global pedal: the arp latch + every mono voice
             self.synth._keys.set_sustain(bool(m.get("on")))

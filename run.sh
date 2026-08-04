@@ -19,6 +19,32 @@ cd "$(dirname "$0")"
 PIDFILE=/tmp/patchwerk.pid
 PORT=8765
 
+# -- find an interpreter -------------------------------------------------------
+# A git WORKTREE has no `.venv/` of its own (it is gitignored, so it lives
+# only in the main checkout), and agent sessions work almost entirely from
+# worktrees. Hardcoding `.venv/bin/python` made `./run.sh` fail there with
+# "No such file or directory" — an unattended launch that dies before it
+# reaches the engine. So: this tree's venv, else an already-activated one,
+# else the MAIN worktree's venv, else whatever python3 is on PATH.
+pick_python() {
+  if [ -x ".venv/bin/python" ]; then echo ".venv/bin/python"; return; fi
+  if [ -n "$VIRTUAL_ENV" ] && [ -x "$VIRTUAL_ENV/bin/python" ]; then
+    echo "$VIRTUAL_ENV/bin/python"; return
+  fi
+  local root
+  root=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+  if [ -n "$root" ] && [ -x "${root%/.git}/.venv/bin/python" ]; then
+    echo "${root%/.git}/.venv/bin/python"; return
+  fi
+  command -v python3
+}
+PY=$(pick_python)
+if [ -z "$PY" ]; then
+  echo "STARTUP PROBLEM — no python found (no .venv here, none in the main"
+  echo "  worktree, and no python3 on PATH). Run setup, or activate a venv."
+  exit 1
+fi
+
 # -- wait for a pid to die, escalating to -9 -----------------------------------
 reap() {
   local pid="$1"
@@ -79,7 +105,7 @@ if command -v lsof >/dev/null 2>&1 && [ -n "$(lsof -ti "tcp:$PORT" -sTCP:LISTEN 
   exit 1
 fi
 
-.venv/bin/python -u -m synthbase gui "${1:-pad_space}" "${@:2}" > /tmp/synth_gui.log 2>&1 &
+"$PY" -u -m synthbase gui "${1:-pad_space}" "${@:2}" > /tmp/synth_gui.log 2>&1 &
 NEW=$!
 echo $NEW > "$PIDFILE"
 

@@ -15,6 +15,7 @@ from pathlib import Path
 from supriya import AddAction, Options, Server, find_free_port
 
 from .audio_devices import find_rate_matched_input
+from .audio_session import resolve as resolve_devices
 from .module import Module
 
 
@@ -51,12 +52,40 @@ class Engine:
         self.server: Server | None = None
         self.root_group = None  # all racks/chains go inside this group
         self.boot_note: str | None = None  # human-readable boot fallback info
+        # the reserved audio-in stub, when input is off (see _reserve_input_stub)
+        self.input_stub_buses = None
         self._sent: set[str] = set()  # synthdef names already on the live server
 
     # -- lifecycle ---------------------------------------------------------
 
+    def _preflight_devices(self) -> None:
+        """Never hand scsynth a device configuration that cannot START.
+
+        The CoreAudio device-start stall has NO timeout and raises NOTHING
+        (see audio_session), so the fallback below — which keys off an
+        exception — can never fire on it. `Server().boot()` would simply
+        block forever. So the device choice is settled BEFORE we boot, by
+        probing a throwaway scsynth rather than by catching a failure that
+        never arrives.
+        """
+        in_dev, out_dev, in_ch, note = resolve_devices(
+            self.options.input_device,
+            self.options.output_device,
+            self.options.input_bus_channel_count,
+        )
+        if note:
+            self.boot_note = note
+            print(f"[engine] {note}")
+        self.options = dataclasses.replace(
+            self.options,
+            input_device=in_dev,
+            output_device=out_dev,
+            input_bus_channel_count=in_ch,
+        )
+
     def boot(self) -> "Engine":
         _ensure_synthdef_dir()
+        self._preflight_devices()
         try:
             self.server = Server().boot(options=self.options)
         except Exception as exc:
@@ -96,8 +125,54 @@ class Engine:
                 )
                 self.server = Server().boot(options=self.options)
         self.root_group = self.server.add_group(add_action=AddAction.ADD_TO_TAIL)
+        self._reserve_input_stub()
         self._sent = set()   # fresh server: nothing sent yet
         return self
+
+    def _reserve_input_stub(self) -> None:
+        """Claim the audio-in bus indices when there is no input device.
+
+        `modules/audio_in.py` reads `NumOutputBuses.ir()` — bus 2 in the
+        default 2-out configuration — because with hardware input enabled
+        that is the microphone. With input DISABLED, scsynth allocates no
+        input buses, so supriya's private pool *starts* at 2
+        (`Options.first_private_bus_id`), and the first bus the rack asks
+        for is handed the exact index `audio_in` reads. An Audio In module
+        in that configuration hears a rack stage instead of nothing.
+
+        Allocating the group here — before the rack exists, so it wins the
+        race — turns that index into a genuinely private, permanently
+        silent bus. It also gives `InputInjector` somewhere to write that
+        collides with nobody, which is the whole reason a file can stand in
+        for the microphone on a machine that cannot open one.
+
+        Two audio buses out of ~1022. Not held when real input exists,
+        because then scsynth already reserves them.
+        """
+        self.input_stub_buses = None
+        if self.options.input_bus_channel_count > 0:
+            return
+        try:
+            group = self.server.add_bus_group(
+                calculation_rate="audio",
+                count=max(2, self.options.output_bus_channel_count),
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[engine] could not reserve the audio-in stub bus: {exc!r}")
+            return
+        first = int(group)
+        if first != self.options.output_bus_channel_count:
+            # The pool did not start where we predicted, so this group is
+            # NOT the bus audio_in reads and holding it would just waste
+            # two buses while leaving the collision in place. Say so.
+            print(f"[engine] audio-in stub landed on bus {first}, expected "
+                  f"{self.options.output_bus_channel_count} — not reserving")
+            try:
+                group.free()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        self.input_stub_buses = group
 
     def quit(self) -> None:
         if self.server is not None:

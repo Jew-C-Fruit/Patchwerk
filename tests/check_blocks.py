@@ -606,6 +606,27 @@ def main():
               trig == {"dir": "in", "quiet": True, "label": "trigger"},
               str(trig))
 
+        # a deriver COMMIT is a pulse on a BARE id ("tonic"), and its
+        # trigger-in carries no `ep` at all — so the endpoint→element lookup
+        # has to fall back to "the card's only binary in", not an ep match.
+        page.evaluate(
+            "() => { __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'tonic', on: true, pulse: true}});"
+            " __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'tonic', on: false, pulse: true}}); }")
+        page.wait_for_timeout(40)
+        check("a bare-id deriver commit lights its trigger row",
+              page.evaluate("""(() => {
+                const p = nodes.get('tonic').ports.find(q => q.sig === 'bin');
+                return !!p.rowEl && p.rowEl.classList.contains('tapflash');
+              })()"""))
+        page.wait_for_timeout(340)
+        check("…and clears after TAP_FLASH_MS",
+              page.evaluate("""(() => {
+                const p = nodes.get('tonic').ports.find(q => q.sig === 'bin');
+                return !p.rowEl.classList.contains('tapflash');
+              })()"""))
+
         # trigger cards are SMALL (Cole, 2026-07-22): both opt into the
         # XS class since GUI pass B and measure into 4.5x4.5
         for gid in ("button", "clock"):
@@ -1761,6 +1782,33 @@ def main():
         })()""")
         check("collapsing returns to the mini strip (not hidden)",
               dk3["mini"] and 40 <= dk3["h"] <= 52, str(dk3))
+
+        # ---- deck buttons react to LOGIC input (trig-in PULSE taps) -----
+        # All four are momentary. Both edges are injected back-to-back with
+        # NO delay, because that is the shape the engine actually emits and
+        # the case that renders nothing if the pulse is treated as a level.
+        for ep_sub, data_a in (("rec", "record"), ("stop", "stop"),
+                               ("play", "play"), ("clear", "clear")):
+            page.evaluate(
+                "(s) => { __msg({type: 'midi', event:"
+                " {kind: 'level', ep: 'deck:' + s, on: true, pulse: true}});"
+                " __msg({type: 'midi', event:"
+                " {kind: 'level', ep: 'deck:' + s, on: false, pulse: true}});"
+                " }", ep_sub)
+            page.wait_for_timeout(30)
+            lit = page.evaluate(
+                "(a) => { const b = nodes.get('deck').el.querySelector("
+                " '.deckbtns button[data-a=\"' + a + '\"]');"
+                " return !!b && b.classList.contains('tapflash'); }", data_a)
+            # deck:rec -> data-a="record" is the one name that does NOT match;
+            # miss it and the handler silently no-ops on the button that
+            # matters most
+            check(f"deck:{ep_sub} pulse lights button[data-a={data_a}]", lit)
+            page.wait_for_timeout(340)   # let it decay before the next one
+        check("…and the deck buttons are clear again after TAP_FLASH_MS",
+              page.evaluate(
+                  "[...nodes.get('deck').el.querySelectorAll('.deckbtns"
+                  " button')].every(b => !b.classList.contains('tapflash'))"))
 
         # ================================================================
         # 15 — stepped integer sliders replace numeric cycle-chips (item 5)
@@ -3446,6 +3494,41 @@ def main():
             ".querySelectorAll('.mini')].find(x =>"
             " (x.querySelector('label')||{}).title === 'click');"
             " return r.querySelector('.onoff').classList.contains('on'); })()"))
+        # …and the TOP BAR checkbox with it. `run` had this sync from the
+        # start; `click` did not, so a logic-driven click change lit the card
+        # and left the top bar reading the opposite. Not just cosmetic:
+        # sendTransport() READS $("click-on").checked, so the stale checkbox
+        # pushes the wrong click state back on the next BPM nudge.
+        check("…and ticks the TOP BAR click checkbox with it",
+              page.evaluate("document.getElementById('click-on').checked"))
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'transport:click', on: false}})")
+        page.wait_for_timeout(60)
+        clk_off = page.evaluate("""(() => {
+          const r = [...nodes.get('ttempo').el.querySelectorAll('.mini')]
+            .find(x => (x.querySelector('label')||{}).title === 'click');
+          return {led: r.querySelector('.onoff').classList.contains('on'),
+                  bar: document.getElementById('click-on').checked};
+        })()""")
+        check("…and both clear together on the falling edge",
+              clk_off == {"led": False, "bar": False}, str(clk_off))
+        # ACCENT is deliberately asymmetric (Cole, 07-26): its card LED reacts
+        # like click's, but there is NO top-bar accent control and one is not
+        # being added. Asserted so the asymmetry is recorded as a decision
+        # rather than rediscovered as a bug — if a control is ever added, this
+        # check is the reminder that its sync belongs in the level handler.
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'transport:accent', on: false}})")
+        page.wait_for_timeout(60)
+        check("accent's card LED reacts, and it has no top-bar control",
+              page.evaluate("""(() => {
+                const r = [...nodes.get('ttempo').el.querySelectorAll('.mini')]
+                  .find(x => (x.querySelector('label')||{}).title === 'accent');
+                return !r.querySelector('.onoff').classList.contains('on')
+                       && !document.getElementById('accent-on');
+              })()"""))
 
         # ---- tempo slider: the top bar's 40–220 mapping ----------------
         page.evaluate("nodes.get('ttempo').el.scrollIntoView("
@@ -3555,6 +3638,104 @@ def main():
               {"type": "set_transport", "click": False} in leds19["sent"]
               and {"type": "set_transport", "accent": False}
               in leds19["sent"], str(leds19))
+
+        # ---- {"kind":"transport"}: settings changed off-broadcast ------
+        # THE REPORTED BUG: a logic wire into transport:tap moved the BPM and
+        # told no client, so the rig audibly ran at 232 while every number on
+        # screen still said 100. The engine now emits the full settings
+        # payload on a real change; this is the GUI half.
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'transport', bpm: 232, beats_per_bar: 4, downbeat: 0,"
+            "  click: true, accent: true, running: true}})")
+        page.wait_for_timeout(80)
+        bpm19 = page.evaluate("""(() => {
+          const n = nodes.get('ttempo');
+          const row = [...n.el.querySelectorAll('.mini')].find(
+            x => (x.querySelector('label')||{}).title === 'tempo');
+          return {card: row.querySelector('.v').textContent,
+                  bar: document.getElementById('bpm-v').textContent,
+                  slider: document.getElementById('bpm').value,
+                  model: (state.transport||{}).bpm};
+        })()""")
+        check("a transport event moves the CARD's tempo readout",
+              bpm19["card"] == "232 bpm", str(bpm19))
+        check("…and the top bar's number and slider with it",
+              bpm19["bar"] == "232 bpm" and bpm19["slider"] == "220",
+              str(bpm19))
+        check("…and the local model, so the next rebuild agrees",
+              bpm19["model"] == 232, str(bpm19))
+
+        # a bpm-only change must NOT rebuild — taps arrive in fast bursts
+        page.evaluate("window.__rebuilds = 0;"
+                      " (() => { const f = window.rebuildGraph;"
+                      " window.rebuildGraph = function () {"
+                      " window.__rebuilds++; return f.apply(this, arguments);"
+                      " }; })()")
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'transport', bpm: 150, beats_per_bar: 4, downbeat: 0,"
+            "  click: true, accent: true, running: true}})")
+        page.wait_for_timeout(80)
+        check("a bpm-only transport event does not rebuild the graph",
+              page.evaluate("window.__rebuilds") == 0,
+              str(page.evaluate("window.__rebuilds")))
+        # …but a METER change must, since the card's step-slider detents and
+        # the metronome strip are derived at card-build time
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'transport', bpm: 150, beats_per_bar: 3, downbeat: 0,"
+            "  click: true, accent: true, running: true}})")
+        page.wait_for_timeout(300)
+        check("a meter change DOES rebuild (detents + strip re-derive)",
+              page.evaluate("window.__rebuilds") >= 1
+              and page.evaluate(
+                  "nodes.get('ttempo').el"
+                  ".querySelectorAll('.metrostrip i').length") == 3)
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st19b)
+        page.wait_for_timeout(400)
+
+        # ---- transport:tap — a PULSE, not a level ----------------------
+        # A trig-in tap has ZERO duration: on:true and on:false are emitted
+        # back-to-back from one settle pass and land in the same tick. Both
+        # halves are injected here with NO delay between them, because that
+        # is the dead-on-arrival case — a test that injects only the on:true
+        # half passes even against a plain level setter that renders nothing.
+        page.evaluate(
+            "() => { __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'transport:tap', on: true, pulse: true}});"
+            " __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'transport:tap', on: false, pulse: true}});"
+            " }")
+        page.wait_for_timeout(40)
+        check("a tap PULSE leaves the tempo row visibly lit (both edges sent)",
+              page.evaluate("""(() => {
+                const n = nodes.get('ttempo');
+                const p = n.ports.find(q => q.ep === 'transport:tap');
+                return !!p.rowEl && p.rowEl.classList.contains('tapflash');
+              })()"""))
+        page.wait_for_timeout(340)   # past TAP_FLASH_MS
+        check("…and clears itself afterwards (it is momentary)",
+              page.evaluate("""(() => {
+                const n = nodes.get('ttempo');
+                const p = n.ports.find(q => q.ep === 'transport:tap');
+                return !p.rowEl.classList.contains('tapflash');
+              })()"""))
+        # a STEADY tap on the same card must still behave as a level — the
+        # `pulse` branch is additive, it must not swallow the existing path
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'transport:click', on: false}})")
+        page.wait_for_timeout(60)
+        check("a steady level tap is unaffected by the pulse branch",
+              page.evaluate("""(() => {
+                const r = [...nodes.get('ttempo').el.querySelectorAll('.mini')]
+                  .find(x => (x.querySelector('label')||{}).title === 'click');
+                return !r.querySelector('.onoff').classList.contains('on')
+                       && !document.getElementById('click-on').checked;
+              })()"""))
+        page.evaluate("(s) => __msg({type: 'state', ...s})", st19b)
+        page.wait_for_timeout(400)
 
         # ---- quiet endpoint handles + payload wires --------------------
         eps19 = page.evaluate("""(() => {
@@ -4772,7 +4953,7 @@ def main():
              "kind": "source", "family": "psine"},
             {"key": "echo", "name": "Echo", "kind": "effect",
              "family": "time"},
-            {"key": "power_shaper", "name": "Power Shaper", "kind": "effect",
+            {"key": "power_shaper", "name": "Power Shaper", "kind": "dual",
              "family": "psine"},
         ]
         # a SECOND client's view: no local history, relay OPEN, the stored
@@ -4847,7 +5028,14 @@ def main():
               in page.evaluate("window.__sent"),
               str(page.evaluate("window.__sent")))
 
-        # ---- item 11: Power Shaper is an FX, in the psine FX subsection --
+        # ================================================================
+        # SECTION 28 — item 11: Power Shaper is the DUAL-MODE card.
+        # ONE card that GENERATES, and acts as FX when audio is wired in
+        # (Cole, 07-24). Rewritten from the two-card FX shape #52 shipped.
+        # A dual is neither "source" nor "effect", so the regressions to
+        # guard are things falling through BOTH branches of an if/else:
+        # vanishing from the palette, and getting only one of its two ins.
+        # ================================================================
         pal27 = page.evaluate("""(() => ({
           btns: [...document.querySelectorAll('#palette button')]
                 .map(b => b.textContent),
@@ -4858,40 +5046,366 @@ def main():
         check("item 11: Power Shaper appears in the palette",
               "Power Shaper" in pal27["btns"], str(pal27["btns"]))
         fxi = pal27["order"].index("H3:fx")
-        after = pal27["order"][fxi:]
-        psi = next((i for i, e in enumerate(after) if e == "H4:psines"), -1)
-        check("…under a psines subsection INSIDE fx (not the voices one)",
-              psi >= 0 and after[psi + 1] == "BUTTON:Power Shaper",
-              str(after))
-        check("…while the GENERATOR psine stays under voices",
+        psi = next((i for i, e in enumerate(pal27["order"])
+                    if e == "H4:psines"), -1)
+        check("…under psines in VOICES — it generates until you wire it",
+              0 <= psi < fxi
+              and "BUTTON:Power Shaper" in pal27["order"][psi:fxi],
+              str(pal27["order"]))
+        check("…alongside the generator psine, which is unchanged",
               pal27["order"].index("BUTTON:Psine Waveshaper") < fxi,
               str(pal27["order"]))
+
+        dual = mod("power_shaper", "Power Shaper", "dual", "psine",
+                   params={"freq": param(), "p": param(), "drive": param(),
+                           "amp": param(), "mix": param()})
+        # --- GENERATE: nothing wired in ---------------------------------
         page.evaluate("(s) => __msg({type: 'state', ...s})", base_state(
-            [sg, mod("power_shaper", "Power Shaper", "effect", "psine",
-                     params={"p": param(), "drive": param(),
-                             "mix": param()})],
+            [sg, dual],
+            [{"from": "signal_gen", "to": "master"},
+             {"from": "power_shaper", "to": "master"}],
+            available=AVAIL27))
+        page.wait_for_timeout(400)
+        gen28 = page.evaluate("""(() => {
+          const n = nodes.get('m:power_shaper');
+          return n && {
+            hasAudioIn: !!n.ports.find(p => p.sig === 'audio'
+                                            && p.dir === 'in' && !p.quiet),
+            hasCtlIn: !!n.ports.find(p => p.sig === 'ctl'
+                                          && p.dir === 'in' && !p.quiet),
+            params: [...n.el.querySelectorAll('.mini label')]
+                      .map(l => l.textContent.replace(' ∿', '')),
+            hasGen: !!n.el.querySelector('canvas[data-viz="gen"]'),
+            mode: (n.el.querySelector('.chip.modeind') || {}).textContent,
+          };
+        })()""")
+        check("the dual card carries BOTH ins: ctl play AND audio",
+              bool(gen28) and gen28["hasAudioIn"] and gen28["hasCtlIn"],
+              str(gen28))
+        check("…exposes both modes' params (freq/amp + p/drive/mix)",
+              bool(gen28) and set(gen28["params"]) >=
+              {"freq", "p", "drive", "amp", "mix"}, str(gen28))
+        check("…renders the generator preview (it DOES generate)",
+              bool(gen28) and gen28["hasGen"], str(gen28))
+        check("…and reads GEN while nothing is wired into it",
+              bool(gen28) and gen28["mode"] == "GEN", str(gen28))
+
+        # --- FX: a source wired in --------------------------------------
+        page.evaluate("(s) => __msg({type: 'state', ...s})", base_state(
+            [sg, dual],
             [{"from": "signal_gen", "to": "power_shaper"},
              {"from": "power_shaper", "to": "master"}],
             available=AVAIL27))
         page.wait_for_timeout(400)
-        fx27 = page.evaluate("""(() => {
+        fx28 = page.evaluate("""(() => {
           const n = nodes.get('m:power_shaper');
           const sgN = nodes.get('m:signal_gen');
           return n && {
-            hasIn: !!n.ports.find(p => p.sig === 'audio' && p.dir === 'in'),
-            params: [...n.el.querySelectorAll('.mini label')]
-                      .map(l => l.textContent.replace(' ∿', '')),
             wired: !!wires.find(x => x.from.node === sgN && x.to.node === n),
-            noGen: !n.el.querySelector('canvas[data-viz="gen"]'),
+            mode: (n.el.querySelector('.chip.modeind') || {}).textContent,
+            lit: !!n.el.querySelector('.chip.modeind.fx'),
           };
         })()""")
-        check("Power Shaper card takes an audio IN and accepts a source",
-              bool(fx27) and fx27["hasIn"] and fx27["wired"], str(fx27))
-        check("…exposes p / drive / mix",
-              bool(fx27) and set(fx27["params"]) >= {"p", "drive", "mix"},
-              str(fx27))
-        check("…and renders no generator preview (it is an effect)",
-              bool(fx27) and fx27["noGen"], str(fx27))
+        check("a source wires INTO the dual (a plain source refuses this)",
+              bool(fx28) and fx28["wired"], str(fx28))
+        check("…and the card reads FX, lit, from state.wires alone",
+              bool(fx28) and fx28["mode"] == "FX" and fx28["lit"], str(fx28))
+
+        # --- REACTIVE-INDICATOR DOCTRINE --------------------------------
+        # THE POINT OF THIS BLOCK: the mode indicator must follow the
+        # BACKEND's tap, not a click and not the next state broadcast.
+        # A wire edit only re-points the SOURCE's out bus, so App's
+        # "<key>:mode" level tap is the only live signal there is — delete
+        # the _sync_dual_modes emit and these two checks fail.
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'power_shaper:mode', on: false}})")
+        page.wait_for_timeout(150)
+        check("a mode LEVEL tap flips the indicator to GEN with no rebuild",
+              page.evaluate("""(() => {
+                const c = nodes.get('m:power_shaper')
+                          .el.querySelector('.chip.modeind');
+                return c.textContent === 'GEN' && !c.classList.contains('fx');
+              })()"""))
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'power_shaper:mode', on: true}})")
+        page.wait_for_timeout(150)
+        check("…and back to FX, lit, on the next tap",
+              page.evaluate("""(() => {
+                const c = nodes.get('m:power_shaper')
+                          .el.querySelector('.chip.modeind');
+                return c.textContent === 'FX' && c.classList.contains('fx');
+              })()"""))
+
+        # ================================================================
+        # SECTION 29 — item 10: the Poly Voice card.
+        # ONE card type, two allocation POLICIES. The policy arrives on the
+        # state entry and must never be inferred from the id — item 29 adds
+        # a third ("hold") and this card should need only a label for it.
+        # ================================================================
+        VOICES29 = [
+            {"id": "voice", "target": "signal_gen",
+             "policy": "mono-latest", "slots": 1},
+            {"id": "poly", "target": "signal_gen",
+             "policy": "poly", "slots": 8},
+        ]
+        page.evaluate("posMem = {};")
+        page.evaluate("(s) => __msg({type: 'state', ...s})", base_state(
+            [sg], [{"from": "signal_gen", "to": "master"}],
+            available=AVAIL27, voices=VOICES29))
+        page.wait_for_timeout(500)
+
+        pal29 = page.evaluate("""(() => ({
+          order: [...document.querySelectorAll('#palette h3, #palette button')]
+                   .map(e => e.tagName + ':' + e.textContent),
+        }))()""")
+        ai = pal29["order"].index("H3:allocation")
+        check("item 10: a Poly Voice palette button sits beside Mono Voice",
+              pal29["order"][ai + 1] == "BUTTON:Mono Voice"
+              and pal29["order"][ai + 2] == "BUTTON:Poly Voice",
+              str(pal29["order"][ai:ai + 4]))
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("""() => [...document.querySelectorAll('#palette button')]
+          .find(b => b.textContent === 'Poly Voice').click()""")
+        page.wait_for_timeout(120)
+        check("…and spawns one with the engine's default of 8",
+              {"type": "spawn_poly", "voices": 8}
+              in page.evaluate("window.__sent"),
+              str(page.evaluate("window.__sent")))
+
+        card29 = page.evaluate("""(() => {
+          const title = (g) => {
+            const n = nodes.get(g);
+            return n && n.el.querySelector('.title').textContent;
+          };
+          const p = nodes.get('poly'), m = nodes.get('voice');
+          const row = [...p.el.querySelectorAll('.mini.stepped')].find(
+            x => (x.querySelector('label')||{}).title === 'voices');
+          const portsOf = (n) => n.ports.filter(q => !q.quiet)
+            .map(q => [q.dir, q.sig, q.label]);
+          return {
+            poly: title('poly'), mono: title('voice'),
+            hasStep: !!row,
+            dets: row && row.querySelectorAll('.det').length,
+            v: row && row.querySelector('.v').textContent,
+            polyPorts: portsOf(p), monoPorts: portsOf(m),
+            // the mono card must be untouched by any of this
+            monoStep: [...m.el.querySelectorAll('.mini.stepped')].length,
+            kill: !!p.el.querySelector('.kill'),
+            // DELIBERATELY no "voices sounding" indicator — see the card
+            // comment. Asserted so its absence reads as a decision, not a
+            // gap someone helpfully fills with an untested tap.
+            leds: p.el.querySelectorAll('.onoff, .gled, .led').length,
+          };
+        })()""")
+        check("a poly entry titles its card Poly Voice",
+              card29["poly"] == "Poly Voice", str(card29))
+        check("…and a mono-latest entry still says Mono Voice",
+              card29["mono"] == "Mono Voice", str(card29))
+        check("…with a stepped 1–16 control seeded from `slots`",
+              card29["hasStep"] and card29["dets"] == 16
+              and card29["v"] == "8 notes", str(card29))
+        check("…identical ports to mono: notes in, drive out",
+              card29["polyPorts"] == [["in", "ctl", "notes"],
+                                      ["out", "ctl", "drive"]]
+              and card29["polyPorts"] == card29["monoPorts"], str(card29))
+        check("…and the mono card gains no step slider from this",
+              card29["monoStep"] == 0, str(card29))
+        check("…carries a kill affordance (the default 'voice' does not)",
+              card29["kill"], str(card29))
+        check("…and deliberately has NO sounding indicator",
+              card29["leds"] == 0, str(card29))
+        # The seed must track `slots`, not the engine's default. Asserting it
+        # only at slots=8 passes against a hardcoded index of 7 — verified:
+        # that mutation went green until this second value existed.
+        page.evaluate("(s) => __msg({type: 'state', ...s})", base_state(
+            [sg], [{"from": "signal_gen", "to": "master"}],
+            available=AVAIL27,
+            voices=[VOICES29[0], {**VOICES29[1], "slots": 3}]))
+        page.wait_for_timeout(400)
+        check("…and that seed FOLLOWS slots (3, not the default 8)",
+              page.evaluate("""(() => {
+                const row = [...nodes.get('poly').el
+                  .querySelectorAll('.mini.stepped')].find(
+                    x => (x.querySelector('label')||{}).title === 'voices');
+                return row && row.querySelector('.v').textContent;
+              })()""") == "3 notes")
+        page.evaluate("(s) => __msg({type: 'state', ...s})", base_state(
+            [sg], [{"from": "signal_gen", "to": "master"}],
+            available=AVAIL27, voices=VOICES29))
+        page.wait_for_timeout(400)
+
+        # Resizing it. Stepped sliders are DRAG-driven — a bare click applies
+        # nothing by design (§15) — so this uses the same pointer idiom, and
+        # a drag of -4 detents from slot 8 must land on exactly 4 notes.
+        page.evaluate("window.__sent.length = 0")
+        sent29 = page.evaluate("""(() => {
+          const p = nodes.get('poly');
+          const row = [...p.el.querySelectorAll('.mini.stepped')].find(
+            x => (x.querySelector('label')||{}).title === 'voices');
+          const track = row.querySelector('.track');
+          const zs = parseFloat(world.style.zoom) || 1;
+          const per = (track.offsetWidth || 1) / 15;   // 16 detents → 15 gaps
+          const ev = (type, x) => track.dispatchEvent(new PointerEvent(type,
+            {pointerId: 11, clientX: x, clientY: 0, bubbles: true}));
+          ev('pointerdown', 500);
+          for (let s = 1; s <= 8; s++)
+            ev('pointermove', 500 - (4 * per * zs) * s / 8);
+          ev('pointerup', 500 - 4 * per * zs);
+          return window.__sent.filter(m => m.type === 'set_poly_voices');
+        })()""")
+        check("dragging the control sends set_poly_voices for THIS id",
+              bool(sent29) and all(m["id"] == "poly" for m in sent29)
+              and all(1 <= m["voices"] <= 16 for m in sent29), str(sent29))
+        check("…and a 4-detent drag down from 8 lands on exactly 4 notes",
+              bool(sent29) and sent29[-1]["voices"] == 4, str(sent29))
+
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("() => nodes.get('poly').el.querySelector('.kill').click()")
+        page.wait_for_timeout(120)
+        check("…and the kill sends remove_voice, same as a spawned mono",
+              {"type": "remove_voice", "id": "poly"}
+              in page.evaluate("window.__sent"),
+              str(page.evaluate("window.__sent")))
+
+        # ================================================================
+        # SECTION 30 — item 29: the Drone Voice card ("hold" policy).
+        # The dispatch here is a BUG FIX as much as a feature: state.voices
+        # is no longer mono-only, and a hold entry rendered as "Mono Voice"
+        # before a policy dispatch existed.
+        # ================================================================
+        VOICES30 = [
+            {"id": "voice", "target": "signal_gen",
+             "policy": "mono-latest", "slots": 1, "power": None},
+            {"id": "hold", "target": "signal_gen",
+             "policy": "hold", "slots": 1, "power": False},
+        ]
+        page.evaluate("posMem = {};")
+        page.evaluate("(s) => __msg({type: 'state', ...s})", base_state(
+            [sg], [{"from": "signal_gen", "to": "master"}],
+            available=AVAIL27, voices=VOICES30))
+        page.wait_for_timeout(500)
+
+        pal30 = page.evaluate("""(() => [...document.querySelectorAll(
+          '#palette h3, #palette button')].map(e => e.tagName + ':'
+            + e.textContent))()""")
+        ai = pal30.index("H3:allocation")
+        check("item 29: all three allocation buttons, in policy order",
+              pal30[ai + 1:ai + 4] == ["BUTTON:Mono Voice", "BUTTON:Poly Voice",
+                                       "BUTTON:Drone Voice"],
+              str(pal30[ai:ai + 5]))
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("""() => [...document.querySelectorAll('#palette button')]
+          .find(b => b.textContent === 'Drone Voice').click()""")
+        page.wait_for_timeout(120)
+        check("…and Drone Voice spawns with no arguments",
+              {"type": "spawn_drone_voice"} in page.evaluate("window.__sent"),
+              str(page.evaluate("window.__sent")))
+
+        d30 = page.evaluate("""(() => {
+          const n = nodes.get('hold'), m = nodes.get('voice');
+          const labels = (c) => [...c.el.querySelectorAll('.mini label')]
+            .map(l => l.title);
+          const port = (c, pred) => c.ports.find(pred);
+          const pw = port(n, q => q.sig === 'bin' && q.dir === 'in');
+          return {
+            title: n.el.querySelector('.title').textContent,
+            mono: m.el.querySelector('.title').textContent,
+            fam: n.fam, size: n.size,
+            sub: n.el.querySelector('.sub').textContent,
+            rows: labels(n),
+            tone: !!port(n, q => q.sig === 'ctl' && q.dir === 'in'),
+            drive: !!port(n, q => q.sig === 'ctl' && q.dir === 'out'),
+            pwEp: pw && pw.ep, pwSingle: pw && !!pw.single,
+            stripe: !!n.el.querySelector('.stripe.pwr'),
+            lit: n.el.querySelector('.stripe').classList.contains('on'),
+            // measured sizing: none of the declared-size opt-ins
+            declared: !!(n.defaultSize || n.ownFaces),
+          };
+        })()""")
+        check("a hold entry titles its card Drone Voice, not Mono Voice",
+              d30["title"] == "Drone Voice" and d30["mono"] == "Mono Voice",
+              str(d30))
+        check("…ctl family, measured sizing (no declared-size opt-ins)",
+              d30["fam"] == "ctl" and not d30["declared"], str(d30))
+        check("…two rows, no subtitle, no bend and no voices row",
+              d30["rows"] == ["target"] and d30["sub"] == "", str(d30))
+        check("…TONE in + drive out, and POWER at '<gid>:pwr' as fan-in",
+              d30["tone"] and d30["drive"] and d30["pwEp"] == "hold:pwr"
+              and not d30["pwSingle"], str(d30))
+        check("…POWER renders as the card's colour bar, seeded off",
+              d30["stripe"] and not d30["lit"], str(d30))
+
+        # The click route. togglePower() is the "one door" every press path
+        # funnels through (§17 covers bindNode's stationary-press-vs-drag on
+        # the stripe itself; re-testing that here would be testing addCard).
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("() => nodes.get('hold').togglePower()")
+        page.wait_for_timeout(120)
+        check("toggling the bar sends set_drone_power and fills it",
+              {"type": "set_drone_power", "id": "hold", "on": True}
+              in page.evaluate("window.__sent")
+              and page.evaluate("nodes.get('hold').el.querySelector('.stripe')"
+                                ".classList.contains('on')"),
+              str(page.evaluate("window.__sent")))
+
+        # THE REACTIVE ROUTE — the reason this card gets an indicator at all.
+        # A binary wire driving "<id>:pwr" applies server-side outside the
+        # broadcast, so this tap is the only live signal. Unlike item 10's
+        # poly card, the tap is proven to fire on both edges from both routes
+        # (tests/test_drone_alloc.py), so the indicator may depend on it.
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'hold:pwr', on: false}})")
+        page.wait_for_timeout(80)
+        check("a logic level-in EMPTIES the bar with no click and no rebuild",
+              not page.evaluate(
+                  "nodes.get('hold').el.querySelector('.stripe')"
+                  ".classList.contains('on')"))
+        check("…and updates state.voices[].power so a rebuild agrees",
+              page.evaluate("(state.voices.find(v => v.id === 'hold')||{})"
+                            ".power") is False)
+        page.evaluate(
+            "() => __msg({type: 'midi', event:"
+            " {kind: 'level', ep: 'hold:pwr', on: true}})")
+        page.wait_for_timeout(80)
+        check("…and re-fills it on the rising edge",
+              page.evaluate(
+                  "nodes.get('hold').el.querySelector('.stripe')"
+                  ".classList.contains('on')"))
+        # the model update must survive an actual rebuild, not just look right
+        page.evaluate("() => rebuildGraph()")
+        page.wait_for_timeout(300)
+        check("…and the bar is still filled after a real rebuild",
+              page.evaluate(
+                  "nodes.get('hold').el.querySelector('.stripe')"
+                  ".classList.contains('on')"))
+
+        page.evaluate("window.__sent.length = 0")
+        page.evaluate("() => nodes.get('hold').el.querySelector('.kill').click()")
+        page.wait_for_timeout(120)
+        check("kill sends remove_voice (there is no remove_drone_voice)",
+              {"type": "remove_voice", "id": "hold"}
+              in page.evaluate("window.__sent"),
+              str(page.evaluate("window.__sent")))
+
+        # An UNKNOWN policy must not blank the canvas. The id here is one no
+        # earlier state used, deliberately: asserting on "voice" passed even
+        # when the fallback was mutated away, because a STALE node from the
+        # previous push satisfied nodes.get(). A fresh id can only exist if
+        # the fallback actually ran.
+        page.evaluate("(s) => __msg({type: 'state', ...s})", base_state(
+            [sg], [{"from": "signal_gen", "to": "master"}],
+            available=AVAIL27,
+            voices=[{"id": "voice.7", "target": "signal_gen",
+                     "policy": "some-future-policy", "slots": 1}]))
+        page.wait_for_timeout(400)
+        check("an unknown policy falls back to the mono card, not a hole",
+              page.evaluate("!!nodes.get('voice.7')")
+              and page.evaluate("nodes.get('voice.7').el"
+                                ".querySelector('.title').textContent")
+              == "Mono Voice 7")
 
         check("no page errors", not errors, "; ".join(errors[:3]))
         browser.close()

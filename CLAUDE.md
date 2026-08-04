@@ -38,7 +38,12 @@ before its dst. Wires survive rebuilds; removal splice-heals A→X→B to A→B.
 routing. Node vocabulary: `keys` (all controllers enter here; never a
 destination), `arp`, `deck` (the MIDI looper: keys→deck records raw,
 arp→deck records voiced, deck→X replays), mono voices (`voice`,
-`voice.2`, ...; each drives one target source), tonic derivers (`tonic.N`:
+`voice.2`, ...; each drives one target source), POLY voices (`poly`,
+`poly.2`, ...; N notes at once on ONE target, oldest stolen when full —
+on `main` since 2026-07-26, live-verified on the rig; see the satellite
+landmine below), DRONE voices (`hold`, `hold.2`, ... —
+note the id type is `hold`, NOT `drone`; holds the last root, with a binary
+POWER level-in at `"<id>:pwr"` — on `main` since 2026-07-26), tonic derivers (`tonic.N`:
 notes in → ctl THRU out + amber TONIC out; tonic outs land only on drone
 instances' tonic-ins), and key shifters (`keyshift.N` with four isolated
 LANES — endpoint grammar `"keyshift.2:3"` = lane 3; lane k in → shift →
@@ -49,6 +54,16 @@ on is a stuck note and a stuck monitor bar.
 **Global-vs-wired doctrine.** Transport/clock, panic + sustain, master
 volume + IO config, pitch reference (transpose/bend), and persistence stay
 GLOBAL. Everything else — who hears whom — is wire-defined.
+
+⚠ **Global does not mean uniform: transpose and bend part company on the
+drone.** Item 29 (shipped 2026-07-26) makes the drone
+follow global TRANSPOSE — it previously sat exactly `transpose` semitones
+away from the rest of the patch, which was a bug — while still IGNORING
+bend, on purpose. Transpose is a standing key change, so it redefines the
+reference too; bend is a momentary gesture on what you're PLAYING, and a
+drone is what you play against, so bending it with the melody would leave
+every interval unchanged and silently cancel the wheel. The two look
+inconsistent side by side and are not. Don't "fix" the bend half.
 
 ## GUIs
 
@@ -139,7 +154,39 @@ first three). Any new indicator is wired the same way — and a headless
 mock can only prove it reacts to a message we invented, so verify it on
 the rig with `tests/probe_live_gui.py`.
 
+**Where a control has BOTH a card and a top-bar element, they are ONE
+state** and a level tap must drive both. `run` has always done this
+(`syncTopBarPlay`); `click` did not — a logic-driven change lit the card
+LED and left the top bar reading the opposite, which was not merely
+cosmetic, since `sendTransport()` READS the checkbox and pushed the stale
+value back on the next BPM nudge. Fixed on `feat/p11-dual-mode` via
+`syncTopBarClick`, routing both call sites through one function so they
+cannot drift apart again.
+
+**`accent` is the deliberate exception (Cole, 2026-07-26).** The transport
+has THREE binary level-ins — `run`, `click`, `accent` — but accent has **no
+top-bar element at all**, so there is nothing to sync and no top-bar call
+in its branch of the handler. **This is an intentional asymmetry, not a
+missing feature: do not "fix" it** by adding a top-bar accent control. If
+accent ever gains one, it joins the rule above and needs its own
+`syncTopBar…` and a falling-edge test.
+
+The doctrine itself is untouched by that decision: **accent's CARD
+indicator must still react to logic input** exactly like the others. Only
+the top-bar mirror is absent, because there is no top-bar element to
+mirror to.
+
 ## Writing a new module (the main vibecoding activity)
+
+> **The `dual` kind is LIVE and WORKING** (2026-07-27).
+> `KINDS = ("source", "effect", "dual")`, `power_shaper` declares
+> `kind="dual"`, and both modes are verified on the rig — GEN rms 0.130 at
+> 440 Hz with THD ~0, FX rms 0.724 with THD 0.396 and a real odd-harmonic
+> square spectrum. Rules 3 and 10 below are exercised, not theoretical.
+>
+> Gen mode was briefly SILENT and briefly reverted; both are history now.
+> The post-mortem is worth reading before you add a kind:
+> `continuity/item11-gen-mode-failure.md`.
 
 Copy an existing file in `modules/` and change the body. The contract:
 
@@ -151,7 +198,7 @@ from synthbase import module, param
 
 @module(
     name="Display Name",
-    kind="source",              # "source" = generates audio; "effect" = processes it
+    kind="source",              # "source" generates | "effect" processes | "dual" both
     params={                    # every knob a human/MIDI/GUI may turn
         "cutoff": param(60, 12000, 1200, curve="exp"),  # min, max, default
     },
@@ -168,8 +215,24 @@ Rules:
    it. Renaming the function = a new module.
 2. **Stereo everywhere.** `Out.ar` gets a 2-channel source. Mono signals:
    `[sig, sig]`.
-3. **Effects must take `in_bus` and read `In.ar(bus=in_bus, channel_count=2)`.**
-   Sources must not take `in_bus`. Everyone takes `out`.
+3. **`kind` decides whether you take `in_bus`.** There are THREE kinds, not
+   two (`KINDS` in `module.py`), and the two helpers there are what the
+   engine actually branches on — `generates(kind)` and `takes_audio_in(kind)`:
+
+   | kind | generates? | takes `in_bus`? |
+   | --- | --- | --- |
+   | `source` | yes | **no** |
+   | `effect` | no | yes — read `In.ar(bus=in_bus, channel_count=2)` |
+   | `dual` | yes | yes |
+
+   Everyone takes `out`. A **dual** module is both at once: it generates on
+   its own, AND processes whatever is wired into it. It therefore ALWAYS
+   owns an `in_bus`, even while generating.
+
+   ⚠ **A dual changes what an incoming audio wire means.** A wire into a
+   plain source SUMS into the running bus (see the landmine below); a wire
+   into a dual lands on its `in_bus` instead (`Rack._dst_bus`). Don't
+   generalise the fan-in rule across kinds.
 4. **Every human-facing knob goes in `params`** with a sensible range and
    `curve="exp"` for frequencies/times. Defaults in the function signature
    should match the param defaults.
@@ -177,6 +240,16 @@ Rules:
    signal in `EnvGen.kr(envelope=Envelope.adsr(...), gate=gate)`. Keep
    `done_action` unset (0) so the node survives release — mono voices are
    persistent nodes.
+
+   **A module that declares `freq` + `gate` MUST be reachable by a voice**,
+   and `App._is_playable` is the SINGLE place that decides. It is one
+   predicate because it used to be four, and they drifted: all four tested
+   `kind == "source"`, which quietly made every `dual` module unreachable —
+   no voice would aim at one, so its gate never opened and Power Shaper was
+   silent in GEN mode while its DSP was provably correct. Declaring the two
+   controls is not enough on its own; something has to be willing to write
+   them. `tests/test_playable.py` enforces it. **If you add a playability
+   condition, it goes in `_is_playable` — never in a second place.**
 6. **Keep one module per file** unless variants truly belong together.
 7. Smoothing: wrap params that will be twiddled in `Lag.kr(source=p,
    lag_time=0.02)` to avoid zipper noise.
@@ -186,6 +259,22 @@ Rules:
    ratios — convert inside the DSP with `.semitones_to_ratio()` (e.g.
    `(cents / 100).semitones_to_ratio()`). Voice-level pitch bend already
    follows this convention (±2 semitones).
+10. **A dual module's `mode` is DERIVED — never a param.** It is a plain
+    synthdef arg (`mode=0`), and `App._sync_dual_modes` pushes it from the
+    AUDIO GRAPH: a stored wire whose destination is this instance means FX
+    (`mode=1`), no wire means GENERATE (`mode=0`). Putting it in `params`
+    would give the user a knob that the next rewire silently overrides.
+    Three consequences worth building for:
+    - **Compute both chains and crossfade through a LAGGED `mode`**, so a
+      wire landing or being cut is click-free instead of a hard switch.
+    - **A rebuild spawns every dual at the synthdef default (`mode=0`)**,
+      so the sync is re-pushed with `force=True` after one — same class of
+      bug as playable sources having to spawn `gate=0`.
+    - **Mode is invisible state, so it must announce itself**: the backend
+      emits `{"kind": "level", "ep": "<id>:mode", "on": …}` for the card,
+      exactly as `:pwr` does. That is the reactive-indicator doctrine, and
+      a shaper that silently stops generating is precisely what it exists
+      to prevent.
 
 UGen naming: supriya mirrors SuperCollider UGens with snake_case keyword args
 (`SinOsc.ar(frequency=...)`, `RLPF.ar(source=..., frequency=...,
@@ -219,23 +308,62 @@ python -m synthbase gui pad_space # or directly; GUI at http://127.0.0.1:8765
 
 ## Testing changes
 
-There's no audio in CI/cloud contexts. Before claiming anything works, run:
+There's no audio in CI/cloud contexts. There are **THREE** headless
+categories, and they fail in different ways — a change is not proven until
+the relevant one is green.
 
-- `python3 tests/smoke.py` — every module loads, synthdefs compile, patches
-  parse, keyshift math sane.
-- `python3 tests/test_graph.py` — audio-wire derivation, graph/ctl wire
-  bookkeeping, instance ids, multi-voice, tonic→drone, key-shifter lanes and
-  progression, tap-closure and snip-heal invariants (no server needed).
-- `python3 tests/test_looper.py` — deck record/replay/overdub timing and
-  take pairing.
-- `python3 tests/gui_check8.py` — headless Playwright checks of flex.html
-  against mock state/events (cards, wires, monitors, splices, key shifter,
-  closure regressions). This is the current one; `gui_check.py`/`gui_check6.py`/
-  `gui_check7.py` are earlier snapshots kept for reference, not upkeep. Write
-  NEW checks failing-first against the broken behavior.
+**1. Python suites — applied STATE.** They construct an app and assert what
+it ended up doing.
+`smoke.py` (every module loads, synthdefs compile, patches parse, keyshift
+math sane) · `test_graph.py` (audio-wire derivation, graph/ctl bookkeeping,
+instance ids, multi-voice, tonic→drone, keyshift lanes, tap-closure and
+snip-heal) · `test_looper.py` (deck timing, take pairing) · `test_gate`,
+`test_ping`, `test_deriver`, `test_lfo`, `test_threshold`, `test_transport`,
+`test_allocation`, `test_drone_alloc`, `test_reactive`, `test_audio_session`,
+`test_rig`, `test_power_sine`, `test_analysis`, `test_capture`,
+`test_replay`, and `test_playable` (**a module declaring `freq`+`gate` is
+REACHABLE by a voice** — the join nothing used to test).
 
-`test_mixed_sources.py`, `diag_*.py`, `hear_check.py`, and `probe_ws.py`
-talk to a **live** server over websocket instead of running headless — they
+**The census, as of v2.2:** `tests/test_*.py` has **19** files. CI runs
+**18** of them; the nineteenth is `test_mixed_sources.py`, which declares
+`CI_EXEMPT` because it needs a live server with real audio on `:8765`.
+`smoke.py` enforces that every suite is either wired into `ci.yml` or
+declares that exemption — so this count cannot silently drift again. Note
+what it does NOT check: that every job in `ci.yml` resolves to a real file.
+The rule runs one direction only.
+
+**2. Playwright suites — the RENDER**, driven against mock state/events.
+`check_blocks.py` (blocks geometry — sections 1–10 are the regression net) ·
+`gui_check8.py` (cards, wires, monitors, splices, keyshift, closure
+regressions; `gui_check{,6,7}.py` are earlier snapshots kept for reference,
+not upkeep) · `check_real.py` (replays a captured real-rig `state` into
+`blocks.html`; headless despite the name — no server, no audio).
+
+**3. `check_replay.py` — the ENGINE'S OUTPUT joined to the GUI's render.**
+The third category, and the one the other two cannot cover. Records
+scenarios through `tests/silent_rig.py` (the real `GuiServer` over an
+engine-less `SynthApp`, no audio and no scsynth), then asserts against those
+**recordings rather than invented messages**:
+
+    python3 tests/check_replay.py --emission   # backend, no browser needed
+    python3 tests/check_replay.py --dom        # GUI, no engine needed
+    python3 tests/check_replay.py              # both
+
+Why it exists, concretely: **replacing all four `_emit_level` call sites
+with `pass` leaves every Python suite green**, because those suites observe
+applied state, not emissions. And the three Playwright suites contain the
+string `synthbase` zero times — every `{"kind": "level"}` they assert is a
+shape they wrote themselves, so a backend that stopped emitting, or emitted
+a different shape, would not fail them. `check_replay` is the check that
+goes red. CI runs it in BOTH jobs — `--emission` headless, `--dom` with the
+browser.
+
+Write NEW checks failing-first against the broken behavior.
+
+`tests/live_dual_mode.py` (both Power Shaper modes through real audio —
+GEN tone, FX spectrum; on `fix/p11-dual-playable`), `tests/probe_live_gui.py`, `test_mixed_sources.py`,
+`diag_*.py`, `hear_check.py` and `probe_ws.py` talk to a **live** server
+over websocket instead of running headless — they
 need `python -m synthbase gui` actually running with real audio, so treat
 them as Mac-only manual checks, not something CI or a cloud session can run.
 
@@ -273,6 +401,44 @@ sandboxes, against ONE `.git`. That is normal here, and it has its own rules.
   using it, and don't leave it on a branch. Probes load the page over HTTP and
   need no checkout — stage them to `/tmp` and run them from there.
 
+## `continuity/` has a safety net now — use it
+
+`continuity/` is the on-disk mirror of the living docs in the claude.ai
+"Patchwerk" project (the project is canonical; that folder is the copy).
+It is **gitignored**, so ordinary git cannot restore it — and
+`git clean -xdf` deletes ignored files outright. It was lost once, on
+07-25, and rebuilt from memory.
+
+**`continuity/bin/continuity-guard.sh` fixes that property.** Two
+restore-only nets, both refreshed automatically by a `post-commit` hook:
+
+1. `refs/continuity/snapshots` — an orphan history in the shared `.git`.
+   Survives `git clean -xdf`, `worktree prune`, worktree deletion, and
+   `rm -rf continuity/`. It is not on `refs/heads/*`, so the default push
+   refspec never publishes it — **the notes stay private.**
+2. `~/.patchwerk-continuity/` — outside the repo, so it survives `.git`
+   being destroyed or the checkout being deleted. Holds the current tree,
+   a bundle of the full history, and a copy of the tool itself.
+
+```bash
+continuity/bin/continuity-guard.sh status    # both nets + drift
+continuity/bin/continuity-guard.sh snapshot  # also runs post-commit
+continuity/bin/continuity-guard.sh restore   # bring it back
+continuity/bin/continuity-guard.sh verify    # prove the nets restore
+```
+
+**If `continuity/` is gone, the tool went with it** — bootstrap from the
+mirror's copy: `bash ~/.patchwerk-continuity/bin/continuity-guard.sh restore`.
+The hook is machine-local (`.git/hooks/`); on a fresh clone, reinstall it
+with `continuity-guard.sh install-hook`.
+
+Two things NOT to do. **Don't edit the mirror** — it is the disaster copy,
+and a third editable lineage is exactly what caused the 07-24/25 doc
+divergence. **Don't defeat the shrink guard with `--force` to make a
+warning go away**: a snapshot that faithfully replicates a deletion is not
+a backup, so a tree that has lost most of its files is refused and BOTH
+nets keep their last healthy state. Restore first, then diff.
+
 ## Landmines (learned the hard way)
 
 - scsynth crashers: `.clip()`, scaled `RecordBuf` sources, EnvGen-driven
@@ -280,7 +446,55 @@ sandboxes, against ONE `.git`. That is normal here, and it has its own rules.
 - Playable sources must spawn `gate=0` (the synthdef default of 1 leaves
   idle voices droning after every rebuild).
 - Extra sources SUM into the running bus — a fresh bus orphans everything
-  upstream ("generators go dead").
+  upstream ("generators go dead"). **This is KIND-SPECIFIC**: a wire into a
+  `dual` module goes to its `in_bus` instead of summing. Never infer the
+  destination's behaviour from the fact that it is a destination —
+  `Rack._dst_bus` decides, and it is the only thing that does. Covered by
+  `test_graph.py` through the REAL rewire path, not merely asserted here.
+- **A PLAYABLE MODULE MUST BE REACHABLE BY A VOICE — now tested
+  (`tests/test_playable.py`), and it was not.** That gap is how item 11's
+  Power Shaper — a module that **could never make a sound** — shipped
+  green: `rack.py` was widened to the `generates()`/`takes_audio_in()`
+  predicates, but `app.py`'s FOUR playability tests still compared
+  `kind == "source"` by strict equality, so no voice would aim at it, and
+  a playable source spawns `gate=0` with nothing to open it. Every suite
+  passed because each tested a LAYER — the module compiles, the rack
+  accepts it, the card renders — and **none tested the JOIN**, that
+  something declaring itself playable is reachable from the note plane.
+  The four predicates are now one, `App._is_playable`. When you add a
+  layer, ask what joins it to the next one; that is where the silent
+  failures live.
+- **ADDING A VALUE TO AN ENUM IS NOT DONE WHEN THE CODE THAT BRANCHES ON
+  IT COMPILES — it is done when every PREDICATE over it has been
+  re-derived.** This is the generalisable form of the bug above, and it
+  bites whenever a type gains a member. Item 11 audited `rack.py` line by
+  line for `kind` and got it exactly right; `app.py` was never audited at
+  all, and that asymmetry was invisible because everything still compiled
+  and every suite still passed. **One `grep "module.kind" synthbase/`
+  would have found all four missed sites in a single pass** — cheaper than
+  the audit that was done, and it is the audit that was skipped. Before
+  adding a member to `KINDS` (or any enum-shaped set): grep the ATTRIBUTE,
+  not the identifier, and re-derive every test over it.
+- **`set_param` SPEAKS NORMALISED UNITS (0–1), NOT RAW ONES.** A live
+  check sent a raw value, so the parameter sat at its identity curve, the
+  DSP passed a sine through unchanged, and **the check went green while
+  measuring nothing** — caught only because the numbers didn't move when
+  they should have. A test that drives a param through `set_param` must
+  normalise, and should assert the output CHANGED, not merely that it
+  arrived: a check whose pass condition is satisfied by a no-op is not a
+  check. Same family as the mock landmines below — the failure is always
+  something that agrees with you too easily.
+- **A TEST DOUBLE THAT ENUMERATES A PRODUCTION TYPE'S FIELDS breaks
+  silently when that type gains one.** A double that lists what it expects
+  — rather than mirroring the real shape — keeps passing while quietly
+  covering less, because the new field is simply absent from the double and
+  no assertion names it. **Fix the DOUBLE; do not make production bend
+  around it** with `getattr(x, "new_field", default)` — a defensive
+  accessor added to satisfy a stale mock buys a green suite by making the
+  production type permanently harder to reason about, and hides the same
+  gap next time. This is the same family as the `free(force=…)` mock
+  landmine above: a double is a claim about the real thing, and a claim
+  that is kinder or narrower than reality is where coverage silently goes.
 - Sort looper events by beat with a STABLE key-only sort — tuple sort puts
   offs before ons at equal beats and scrambles pairing.
 - Every all-off/silencing path must close its open notes AND their viz taps
@@ -303,6 +517,72 @@ sandboxes, against ONE `.git`. That is normal here, and it has its own rules.
   track the server OBJECT, not a boolean (the LFO, threshold and relay-audio
   managers do; any future manager that sends synthdefs or registers OSC
   callbacks must too).
+- **SATELLITE VOICES ARE NOT `Instance`s** (item 10, on `main`). A poly
+  voice leases SLOTS from
+  its target's `VoicePool`: slot 0 is the target instance's own node, but
+  **slots ≥ 1 are satellites — real scsynth synths with no `Instance`, no
+  card and no state entry**, cloned from the target's settings onto the same
+  out bus. Every loop that walks `rack.instances` is therefore blind to
+  them, and that is the whole hazard: **anything that moves, pauses,
+  rewires, re-params or frees a target node must reach its pool too**, or
+  satellites are left behind as audible garbage nothing on screen can stop.
+  The paths that already do, and the failure each one prevents:
+  - `reorder_for_wires` → `pool.reposition()` — else a satellite writes its
+    bus AFTER the effect that reads it, and only the extra voices sound dry.
+  - `set_enabled` → `pool.set_paused()` — else bypass silences the card
+    while the satellites keep playing.
+  - `set_param`/`set_params` → `pool.mirror()` — else a knob moves one voice
+    of N. `PER_VOICE_PARAMS = ("freq", "gate")` are deliberately NOT
+    mirrored: mirroring those collapses every satellite onto slot 0's pitch
+    and gate.
+  - `audio_rewire` and the null-bus park → mirror `out` — else rewiring
+    moves the card and strands the satellites on the old bus.
+  - `remove_instance` and `teardown` → `pool.dispose()` — else the
+    satellites outlive the card and drone on, with no card left to stop them.
+
+  Satellites are DERIVED state: re-clone them whenever the target's node
+  identity changes (bypass, hot reload, rack rebuild) or the server object is
+  replaced — the same rule as the entry above. **When you add a path that
+  touches a target node, assume you owe the pool a call.**
+- **`node.free()` does NOT free a gated synth — pass `force=True`.**
+  supriya emits `/n_set gate 0` for any synth that HAS a gate (a release)
+  and `/n_free` only for one without. Playable sources all have a gate
+  (module rule 5), and that rule also mandates `done_action=0` so the node
+  SURVIVES release — voices are persistent nodes. The two compose into a
+  leak: an unforced free silences the instance and leaves it running
+  forever while the rack forgets it exists. Measured live: removing a gated
+  instance took the node count 10→11→12→13, a gateless reverb 14→13. Cost
+  of forcing: removing a module mid-note cuts its release tail (see
+  `_free_node_note` in `rack.py`).
+- **A NODE MOCK MUST MIRROR `free(force=...)` EXACTLY** — this is how the
+  leak above stayed invisible, and it will catch the next person. The old
+  `FakeNode.free()` took no `force` and set `freed = True`
+  UNCONDITIONALLY, so the tests cheerfully reported "freed" for satellites
+  that were still running on scsynth. Two failures had to line up, and
+  both are easy to reproduce: a mock whose signature is kinder than the
+  real API can never fail the way production does, and production's
+  `except Exception: pass` around node teardown would have swallowed a
+  signature mismatch too — so neither side could report it. **A mock is a
+  claim about the real API; if it is wrong, every test built on it is
+  testing the mock.** When you mock a supriya call, copy the real
+  signature and its DEFAULT (`force=False`), and record what was asked for
+  (`free_calls`) rather than only that it was asked.
+- **A ctl node id must never collide with a MODULE type** (item 29). The
+  drone allocation's ids are `hold`,
+  `hold.2`, … and NOT `drone`, for one reason: `drone` is already a module
+  type, and a ctl node sharing an id with a rack instance **shadows that
+  instance in `_ctl_sinks`** — the note router would resolve the wrong
+  thing. The card is still titled "Drone Voice"; the id is plumbing, the
+  name is the product. Any future ctl node needs the same check against the
+  module registry before its id type is chosen.
+- **A drone card's POWER must never call `set_enabled`** (item 29). POWER holds the TARGET's envelope open (`set_gate_open`), because
+  bypassing the target node would **silence any poly voice sharing that same
+  source** — allocations lease slots from one pool, so bypass is not a
+  private off switch. Two related traps on that path: the effective gate is
+  `power AND transport.running` (item 32's invariant in allocation terms),
+  and on a GATELESS target there is nothing to open, so it is SKIPPED rather
+  than faked — writing a `gate` the synthdef doesn't have puts a phantom
+  param into `inst.settings` and into the broadcast state.
 - A relay circuit's stored wires are the truth on EVERY plane. Item 25 made
   the audio plane match the mod plane: a claimed audio circuit is a permanent
   lagged-gate synth, `state.wires` broadcasts the STORED graph (endpoints

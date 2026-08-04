@@ -183,6 +183,12 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .mini .chip:hover { background: #3a3a38; }
   .mini .chip.static { cursor: default; }
+  /* item 11: the dual's mode readout. GEN is the resting state (plain chip);
+     FX means audio is wired in and the card is processing it — lit, in the
+     audio-wire colour, so the change is impossible to miss when it flips. */
+  .mini .chip.modeind { text-align: center; font-weight: 600;
+    letter-spacing: 0.5px; }
+  .mini .chip.modeind.fx { background: var(--audio); color: #fff; }
   .viz-sec { padding: 3px 10px 8px 14px; }
   canvas.vz { width: 100%; display: block; background: var(--plane);
     border: 1px solid var(--hairline); border-radius: 6px; }
@@ -369,6 +375,13 @@
     box-shadow: 0 0 9px color-mix(in srgb, var(--bin) 75%, transparent); }
   .metrostrip i.pulse { animation: metropulse .18s ease; }
   @keyframes metropulse { 30% { transform: scale(1.45); } }
+  /* a TRIG-in fired (deck buttons, transport:tap, deriver commits): the
+     momentary press indication, stretched to PULSE_MS by flashEl(). In the
+     binary colour because that is what drove it — a logic wire. Works on a
+     .mini row and on a deck button alike, so one rule covers every anchor. */
+  .tapflash { background: color-mix(in srgb, var(--bin) 26%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bin) 70%, transparent);
+    border-radius: 3px; }
   .pingpad:hover { filter: brightness(1.25); }
   .pingpad.pulse { animation: pingpulse .22s ease; }
   @keyframes pingpulse { 30% { text-shadow: 0 0 9px var(--bin); transform: scale(1.35); } }
@@ -474,6 +487,10 @@
   #helppop kbd { font: 600 9.5px ui-monospace, SFMono-Regular, Menlo, monospace;
     background: var(--hairline); color: var(--ink-1); border-radius: 3px;
     padding: 1px 4px; white-space: nowrap; }
+  #helppop .manlink { display: block; margin-top: 10px; padding-top: 8px;
+    border-top: 1px solid var(--hairline); color: var(--ink-1);
+    text-decoration: none; font-size: 10.5px; letter-spacing: 0.02em; }
+  #helppop .manlink:hover { color: var(--audio); }
   #helppop .none { color: var(--ink-2); opacity: 0.7; font-style: italic; }
   #toast { position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
     z-index: 60; font-size: 11px; color: var(--ink-1); background: #2c2c2a;
@@ -3968,7 +3985,11 @@ function renderHelpPop() {
       ? `<dl>` + binds.map(([k, v, bound]) =>
           `<dt><kbd>${esc(bound ? k : "unpaired")}</kbd></dt>` +
           `<dd${bound ? "" : ' class="none"'}>${esc(v)}</dd>`).join("") + `</dl>`
-      : `<div class="none">no trigger cards on the canvas</div>`);
+      : `<div class="none">no trigger cards on the canvas</div>`) +
+    // The manual is served by this process at /manual. NEW TAB on purpose:
+    // navigating away drops the websocket and the rig's whole client state.
+    `<a class="manlink" href="/manual" target="_blank" rel="noopener">` +
+    `User manual &nbsp;\u2197</a>`;
 }
 function toggleHelpPop(show) {
   const pop = $("helppop"), btn = $("helpbtn");
@@ -4115,6 +4136,40 @@ function binSrcIds() {
 // sig "any": their IN accepts any of audio/notes/bin drags; their OUT has
 // no kind yet and refuses (the kind comes from the first wire INTO it).
 const RELAY_MAX = 9;
+// MODULE KINDS — mirrors synthbase/module.py. Item 11's "dual" is BOTH: it
+// generates, and it processes whatever is wired into it. Everything that used
+// to ask kind === "source" / "effect" asks one of these instead, so a dual is
+// never accidentally excluded from both branches of an if/else.
+const genKind = (m) => !!m && (m.kind === "source" || m.kind === "dual");
+const fxKind = (m) => !!m && (m.kind === "effect" || m.kind === "dual");
+
+// A dual is in FX mode exactly when an audio wire lands ON it — the same
+// derivation the backend makes (App._sync_dual_modes), so the seed the card
+// renders with and the live tap that follows can never disagree.
+function isFxWired(key) {
+  return ((state && state.wires) || []).some(w => w.to === key);
+}
+// the dual's mode readout. NOT clickable: the wire decides, so a click here
+// would be a lie. It still has to react instantly — see the "mode" branch of
+// the {"kind":"level"} handler.
+function rowMode(gid, fx) {
+  const row = document.createElement("div");
+  row.className = "mini";
+  row.innerHTML = `<label title="mode">mode</label>
+    <span class="chip static modeind"></span>`;
+  const chip = row.querySelector(".chip");
+  const sync = (isFx) => {
+    chip.textContent = isFx ? "FX" : "GEN";
+    chip.classList.toggle("fx", !!isFx);
+    chip.title = isFx ? "audio wired in — shaping it"
+                      : "nothing wired in — generating";
+  };
+  sync(fx);
+  chip.addEventListener("pointerdown", (e) => e.stopPropagation());
+  uiParam[gid + ".mode"] = (u, isFx) => sync(isFx);
+  return row;
+}
+
 const RELAY_SIG = {audio: "audio", notes: "ctl", binary: "bin", mod: "mod"};
 function relayIds() {
   return new Set(((state && state.relays) || []).map(r => r.id));
@@ -4215,7 +4270,9 @@ function connectAction(out, inn) {
     if (pi.relayCirc) to = pi.ep;   // circuit IN: stored verbatim server-side
     else {
       to = inn.node.gid === "master" ? "master" : inn.node.chainKey;
-      if (inn.node.mod && inn.node.mod.kind !== "effect") return null; // sources take no audio in
+      // plain sources take no audio in; a DUAL does (item 11 — the wire
+      // landing on its in_bus is exactly what puts it in FX mode)
+      if (inn.node.mod && !fxKind(inn.node.mod)) return null;
     }
     if (!from || !to || to === "drums") return null;
     if (from === "drums")   // drums route via set_drums (keys only, no relays)
@@ -4292,7 +4349,7 @@ function connectAction(out, inn) {
     return () => send({type: "ctl_wire", action: "add", from, to});
   }
   // ---- ctl ----
-  if (voiceIds().has(out.node.gid) && inn.node.mod && inn.node.mod.kind === "source" &&
+  if (voiceIds().has(out.node.gid) && inn.node.mod && genKind(inn.node.mod) &&
       inn.node.mod.params && "freq" in inn.node.mod.params && "gate" in inn.node.mod.params)
     return () => send({type: "set_voice_target", key: inn.node.chainKey,
                        voice: out.node.gid});
@@ -4350,7 +4407,7 @@ function spliceNewIntoWire(w, key, kind, wx, wy) {
   if (uiMode === "flex")
     fposMem["m:" + id] = [clampFx(flexSnap(wx - FLEX_W / 2)), clampFy(flexSnap(wy - 12))];
   send({type: "spawn_module", key});
-  if (kind === "effect" && fromKey) {
+  if ((kind === "effect" || kind === "dual") && fromKey) {
     if (fromKey === "drums") send({type: "set_drums", target: id});
     else send({type: "graph_wire", action: "add", from: fromKey, to: id});
   }
@@ -4372,7 +4429,7 @@ function spliceExistingIntoWire(w, node) {
   const wiresNow = (state && state.wires || []).map(v => ({...v}));
   const oldOut = wiresNow.find(v => v.from === myKey);
   send({type: "graph_wire", action: "add", from: myKey, to: toKey});
-  if (node.mod && node.mod.kind === "effect" && fromKey) {
+  if (fxKind(node.mod) && fromKey) {
     if (fromKey === "drums") send({type: "set_drums", target: myKey});
     else send({type: "graph_wire", action: "add", from: fromKey, to: myKey});
     if (oldOut) {  // heal the gap the card left behind
@@ -4420,7 +4477,7 @@ function labelSpliceAction(w, n) {
   if (!n || n === w.from.node || n === w.to.node) return null;
   if (w.sig === "audio") {
     if (n.montype === "wave") return () => spliceWaveIntoAudio(w, n);
-    if (n.chainKey && n.mod && n.mod.kind === "effect" && !n.mod.service)
+    if (n.chainKey && fxKind(n.mod) && !n.mod.service)
       return () => spliceExistingIntoWire(w, n);
     return null;
   }
@@ -4539,6 +4596,11 @@ function buildChainCard(mod) {
   // NEVER use the raw instance id as a type (v5 regression: broke scope/drone
   // card detection for suffixed instances)
   const mtype = mod.type || String(mod.key).split(".")[0];
+  // item 11: a DUAL card declares which mode it is in. The mode follows the
+  // WIRE, not a click, so this is never local UI state — it is seeded from
+  // state.wires and thereafter driven by the backend's "<key>:mode" level
+  // tap (REACTIVE-INDICATOR DOCTRINE).
+  if (mod.kind === "dual") rows.unshift(rowMode(gid, isFxWired(mod.key)));
   if (mtype === "audio_in")
     rows.push(rowDevSelect("input", ((state.devices || {}).inputs) || [],
       state.current_input,
@@ -4550,8 +4612,13 @@ function buildChainCard(mod) {
   // retarget its freq through the glide path; note_offs hold the last root
   if (isDrone) ports.push(["in", "ctl", "play"]);
   else if (mod.service) ports.push(["in", "ctl", "listen"]);
-  else if (mod.kind === "source") ports.push(["in", "ctl", "play"]);
-  else ports.push(["in", "audio", "in"]);
+  else {
+    // item 11: this if/else was mutually exclusive, so a source got ONE
+    // ctl-in and no audio-in. A DUAL needs BOTH — the ctl-in plays it as a
+    // generator, the audio-in is the gesture that turns it into an effect.
+    if (genKind(mod)) ports.push(["in", "ctl", "play"]);
+    if (fxKind(mod)) ports.push(["in", "audio", "in"]);
+  }
   if (!mod.service) ports.push(["out", "audio", "out"]);
   // the scope tap module IS the oscilloscope: an ordinary effect with real
   // IO handles (spawn/splice/wire it like any other), plus a live trace of
@@ -4562,7 +4629,7 @@ function buildChainCard(mod) {
   // waveform preview + live scope), generalized from the psines. Audio In
   // is an input (nothing to compute), drone/service cards keep their own
   // semantics, scope_tap IS a scope already.
-  const isGen = mod.kind === "source" && !mod.service
+  const isGen = genKind(mod) && !mod.service
     && !["audio_in", "drone", "scope_tap"].includes(mtype);
   // Instrument (item 2): voice-family instances render as ONE card type with
   // a voice dropdown; swap_synth changes the module under the same id/wires
@@ -4584,7 +4651,7 @@ function buildChainCard(mod) {
     // name (or its voice dropdown), so the line only cost height
     sub: "",
     fam: mod.family,
-    seed: mod.kind === "source" && !mod.service,
+    seed: genKind(mod) && !mod.service,
     vizHTML: isScope ? `<canvas class="vz" data-viz="scope" height="44"></canvas>`
       : isGen ? `<canvas class="vz" data-viz="gen" height="44"></canvas>` : null,
     headCheck: {
@@ -4709,12 +4776,19 @@ function buildArpCard() {
 // one card per mono voice (state.voices). The target chip cycles through
 // the playable sources; the target wire re-drags via set_voice_target.
 function playableSources() {
-  return (state.chain || []).filter(c => c.kind === "source" &&
+  return (state.chain || []).filter(c => genKind(c) &&
     c.params && c.params.freq && c.params.gate).map(c => c.key);
 }
+// 1..MAX_POLY_VOICES, mirroring synthbase/allocation.py's cap
+const POLY_SIZES = Array.from({length: 16}, (_, i) => i + 1);
 function buildVoiceCard(v) {
   const gid = v.id;
   const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
+  // item 10: ONE card, two allocation POLICIES. The policy is read off the
+  // server's state.voices[] entry, never guessed from the id — item 29's
+  // "hold" policy then needs a label here and nothing else. Ports are
+  // identical either way: notes in, drive out.
+  const poly = v.policy === "poly";
   const rows = [
     rowChip({gid}, "bend", {text: "±2 st", static: true}),
     rowChip({gid}, "target", {
@@ -4728,11 +4802,96 @@ function buildVoiceCard(v) {
       },
     }),
   ];
-  return addCard({gid, name: "Mono Voice" + suffix, short: "Voice" + suffix,
+  if (poly)
+    // how many notes it holds at once; the engine steals the OLDEST when
+    // full, so shrinking this closes whatever was sounding on the slots
+    // that go away
+    rows.push(rowStepSlider({gid}, "voices", {
+      values: POLY_SIZES,
+      index: Math.max(0, Math.min(POLY_SIZES.length - 1, (v.slots | 0) - 1)),
+      text: (n) => n + (n === 1 ? " note" : " notes"),
+      onPick: (n) => send({type: "set_poly_voices", id: gid, voices: n}),
+    }));
+  // DELIBERATELY NO "voices sounding" indicator. One would need a tap from
+  // Poly, and nothing yet proves that tap fires — shipping an indicator on
+  // an unverified tap is the exact failure the reactive-taps work spent the
+  // day closing. When it is wanted it rides a
+  // {"kind":"level","ep":"<poly id>:active"} tap, added with its test.
+  return addCard({gid,
+                  name: (poly ? "Poly Voice" : "Mono Voice") + suffix,
+                  short: (poly ? "Poly" : "Voice") + suffix,
                   sub: "", fam: "ctl", rows,
+                  // the default mono "voice" is permanent; every spawned
+                  // allocation, mono or poly, removes with remove_voice
                   kill: gid === "voice" ? null
                     : () => send({type: "remove_voice", id: gid}),
                   ports: [["in", "ctl", "notes"], ["out", "ctl", "drive"]]});
+}
+
+// item 29: the DRONE voice — allocation policy "hold". It HOLDS the last
+// root instead of releasing it, so it has no gate of its own, and POWER is
+// its only off switch (inherited from the drone module's "bypass is the only
+// off switch", as LEVEL semantics).
+function buildDroneVoiceCard(v) {
+  // ids are "hold", "hold.2", … — the type is `hold`, NOT `drone`, because
+  // `drone` is a MODULE type and a ctl node sharing an id with a rack
+  // instance would shadow it in the note router. The id is plumbing; the
+  // card's name is the product.
+  const gid = v.id;
+  const suffix = gid.includes(".") ? " " + gid.split(".")[1] : "";
+  const rows = [
+    rowChip({gid}, "target", {
+      text: v.target || "—",
+      onClick: (chip) => {
+        const srcs = playableSources();
+        if (!srcs.length) return;
+        const key = srcs[(srcs.indexOf(chip.textContent) + 1) % srcs.length];
+        chip.textContent = key;
+        send({type: "set_voice_target", key, voice: gid});
+      },
+    }),
+  ];
+  // Deliberately absent: a bend readout (a drone is the reference you bend
+  // AGAINST, so Mono Voice's ±2 st chip would be a lie here), a voices row
+  // (slots is always 1), a root readout (the held root is not broadcast) and
+  // a subtitle (nothing here is live state duplicated nowhere). Body is
+  // params only, so sizing stays MEASURED — no defaultSize/ownFaces.
+  const n = addCard({
+    gid, name: "Drone Voice" + suffix, short: "Drone" + suffix,
+    sub: "", fam: "ctl", rows,
+    // POWER is the card's COLOUR BAR — the same chrome as a chain card's
+    // power (outline off / filled on, bindNode splitting a stationary press
+    // from a drag). This is the first ctl card with a real power axis.
+    // addCard registers uiParam[gid + ".pwr"] off this headCheck, which IS
+    // the whole reactive wiring: the backend already emits
+    // {"kind":"level","ep":"<id>:pwr"} from a click AND from a binary wire.
+    headCheck: {
+      checked: !!v.power,
+      onChange: (on) => {
+        v.power = on;          // local truth (the broadcast excludes us)
+        send({type: "set_drone_power", id: gid, on});
+      },
+    },
+    kill: () => send({type: "remove_voice", id: gid}),
+    // TONE in at the bare gid + drive out, as Mono Voice
+    ports: [["in", "ctl", "notes"], ["out", "ctl", "drive"]],
+  });
+  // POWER in: a quiet BINARY level-in at "<gid>:pwr", exactly like a chain
+  // card's — fan-in (no `single`), anchored to the head so the wire lands on
+  // the stripe it drives.
+  n.ports.push({dir: "in", sig: "bin", label: "power", quiet: true,
+                rowEl: n.el.querySelector(".head"), ep: gid + ":pwr"});
+  return n;
+}
+
+// item 29: state.voices is no longer mono-only, so the card is chosen by
+// POLICY. An unknown policy falls back to the mono card rather than blanking
+// the canvas, so an older or newer server can never leave a hole. mono-latest
+// and poly share buildVoiceCard (it already titles and rows itself off the
+// policy); "hold" is different enough — no bend, a power axis — to be its own.
+const VOICE_CARD = {hold: buildDroneVoiceCard};
+function buildAllocationCard(v) {
+  return (VOICE_CARD[v && v.policy] || buildVoiceCard)(v);
 }
 
 // one ESTIMATOR card per state.tonics entry: two-layer scale-aware root
@@ -5545,6 +5704,63 @@ function pulseBin(id) {
   binFlash.set(id, performance.now() + PULSE_MS);
   schedulePulseDecay();
 }
+// The same stretcher, for a DOM element rather than a wire-canvas LED.
+// A trig-in tap has ZERO duration: the engine emits on:true and on:false
+// back-to-back from one settle pass, so both land in the same tick. Setting
+// and clearing inside one frame renders nothing at all — implemented-looking
+// and dead on arrival.
+//
+// This has its OWN duration rather than sharing PULSE_MS (140ms), which is
+// a reversal of how it first shipped. Two reasons, and the second is the
+// one that forced it. PULSE_MS exists to make a sub-frame level change
+// visible on a REDRAWN CANVAS; a press acknowledgement on a DOM control is
+// a different job, and 140ms is short for one. And a replayed pulse pair is
+// not zero-duration: tests/check_replay.py settles 80ms after EACH half, so
+// its reading lands ~160ms after the rising edge and a 140ms flash has
+// already decayed — the flash was real and the harness correctly called it
+// dead. Keep this comfortably above that probe window.
+const TAP_FLASH_MS = 260;
+const elFlash = new Map();   // element -> pending clear timer
+function flashEl(el) {
+  if (!el) return;
+  el.classList.add("tapflash");
+  clearTimeout(elFlash.get(el));
+  elFlash.set(el, setTimeout(() => {
+    el.classList.remove("tapflash");
+    elFlash.delete(el);
+  }, TAP_FLASH_MS));
+}
+// WHICH element a pulse lights. Note this answers only "where", never
+// "is it momentary" — that is the event's `pulse` flag. Everything here is
+// a generic lookup for the same reason: a hardcoded set of flashing
+// endpoints goes stale the first time a trig-in is added, which is exactly
+// the rot that left three of four indicators tapless.
+const DECK_BTN = {rec: "record", stop: "stop", play: "play", clear: "clear"};
+function pulseTarget(base, sub) {
+  if (base === "deck" && DECK_BTN[sub]) {
+    // TRAP: the endpoint names do NOT match the DOM ("rec" vs
+    // data-a="record"), and all four deck ports share ONE rowEl (the whole
+    // button container), so the generic port lookup below cannot tell the
+    // buttons apart. This one has to be a querySelector.
+    const n = nodes.get("deck");
+    return n && n.el.querySelector(
+      `.deckbtns button[data-a="${DECK_BTN[sub]}"]`);
+  }
+  // Everything else: the port that OWNS the endpoint knows its own anchor.
+  // This is why "transport:tap" needs no special case even though its card
+  // gid is "ttempo" — the port carries the ep, so the card id never matters.
+  const ep = sub ? `${base}:${sub}` : base;
+  for (const n of nodes.values()) {
+    const p = (n.ports || []).find(q => q.ep === ep && q.rowEl);
+    if (p) return p.rowEl;
+  }
+  // Deriver commits arrive as a BARE id ("tonic.2") and their trigger-in
+  // carries no ep at all — it is the card's only binary in.
+  const dn = nodes.get(base);
+  const dp = dn && (dn.ports || []).find(
+    q => q.sig === "bin" && q.dir === "in" && q.rowEl);
+  return dp ? dp.rowEl : null;
+}
 function schedulePulseDecay() {
   if (pulseTimer) return;
   pulseTimer = setTimeout(() => {
@@ -6065,7 +6281,7 @@ function rebuildGraph() {
   const deck = buildDeckCard();
   const voiceList = (state.voices && state.voices.length)
     ? state.voices : [{id: "voice", target: state.voice_target}];
-  const voiceNodes = voiceList.map(buildVoiceCard);
+  const voiceNodes = voiceList.map(buildAllocationCard);
   const tonicNodes = [...(state.tonics || []).map(buildTonicCard),
                       ...(state.literals || []).map(buildLiteralCard)];
   const ksNodes = (state.keyshifts || []).map(buildKeyshiftCard);
@@ -6179,7 +6395,7 @@ function rebuildGraph() {
   // this wire is not cuttable)
   for (let i = 0; i < voiceNodes.length; i++) {
     const target = nodes.get("m:" + voiceList[i].target) ||
-                   chainNodes.find(n => n.mod && n.mod.kind === "source") || null;
+                   chainNodes.find(n => genKind(n.mod)) || null;
     W(voiceNodes[i], "ctl", target, "ctl");
   }
   // audio: SERVER TRUTH — state.wires is the STORED graph (item 25), so
@@ -6351,6 +6567,11 @@ function renderPalette() {
   };
   h3("allocation");
   btn("Mono Voice", FAMILY.ctl, () => send({type: "spawn_voice"}));
+  // item 10: same family, different policy — N notes at once on ONE target
+  // source. 8 is the engine's own default; the card's step slider retunes it.
+  btn("Poly Voice", FAMILY.ctl, () => send({type: "spawn_poly", voices: 8}));
+  // item 29: the "hold" policy — holds the last root, POWER is its off switch
+  btn("Drone Voice", FAMILY.ctl, () => send({type: "spawn_drone_voice"}));
   h3("control");
   btn("LFO ∿", FAMILY.service, () => send({type: "spawn_lfo"}));
   btn("Key Shifter", FAMILY.ctl, () => send({type: "spawn_keyshift"}));
@@ -6385,16 +6606,21 @@ function renderPalette() {
   put("pulse_pad");
   put("audio_in");
   h4("psines");
-  ["power_sine_shaper", "power_sine_additive", "power_sine_blend"].forEach(k => put(k));
+  // power_shaper is the DUAL (item 11): it lives with the generators it
+  // shares its law with, because it generates until you wire audio into it
+  ["power_sine_shaper", "power_sine_additive", "power_sine_blend",
+   "power_shaper"].forEach(k => put(k));
   h4("drone");
   put("drone");
   // any source this layout doesn't know about still gets a slot — new
   // module files must never silently vanish from the palette
-  const extraSrc = avail.filter(x => x.kind === "source" && !used.has(x.key));
+  const extraSrc = avail.filter(x => genKind(x) && !used.has(x.key));
   if (extraSrc.length) { h4("other"); extraSrc.forEach(a => { modBtn(a); used.add(a.key); }); }
   h3("fx");
   const FX_SUBS = [["filters", "filter"], ["time & space", "time"],
-                   ["dirt", "dirt"], ["psines", "psine"],   // item 11: Power Shaper
+                   ["dirt", "dirt"], ["psines", "psine"],   // empty today:
+                   // item 11 moved Power Shaper to the DUAL kind, so it
+                   // lists under voices > psines. Kept for a future psine FX.
                    ["dynamics", "dyn"], ["pitch", "vox"]];
   for (const [label, fam] of FX_SUBS) {
     const members = avail.filter(x => x.kind === "effect" && x.family === fam
@@ -6403,7 +6629,7 @@ function renderPalette() {
     h4(label);
     members.forEach(a => { modBtn(a); used.add(a.key); });
   }
-  const extraFx = avail.filter(x => x.kind === "effect" && !used.has(x.key));
+  const extraFx = avail.filter(x => fxKind(x) && !used.has(x.key));
   if (extraFx.length) { h4("other"); extraFx.forEach(a => { modBtn(a); used.add(a.key); }); }
   h3("monitors");
   const scopeAv = avail.find(x => x.key === "scope_tap");
@@ -6541,7 +6767,7 @@ function onState() {
   if (sliderDrag !== "bpm") $("bpm").value = t.bpm ?? 100;
   $("bpm-v").textContent = Math.round(t.bpm ?? 100) + " bpm";
   $("meter").value = String(t.beats_per_bar ?? 4);
-  $("click-on").checked = !!t.click;
+  syncTopBarClick(t.click);
   syncTopBarPlay(t.running !== false);
   if (sliderDrag !== "vol") $("vol").value = state.volume;
   $("midi-ind").textContent = "midi: " +
@@ -6550,10 +6776,55 @@ function onState() {
   rebuildGraph();
 }
 
+// {"kind":"transport"} — the transport's settings changed OUTSIDE the
+// broadcast path. The case that mattered: a logic wire into "transport:tap"
+// moves the BPM, and nothing told any client — the rig audibly ran at 232
+// while every number on screen still said 100. Mirrors the deck's
+// {"kind":"looper"} idiom: merge into the local model, then refresh the same
+// surfaces onState would have.
+function onTransportEvent(e) {
+  if (!state) return;
+  const {kind, ...rest} = e;
+  const before = state.transport || {};
+  const t = state.transport = {...before, ...rest};
+  const bpm = t.bpm ?? 100;
+  // never fight the user's own drag — the same guard onState uses
+  if (sliderDrag !== "bpm") $("bpm").value = bpm;
+  $("bpm-v").textContent = Math.round(bpm) + " bpm";
+  $("meter").value = String(t.beats_per_bar ?? 4);
+  syncTopBarClick(t.click);
+  syncTopBarPlay(t.running !== false);
+  // the Tempo/Click card's own slider + the click/accent LEDs
+  const setT = uiParam["ttempo.tempo"];
+  if (setT && sliderDrag !== "ttempo.tempo")
+    setT((Math.min(220, Math.max(40, bpm)) - 40) / 180,
+         Math.round(bpm) + " bpm");
+  for (const p of ["click", "accent"]) {
+    const s = uiParam[`transport.${p}`];
+    if (s) s(0, !!t[p]);
+  }
+  const sr = uiParam["transport.run"];
+  if (sr) sr(0, t.running !== false);
+  // A meter or downbeat change re-derives the card's step-slider detents AND
+  // the metronome strip, which are built at card-build time — that needs the
+  // rebuild onState would have done. A bpm-only change (tap tempo, the whole
+  // point of this event) must NOT rebuild: taps arrive in fast bursts.
+  if ((t.beats_per_bar ?? 4) !== (before.beats_per_bar ?? 4) ||
+      (t.downbeat | 0) !== (before.downbeat | 0))
+    rebuildGraph();
+}
+
 // top bar ↔ Play/Stop card are two views of ONE global state — both must
 // follow LOGIC input, not just clicks (REACTIVE-INDICATOR DOCTRINE)
 function syncTopBarPlay(running) {
   $("play-btn").textContent = running ? "⏹" : "▶";
+}
+// …and so are the top bar's click checkbox and the transport card's click
+// LED. This one is not merely cosmetic: sendTransport() READS
+// $("click-on").checked, so a checkbox left stale by a logic-driven click
+// change pushes the wrong value back to the server on the next BPM nudge.
+function syncTopBarClick(on) {
+  $("click-on").checked = !!on;
 }
 
 // ---------- live message handlers ----------
@@ -6657,6 +6928,8 @@ function onMidi(e) {
       state.looper = {...state.looper, ...rest};
       updateDeckCard(nodes.get("deck"));
     }
+  } else if (e.kind === "transport") {
+    onTransportEvent(e);
   } else if (e.kind === "keyshift") {
     // a shifter's active key moved (progression step landed) — update chip
     const k = (state && state.keyshifts || []).find(x => x.id === e.id);
@@ -6711,7 +6984,17 @@ function onMidi(e) {
     const [base, , sub] = [String(e.ep).split(":")[0], null,
                            String(e.ep).split(":")[1] || ""];
     const on = !!e.on;
-    if (sub === "pwr") {
+    // MOMENTARY vs STEADY is carried by the event, NOT inferred from the
+    // endpoint name. The engine knows the split (GateManager._is_trig_dst)
+    // and puts it on the wire as `pulse`; a receiver that kept its own list
+    // of "these flash" would go stale the first time a trig-in is added.
+    // `pulse` is ABSENT on steady taps, so this whole branch is additive.
+    if (e.pulse) {
+      // The trailing on:false is deliberately IGNORED. It exists so the
+      // stream stays honest for anything replaying paired edges; acting on
+      // it here would clear the flash in the same tick that set it.
+      if (on) flashEl(pulseTarget(base, sub));
+    } else if (sub === "pwr") {
       // keep the local state model in step so the next rebuild agrees
       if (base === "arp" && state && state.arp) state.arp.enabled = on;
       else if (base === "drums" && state && state.drums) state.drums.enabled = on;
@@ -6719,8 +7002,18 @@ function onMidi(e) {
         const mod = (state && state.chain || []).find(c => c.key === base);
         if (mod) mod.enabled = on;
       }
+      // item 29: a drone voice's POWER lives in state.voices[], not the
+      // chain — without this the next rebuild reverts the stripe
+      const dv = (state && state.voices || []).find(x => x.id === base);
+      if (dv) dv.power = on;
       // cards key on the GID: chain modules are "m:<key>", players are bare
       const setter = uiParam[`m:${base}.pwr`] || uiParam[`${base}.pwr`];
+      if (setter) setter(0, on);
+    } else if (sub === "mode") {
+      // item 11: a wire landed on (or left) a dual, so it just changed
+      // between generating and processing. Nothing else announces this —
+      // a wire edit only re-points the SOURCE's out bus.
+      const setter = uiParam[`m:${base}.mode`];
       if (setter) setter(0, on);
     } else if (base === "transport") {
       if (state && state.transport) {
@@ -6730,7 +7023,12 @@ function onMidi(e) {
       }
       const setter = uiParam[`transport.${sub}`];
       if (setter) setter(0, on);
-      if (sub === "run") syncTopBarPlay(on);   // card AND top bar are one state
+      // card AND top bar are one state — but only run and click HAVE a
+      // top-bar element. accent is the third level-in and deliberately has
+      // none (Cole, 07-26), so it updates its card LED above and stops
+      // there. Don't "complete the pattern" — see REFERENCE.md §8.1.
+      if (sub === "run") syncTopBarPlay(on);
+      else if (sub === "click") syncTopBarClick(on);
     }
   } else if (e.kind === "ping_bound") {
     // server-side MIDI capture landed: update the card's chip in place

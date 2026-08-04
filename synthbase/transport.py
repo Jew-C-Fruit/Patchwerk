@@ -58,7 +58,13 @@ class Transport:
         self.click_enabled = False
         self.click_accent = True   # high tick on the downbeat
         self.downbeat = 0          # 0-based beat-in-bar carrying the accent
-        self.running = True        # transport stop/play (position freezes)
+        # transport stop/play (position freezes). Item 32: a FRESH boot
+        # comes up STOPPED — the Play/Stop card and the top bar populate
+        # stopped and nothing transport-driven (drums, clocks, the arp
+        # grid, drones) sounds until play is actually triggered. A ⟳
+        # resume restores the pre-restart value (presets.apply_resume);
+        # named presets never carry a play state at all.
+        self.running = False
         self.on_beat: Callable[[int, int], None] | None = None  # (bar, beat_in_bar)
 
         self._epoch = time.monotonic()  # wall time of...

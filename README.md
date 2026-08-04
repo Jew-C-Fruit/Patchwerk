@@ -14,9 +14,11 @@ clones under that name, they're the same project.
 
 ## What it does today
 
-- **Flex GUI** — a subway-map patch canvas at `/`: spawn any module multiple
+- **Patch GUI** — a subway-map patch canvas at `/`: spawn any module multiple
   times ("lowpass.2"), drag wires between cards, splice by dropping a card
-  (or a wire's label) onto a wire, cut with a click. Legacy panel at `/legacy`.
+  (or a wire's label) onto a wire, cut with a click. One page, two geometry
+  modes — **blocks** (snapping grid) and **flex** (free positions) — swapped
+  from the top bar.
 - **Rewireable audio graph** — fan-in sums, disconnected outputs park
   silently, execution order stays legal after any rewire.
 - **Wire-defined control plane** — keys, arpeggiator, MIDI loop deck, mono
@@ -81,7 +83,7 @@ Notes for Windows users:
 ```bash
 python -m synthbase test                   # boots engine, plays 2s sine
 python -m synthbase devices                # lists MIDI inputs
-./run.sh                                   # flex GUI at http://127.0.0.1:8765
+./run.sh                                   # patch GUI at http://127.0.0.1:8765
 python -m synthbase gui pad_space          # same, choosing a patch
 python -m synthbase play patches/demo.py   # headless: saw -> filter -> echo
 ```
@@ -96,7 +98,8 @@ old version playing.
 | --- | --- |
 | `modules/` | DSP modules — one small Python file each. **The vibecoding surface.** |
 | `patches/` | Plain-data chain + MIDI binding definitions |
-| `gui/flex.html` | The patch-canvas GUI (front door); `gui/index.html` = legacy panel |
+| `gui/blocks.html` | The patch-canvas GUI — the only page served, at `/` and `/blocks` |
+| `gui/legacy/` | Archived earlier GUIs (`flex.html`, `index.html`) — unserved, unmaintained |
 | `synthbase/module.py` | Module contract (`@module` + `@synthdef`) and loader |
 | `synthbase/engine.py` | Boots/quits scsynth, registers synthdefs |
 | `synthbase/rack.py` | Instance ids, bus wiring, live rewiring, param control |

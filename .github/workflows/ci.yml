@@ -47,6 +47,98 @@ jobs:
       - name: Transport card tests
         run: python tests/test_transport.py
 
+      # The device-start STALL needs a Mac, but the fallback logic around it
+      # does not — and that logic is what decides whether the engine boots at
+      # all. tests/audio_proof.py is the Mac-only other half.
+      - name: Audio session / device fallback tests
+        run: python tests/test_audio_session.py
+
+      # pure Python (no server, no numpy) — it guards the power-sine
+      # coefficient law against a silent refactor. It existed and passed
+      # for its whole life without any job running it.
+      - name: Power-sine coefficient law
+        run: python tests/test_power_sine.py
+
+      # the REACTIVE-INDICATOR net: every binary endpoint the gate settle
+      # pass drives must emit its own tap. Without this, all four
+      # _emit_level calls could be deleted and every suite above stayed
+      # green — the GUI checks never import synthbase. This is Phase 0 of
+      # continuity/ai-control-build-plan.md, which names the file
+      # tests/test_events.py; it landed here first, as test_reactive.py.
+      - name: Reactive-indicator tests
+        run: python tests/test_reactive.py
+
+      # items 10 and 29 — the allocation framework (mono/poly/hold policies,
+      # slot leasing, stealing) and the drone-as-Hold card. Added by the BATCH
+      # MERGE, not by either originating branch: both were written against a
+      # base where nothing required a CI entry, and the rule requiring one
+      # arrives in THIS commit. Neither branch was wrong alone. Note
+      # test_allocation.py pins all three leak fixes, so it must be referenced
+      # rather than dropped.
+      - name: Allocation framework tests
+        run: python tests/test_allocation.py
+
+      - name: Drone allocation tests
+        run: python tests/test_drone_alloc.py
+
+      # The join nothing asserted: a module that DECLARES itself playable
+      # (freq + gate in its synthdef) must be REACHABLE by a voice. Item 11's
+      # Power Shaper shipped through every gate as a module that could not
+      # make a sound — correct DSP, but four `kind == "source"` predicates
+      # meant no voice would ever aim at a `dual`. Derived from the registry
+      # and from KINDS, so a new module or a new kind is covered the day it
+      # lands rather than the day someone remembers to add it here.
+      - name: Playable-module reachability
+        run: python tests/test_playable.py
+
+      # The agent's EAR, calibrated. tests/analysis.py is what turns a
+      # capture into numbers, so everything measured about the rig inherits
+      # its accuracy: each check feeds it a signal whose features are known
+      # from arithmetic (a sine of a stated amplitude, a square with 1/n odd
+      # harmonics, an exponential decay with a stated time constant) and
+      # asserts the number comes back. An extractor 8% off — the classic
+      # un-windowed Goertzel scallop, or a sample-rate conversion nobody
+      # applied — would still emit confident JSON, and every rig measurement
+      # built on it would be wrong in the same direction. Pure stdlib, no
+      # numpy, no server, no audio device.
+      - name: Audio feature extractor + WAV round-trip
+        run: python tests/test_analysis.py
+
+      # The capture tap and the file injector, bookkeeping only — a fake
+      # server stands in, so no scsynth and no device. It pins the two
+      # things that fail SILENTLY: registration keyed on the server OBJECT
+      # (a boolean never re-sends after set_devices builds a new scsynth),
+      # and node frees passing force=True (an unforced free RELEASES a gated
+      # synth instead of freeing it — see rack.py:_free_node_note). The live
+      # half is tests/audio_io_proof.py, Mac-only.
+      - name: Capture tap + input injector tests
+        run: python tests/test_capture.py
+
+      # Item 37 Phase 1's headless half — the transcript round-trip, the
+      # normaliser Phase 2 diffs through, the stuck-note walker, the scenario
+      # grammar, and the check that rig.py's spawn/remove table still matches
+      # what server.py dispatches. CI-safe by construction: no rig, no
+      # scsynth, no MIDI, no net (the live half is probe_rig_ws.py, Mac-only).
+      - name: Rig driver + transcript tests
+        run: python tests/test_rig.py
+
+      # What the skeleton diff still REFUSES. The diff tolerates exactly one
+      # unordered pair (the looper's own thread vs the gate settle pass) and
+      # must keep failing on everything else — a reordered pulse pair, a
+      # missing or extra event, an event drifting across a mark. Synthetic
+      # skeletons only: milliseconds, no rig, no browser.
+      - name: Skeleton-diff partial-order tests
+        run: python tests/test_replay.py
+
+      # Item 37 Phase 2, EMISSION half. Re-records each scenario against this
+      # commit through tests/silent_rig.py — the real GuiServer over an
+      # engine-less SynthApp — and diffs the event stream against the
+      # committed transcripts. No scsynth, no audio device, ~1 s per
+      # scenario. This is the check that goes red when the backend stops
+      # emitting; the nine suites above stay green through that mutation.
+      - name: Transcript replay — backend emissions
+        run: python tests/check_replay.py --emission
+
   gui-checks:
     name: GUI checks (headless Playwright)
     runs-on: ubuntu-latest
@@ -89,3 +181,14 @@ jobs:
         env:
           PLAYWRIGHT_BROWSERS_PATH: /opt/pw-browsers
         run: python tests/check_real.py
+
+      # Item 37 Phase 2, DOM half. Replays the committed transcripts —
+      # RECORDINGS of what the server said, not messages a check invented —
+      # through check_blocks' websocket stub, and asserts the endpoint x
+      # surface matrix at both edges. Needs no synthbase: this job installs
+      # playwright only, and check_replay reports the emission plane as
+      # skipped rather than failing on the missing import.
+      - name: Transcript replay — GUI surfaces
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: /opt/pw-browsers
+        run: python tests/check_replay.py --dom

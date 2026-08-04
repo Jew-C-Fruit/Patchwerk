@@ -6,21 +6,81 @@
 > re-verify each section against the source it cites, update the stamp
 > below, and prune anything the code no longer does. Section numbering is
 > stable on purpose — the release-specific graphical user manual (a
-> separate, image-rich document) cross-references these section numbers,
-> so renumber only at a major restructure. When this doc and the code
-> disagree, the code wins and this doc has a bug: fix it here.
+> separate, image-rich document) is being written against these section
+> numbers, so renumber only at a major restructure. When this doc and the
+> code disagree, the code wins and this doc has a bug: fix it here.
 >
-> **Verified against:** `main` @ `71bd089` (v2.0 "Wavetable" pre-release
-> line), 2026-07-25. First written against `eb360ef` and re-verified
+> **The user manual is PUBLISHED.** 17 chapters and 107 figures, built by
+> `docs/manual/build.py` and served by the instrument itself at `/manual`.
+> Its cross-references into this file are **resolved** — there are no open
+> `XREF-TODO` anchors — and it cites the section numbers of the pinned
+> companion `docs/REFERENCE-v2.2-polyphony.md`, not of this living file.
+> A pointer here to "the manual" is something a reader can go and open.
+>
+> **Verified against:** the **v2.2 "Polyphony"** release commit on `main`,
+> 2026-08-04 — *this* commit, the one carrying this stamp, which is exactly
+> what the `v2.2-polyphony` tag points at. The stamp and the tag therefore
+> cannot disagree; that is the whole point of updating it here rather than
+> afterwards. **Re-cut once**, before publication, to take
+> `fix/p39-drone-check8` — and the stamp moved with it, which is the
+> property being demonstrated: a stamp that names its own commit has to be
+> re-stated on every re-cut, and cannot silently describe an earlier tree.
+> It CONTAINS item 11's dual-mode fix `34cab5e`
+> (`fix/p11-dual-playable`, merged), where §10.3.1's live numbers come from.
+> `power_shaper` is `kind="dual"` and WORKING; a brief revert to
+> `kind="effect"` was reversed by Cole ("run it properly") and never reached
+> `main`. The release narrative is a chapter in `HISTORY.md`, not a new
+> release file. First written against `eb360ef` and re-verified
 > forward through PRs #37–#44: Batch B blocks polish, P4 mod-handle
 > linkage, the item-20 top-margin REVERT (#40), tidy-into-frame (#41),
 > M-default graphical cards (#42), the relay tweaks (#43) that added 1:1
 > contacts and the `mod` circuit plane, and the wire fan-nesting rule
 > (#44). #40–#44 are GUI-only and change nothing this doc specifies
 > outside §13, which defers UI geometry to `docs/BLOCKS_SPEC.md`.
+>
+> **Unmerged work is marked, never stated as shipped.** This file describes
+> `main`. Where a finished-but-unmerged branch would change what a section
+> says, the pending behaviour is called out in a blockquote naming the
+> branch, so nobody builds against something that is not there yet. **A
+> marker left standing after its branch merges is worse than a doc that
+> lags** — it teaches the reader to distrust every other label — so clearing
+> them is part of landing, not tidying.
+>
+> **SHIPPED 2026-07-26 (seven packages, `main` @ `8d899c0`)** — markers
+> cleared: item 10's allocation framework and poly voices, item 29's drone
+> as a `Hold` policy, the reactive taps (`pulse` + the `transport` event),
+> the transcript-replay harness, the audio-session fix, the rig driver, and
+> packaging. Item 10's force-free BEHAVIOUR CHANGE to module removal (§3.2)
+> and item 29's to drone pitch (§4.3.2, §4.7) are now live on `main`.
+>
+> **SHIPPED 2026-07-27 (`main` @ `dd65224`)** — markers cleared: the
+> allocation CARDS are in `gui/blocks.html` (`buildVoiceCard`,
+> `buildDroneVoiceCard`, `buildAllocationCard`), so §13.1 is no longer
+> pending; and the transport click-sync fix is live (`syncTopBarClick`
+> runs off the `click` level-in), so §8.1 is correct as written.
+>
+> **Item 11's `dual` kind is LIVE and WORKING (2026-07-27).**
+> `power_shaper` is `kind="dual"` with both modes verified on the rig
+> (§10.3.1). A brief revert to `kind="effect"` was reversed by Cole and
+> never reached `main`. GEN mode HAD shipped silent — `app.py`'s four
+> voice-targeting predicates tested `kind == "source"` by strict equality,
+> so no voice could open the gate — and that is now ONE predicate,
+> `App._is_playable`, with `tests/test_playable.py` asserting that anything
+> declaring `freq` + `gate` is reachable from the note plane.
+>
+> **STILL OPEN:** `server.py`'s protocol docstring does not yet carry
+> `pulse` or the `transport` event (§11.2 does), though that behaviour
+> itself has shipped.
+>
+> Re-verified 2026-07-26 through PRs #45–#53 and the item-32 merge:
+> the T latch (#47) is now specified in §5.4; §8.1–8.2 carry item 32's
+> stopped boot and the drone-pause INVARIANT, and §12.3 the
+> resume-vs-preset play-state asymmetry; the test inventory in Appendix A
+> was corrected — `check_real.py` is a HEADLESS Playwright suite that runs
+> in CI, not a live-rig-only check.
 > **The relay-audio and effects sections were revised with P1** — item 25
 > (relay audio circuits became permanent lagged-gate synths; `state.wires`
-> now broadcasts the stored graph) and item 11 (the new `power_shaper`
+> now broadcasts the stored graph) and item 11 (the `power_shaper`
 > effect). Everything else still stands as verified.
 
 Sibling docs and their jobs (this doc does not duplicate them):
@@ -122,23 +182,71 @@ The same allocator names every spawnable control node: `voice`/`voice.2`,
 
 ### 2.2 Module kinds and families
 
-`kind` is the DSP contract: `"source"` (generates audio; no `in_bus`)
-or `"effect"` (processes audio; takes `in_bus`, reads
-`In.ar(in_bus, channel_count=2)`). Everyone takes `out`. Audio is
+`kind` is the DSP contract, validated in `module.py` against
+`KINDS = ("source", "effect", "dual")`: `"source"` (generates audio; no
+`in_bus`), `"effect"` (processes audio; takes `in_bus`, reads
+`In.ar(in_bus, channel_count=2)`), or `"dual"` (BOTH — it generates AND
+processes whatever is wired into it). Everyone takes `out`. Audio is
 **stereo everywhere** between stages.
+
+The engine never branches on the kind string; it branches on the two
+predicates in `module.py`, and a kind IS what they return:
+`generates(kind)` is true for source + dual, `takes_audio_in(kind)` for
+effect + dual (per-instance as `Module.generates` /
+`Module.takes_audio_in`). A dual therefore ALWAYS owns an `in_bus`, even
+while it is only generating — its synthdef reads one unconditionally, so
+`Rack.build` and `Rack.add_module` hand an unwired dual a PRIVATE stereo
+bus group (`Instance.in_bus_group`) and never the rack's null bus, which
+every disconnected output parks on and is therefore a junk sum rather
+than silence.
+
+A dual also changes what an incoming audio wire MEANS. `Rack._dst_bus` is
+the one deliberate semantic exception in the graph: a wire into a plain
+SOURCE sums into that source's own out bus (the "extra source mid-chain"
+behaviour that stops the "generators go dead" bug), while a wire into a
+DUAL lands on its `in_bus` — and that gesture is exactly what puts it in
+FX mode. `mode` is **not a param**, and appears in no `@module` param
+table: `App._sync_dual_modes` derives it from the STORED audio graph
+(`app.graph_wires`, falling back to `Rack.audio_wires`) and pushes it to
+the node, announcing it with a `{"kind": "level", "ep": "<id>:mode"}` tap
+per the reactive-indicator doctrine. `power_shaper` is the first and
+currently only dual (§10.3.1). **`CLAUDE.md` carries the authoring
+rules.**
 
 `family` is a GUI-grouping label from `FAMILIES` in `module.py`
 (fallback: the kind): `voice` (wobble_saw, pulse_pad, fm_bell, pluck,
 wind), `input` (audio_in), `service` (drone), `filter` (lowpass,
 telephone), `time` (echo, reverb, chorus, flanger, phaser, autopan),
 `dirt` (drive, bitcrush, wavefolder), `dyn` (compressor), `vox`
-(pitchshift, ringmod), `psine` (the power-sine trio). `scope_tap` is not
-in the table, so its family is its kind (`effect`).
+(pitchshift, ringmod), `psine` (FOUR members, not three: the three
+sources `power_sine_shaper`, `power_sine_additive` and
+`power_sine_blend`, plus the DUAL `power_shaper` — the same coefficient
+law applied to incoming audio, or to its own oscillator). `scope_tap` is
+not in the table, so its family is its kind (`effect`).
 
-A source is **note-playable** iff its synthdef exposes both `freq` and
-`gate` (`app._guess_voice_target`). Playable sources spawn with
-`gate=0` (silent) — the synthdef default of `gate=1` would leave idle
-voices droning after every rebuild.
+A module is **note-playable** iff it GENERATES and its synthdef exposes
+both `freq` and `gate`. That decision has exactly ONE authority —
+`App._is_playable` (`app.py:1587`):
+
+```python
+@staticmethod
+def _is_playable(inst) -> bool:
+    return (generates(inst.module.kind)
+            and "freq" in inst.settings and "gate" in inst.settings)
+```
+
+All four voice-targeting sites call it: `_make_voices`,
+`edit_chain("add")`'s voice revival, `set_voice_target`, and
+`_guess_voice_target`. Note it asks `generates(kind)`, NOT
+`kind == "source"` — so duals are note-playable too. That distinction is
+not cosmetic: the four sites each tested `kind == "source"` by strict
+equality when the dual kind landed, which made `power_shaper`'s GENERATE
+mode permanently silent (§10.3.1). Anything that generates and declares
+`freq` + `gate` spawns with `gate=0` (silent), because the synthdef
+default of `gate=1` would leave idle voices droning after every rebuild;
+`Rack.build` and `Rack.add_module` gate that injection on
+`generates(mod.kind)`, which is what makes `_is_playable` come out true
+for a dual.
 
 ### 2.3 The wire kinds
 
@@ -196,12 +304,16 @@ one without re-deriving the router geometry with it.
 ### 3.1 Chain build (`Rack.build`)
 
 A patch's `chain` list is instantiated in order; duplicates auto-suffix
-into fresh ids. First entry must be a source (an effect first raises).
-For each stage: sources mid-chain **sum into the running bus** (a fresh
-bus would orphan everything upstream — the "generators go dead" bug);
-each non-last stage owning a bus gets a private stereo bus group feeding
-the next stage; effects get `in_bus` = the previous stage's bus; the
-last stage outs to hardware bus 0. A chain ending on a summed source
+into fresh ids. The first entry must GENERATE — the guard raises only for
+`kind == "effect"`, so a `dual` may lead a chain. For each stage: sources
+mid-chain **sum into the running bus** (a fresh bus would orphan
+everything upstream — the "generators go dead" bug); each non-last stage
+owning a bus gets a private stereo bus group feeding the next stage;
+everything `takes_audio_in` (effects AND duals) gets `in_bus` = the
+previous stage's bus, except a dual at the HEAD, which has no predecessor
+and so is given its own private stereo in-bus rather than the null bus
+(§2.2); the last stage outs to hardware bus 0. A chain ending on a summed
+source
 gets a `_bypass` **tail router** node forwarding the shared bus to
 hardware. Nodes are added to the tail of the engine's root group.
 
@@ -213,9 +325,10 @@ the current derived wiring. Rules, enforced in `app.graph_wire` +
 `rack.audio_rewire`:
 
 - **One outgoing audio wire per source node.** Re-adding replaces.
-- **Fan-in is free** — buses SUM. A wire into an effect lands on its
-  `in_bus`; a wire into a source lands on that source's own out bus
-  (summing); `"master"` = hardware bus 0.
+- **Fan-in is free** — buses SUM. A wire into an effect OR a dual lands
+  on its `in_bus` (`Rack._dst_bus`); a wire into a plain source lands on
+  that source's own out bus (summing); `"master"` = hardware bus 0.
+  Landing on a dual's `in_bus` is also what flips it to FX mode (§2.2).
 - **Disconnect parks** the output on a persistent silent **null bus**
   (`Rack.null_bus`, lazily allocated per rack) — never bus 0.
 - **Cycle guard**: a walk over the stored wires rejects any add that
@@ -233,6 +346,27 @@ the current derived wiring. Rules, enforced in `app.graph_wire` +
   scrubs X's ctl wires, `:pwr` gate wires, LFO dests, drone sink, and
   re-aims the drums target.
 
+> ⚠ **BEHAVIOUR CHANGE — SHIPPED 2026-07-26 with item 10. Removing a
+> module WHILE IT IS SOUNDING now cuts its release tail instead of fading
+> it.** Every node `free()` in `rack.py` passes `force=True`.
+>
+> This is the cost of fixing a real leak, not a regression. supriya's
+> `Node.free()` emits **`/n_set gate 0` for any synth that HAS a gate** —
+> a release, not a free — and `/n_free` only for one without. Every
+> playable source has a gate (module rule 5), and the SAME rule mandates
+> `done_action=0` so the node survives release, deliberately, because
+> voices are persistent nodes. The two rules compose into a leak: an
+> unforced free **silenced a gated instance and left it running forever**
+> while the rack dropped its `Instance` and forgot it existed. Measured
+> live 2026-07-26 — removing a gated instance took the node count
+> 10→11→12→13, while a gateless reverb correctly went 14→13.
+>
+> **The scope is narrow**: a gated source is silent unless a voice is
+> holding a note on it, so this is only observable when a module is
+> removed MID-NOTE. Restoring the fade would mean releasing first and
+> forcing after a scheduled delay — `rack.py` has no scheduler, so that is
+> a real piece of work, not a flag.
+
 ### 3.3 Live edits without rebuild
 
 `edit_chain("add")` / `spawn_unconnected` spawn ONE node parked on the
@@ -240,8 +374,12 @@ null bus — no reorder, no wire reapply, nothing running is touched (one
 exception: voices that died for lack of a target come back aimed at the
 new source). `swap_synth` (Instrument card) replaces an instance's
 module type IN PLACE: same id, buses, wires, node order (server
-`REPLACE`); params shared by name carry over, the rest reset; sources
-come up `gate=0`; LFO dests on params the new type lacks are unwired.
+`REPLACE`); params shared by name carry over, the rest reset; anything
+that generates comes up `gate=0`; LFO dests on params the new type lacks
+are unwired. A swap may not cross KINDS (`Rack.swap_module` raises), and
+a dual→dual swap explicitly carries `mode` across — it is derived rather
+than a param, so the settings rebuild would otherwise drop it and leave
+an FX-wired dual generating.
 `edit_chain("move")` is a pure list reorder (audio order is
 wire-defined).
 
@@ -251,6 +389,32 @@ Sources pause/unpause their node (silence, state kept). Effects are
 REPLACEd with a `_bypass` passthrough synth (true bypass — the chain
 keeps flowing), and REPLACEd back with the real synthdef on re-enable.
 Re-enable fires `on_node_replaced` so LFO mappings re-map (§6.1).
+
+A **dual** takes the EFFECT path (the branch tests `kind == "source"`),
+and for the NODE that is right in both of its modes without asking which
+one it is in: bypassed in FX mode it passes its input like any effect,
+and bypassed in GENERATE mode its `in_bus` is a private unwritten bus, so
+the passthrough emits silence — which is what pausing a source achieves
+anyway. A disabled dual is a `_bypass` node with no `mode` control, so
+`App._sync_dual_modes` only stores the derived mode and re-applies it
+when re-enable respawns the real synthdef.
+
+> ⚠ **BUG — bypassing a dual does not silence its satellite voices**
+> (`rack.py:474`, found 2026-07-27, NOT fixed). `set_enabled` branches on
+> `inst.module.kind == "source"`, and `pool.set_paused(not enabled)` is
+> reached ONLY inside that branch. A dual takes the effect path, so its
+> voice pool is never told. Since a dual IS note-playable (§2.2), it can
+> be a poly voice's target: bypassing it then swaps slot 0 to a
+> passthrough while the N satellite voices keep sounding. User-visible,
+> and the same class of miss as the strict-equality bug in §10.3.1 — a
+> `kind == "source"` test standing in for "generates".
+>
+> Minor and benign, same root: `Rack.set_param`/`set_params`
+> (`rack.py:433`, `:442`) guard the node write with
+> `if inst.enabled or inst.module.kind == "source"`, so a DISABLED dual
+> drops param writes to its node. It is not lost — `inst.settings` is
+> updated before the guard and `set_enabled` respawns from it — so the
+> value lands on re-enable.
 
 ### 3.5 Master section (`master.py`)
 
@@ -322,6 +486,8 @@ grammar: plain ids, plus `":"` suffixes for lane-like sub-endpoints —
 | Arpeggiator | `arp` (singleton) | yes | yes | note-pool layer (§4.4); disabled = pass-through |
 | Loop Deck | `deck` (singleton) | yes (replay) | yes (record) | the MIDI looper (§9) |
 | Mono voices | `voice`, `voice.2`, … | — (drives audio) | yes | each drives one playable source's `freq`/`gate` (§4.3) |
+| Poly voices | `poly`, `poly.2`, … | — (drives audio) | yes | §4.3.1 — N notes at once on ONE target source, oldest stolen when full |
+| Drone voices | `hold`, `hold.2`, … | — (drives audio) | yes | §4.3.2 — holds the last root; ids are `hold`, NOT `drone`. Also a binary level-in at `"<id>:pwr"` (POWER) |
 | Estimator deriver | `tonic`, `tonic.2`, … | yes (mono root) | yes (evidence) | scale-aware root estimation (§4.5) |
 | Literal deriver | `literal`, `literal.2`, … | yes (mono) | yes | deterministic extract×place (§4.5) |
 | Drone instances | `drone`, `drone.2`, … (module instances) | no | yes (mono, single-input) | ctl note-sink retargeting the drone module's `freq` (§4.7) |
@@ -354,7 +520,10 @@ A→X→B to A→B, but only when unambiguous (exactly 1 in and 1 out;
 keyshift heals per lane; binary/ping wires never heal). Removing a
 voice/relay/binary source drops all its wires.
 
-### 4.3 Mono voices (`MonoVoice`, midi.py)
+### 4.3 Allocation: mono voices, poly voices and drone (`MonoVoice`, midi.py)
+
+The allocation framework below — mono, poly and drone as three policies —
+is on `main` as of 2026-07-26; see §4.3.1.
 
 Last-note-priority mono: a held-note stack; `note_on` re-aims the target
 source's `freq` and sets `gate=1`; releasing the sounding note falls
@@ -367,6 +536,135 @@ voices spawn aimed at the first playable source and arrive **unwired**.
 Each voice has one target (`set_voice_target` re-aims; it resurrects a
 voice whose target was removed). A rebuild re-creates voices, keeping
 ids and stored targets where the module still exists.
+
+#### 4.3.1 The allocation framework and poly voices
+
+> Item 10. **SHIPPED — on `main` since 2026-07-26.** The backlog anticipated
+> the rename of this section to **Allocation** (backlog item 2).
+>
+> ✅ **Live-verified on the rig** before it merged: ten checks reproduced
+> three times — satellites sound and SUM; a mirrored param moves all four
+> voices; disposing while sounding leaves silence; stealing craters and
+> rebuilds; two mono voices on one source sound as two. The separate leak
+> fix was live-verified against its own counter-proof, and carries a
+> BEHAVIOUR CHANGE to module removal (§3.2).
+
+Three things turn a stream of note events into sound, and each used to
+carry its own copy of the answer. They differ on **exactly one axis — the
+allocation policy**: how many notes may sound at once, which sounding note
+a new note displaces, and what an empty held set means. Everything else
+(transpose, bend, the `on_voiced` tap, retargeting) is shared, so the
+policy is a subclass and the rest is the base:
+
+| Policy | Slots | Gate | Empty held set | Is |
+| --- | --- | --- | --- | --- |
+| `MonoLatest` | 1 | yes | release | Mono Voice (§4.3) |
+| `Poly` | N (1–16) | yes | release | **Poly Voice** (item 10) |
+| `Hold` | 1 | **no** (POWER instead) | **holds the last root** | **Drone Voice** (item 29 — §4.3.2) |
+
+`Poly` steals the OLDEST sounding note when full. A steal closes the gate
+and reopens it across a scheduled ~12 ms gap (`STEAL_GAP`): a gate is
+level-triggered, so setting `gate=1` while already 1 does not restrike the
+envelope, and the stolen note would otherwise inherit its predecessor's
+envelope position. This also makes item 29 (drone as an allocation) the
+third policy rather than a fourth implementation.
+
+**Slots and satellites.** An allocation does not own a synth — it LEASES
+SLOTS from the target source's `VoicePool`. **Slot 0 is the target
+instance's own node**, driven through `rack.set_params` exactly as the mono
+voice always drove it, so a lone voice on a lone source is byte-for-byte
+the old behaviour and the card's freq/gate readout keeps moving. **Slots ≥
+1 are SATELLITES**: real scsynth synths cloned from the instance's
+settings, writing to the SAME out bus — extra sources sum (§3), so the bus
+doctrine gives polyphony for free. One card, N voices.
+
+That one mechanism fixes both halves of item 10. Poly leases N slots on one
+target; and a SECOND mono voice aimed at a source that already has one now
+leases slot 1 instead of stomping slot 0 — which is why `voice` and
+`voice.2` could always spawn but never sound as distinct voices (both
+called `set_params` on the same node, so each note-off cut the other's
+held note).
+
+`PER_VOICE_PARAMS = ("freq", "gate")` are never mirrored from the target
+onto satellites, or every satellite would collapse onto slot 0's pitch and
+gate. Every OTHER param change is mirrored, since N nodes sit behind one
+card. Satellites are DERIVED state, re-cloned whenever the target's node
+identity changes (bypass, hot reload, rack rebuild) or the server object is
+replaced — per the "track the server OBJECT, not a boolean" landmine.
+
+**Protocol** (both on the branch only):
+
+| Message | Fields | Effect |
+| --- | --- | --- |
+| `spawn_poly` | `voices` (default 8) | a poly voice `poly`, `poly.2`, … — N notes at once on ONE target, stealing the oldest when full. A ctl-wire destination exactly like a mono voice, and removed with `remove_voice`. |
+| `set_poly_voices` | `id`, `voices` (1–16, `MAX_POLY_VOICES`) | resize; notes sounding on slots that go away are closed |
+
+#### 4.3.2 The drone as an allocation (`Hold`)
+
+> Item 29. **SHIPPED — on `main` since 2026-07-26**, merged after item 10,
+> which it was built on. Headless-green; unlike item 10's poly path it was
+> **not separately live-verified** before merging, so its audio behaviour
+> is proven by tests rather than by ear.
+
+The drone stops being a bespoke `_DroneSink` and becomes the third policy.
+Ids are **`hold`, `hold.2`, …** — the card is titled "Drone Voice", but the
+id type is `hold`, deliberately (see the landmine in `CLAUDE.md`: a ctl node
+called `drone` would shadow the drone MODULE instance in `_ctl_sinks`). One
+note-sink interface means every global fan-out — sustain, transpose, panic,
+ctl wiring, state — treats all three policies alike.
+
+##### ⚠ BEHAVIOUR CHANGE: the drone now follows global transpose
+
+**This changes existing patches.** It is only audible when `transpose ≠ 0`,
+but anyone with a saved patch and a non-zero transpose WILL hear it, and it
+also changes the old drone-MODULE path, not just the new card.
+
+Before, a deriver handed the drone a raw MIDI note number while the voice
+sounding the melody applied transpose at the freq stage — so **the drone sat
+exactly `transpose` semitones away from everything else in the patch**. That
+was a bug, not a behaviour. Transpose is a KEY CHANGE: a standing
+redefinition of what a note number means, and the **global-vs-wired doctrine
+already names pitch reference as GLOBAL** (§1), which is the justification.
+The drone is now transposed with everything else.
+
+##### The drone still ignores bend — deliberately
+
+Bend is a MOMENTARY gesture on what you are PLAYING; a drone is the fixed
+reference you play *against*. If the drone bent with the melody, **every
+interval would stay unchanged and the wheel would be silently cancelled in
+exactly the patches that have a drone in them.**
+
+This sits next to the transpose change and therefore looks like an
+inconsistency. It is not: transpose is standing, bend is momentary, and only
+one of them redefines the reference. **Do not "finish the job" by making
+bend apply too.**
+
+##### POWER
+
+`Hold` never gates from the note stream, but a drone aimed at an ordinary
+playable source still has to hold that source's envelope open or it is
+silent forever. That is POWER — a separate axis (`set_gate_open`), and the
+drone card's only off switch, inheriting "bypass is the only off switch"
+from the drone module as LEVEL semantics. On a GATELESS target (the `drone`
+module itself, which sounds while its node runs) there is nothing to open,
+so it is skipped rather than faked — writing a `gate` the synthdef lacks
+would put a phantom param into `inst.settings` and into broadcast state.
+
+**Effective gate = `power AND transport.running`** — item 32's invariant in
+allocation terms. `power` in state is USER INTENT, not the audible result;
+the transport card shows the other half. Drone MODULE nodes get paused; a
+drone CARD closes the gate it holds on its target instead, because **pausing
+the target would silence a poly voice sharing it** (second landmine).
+
+Both routes — a card click and a binary wire into `"<id>:pwr"` — emit
+`{"kind": "level", "ep": "<id>:pwr", "on": …}`, so the indicator reacts to
+logic input per §5.3. Unlike item 10's declined voice-count indicator, this
+tap is proven on both edges from both routes by `tests/test_drone_alloc.py`.
+
+| Message | Fields | Effect |
+| --- | --- | --- |
+| `spawn_drone_voice` | — | a `hold` allocation; throws if no note-playable source exists (same rule as `spawn_voice`/`spawn_poly`) |
+| `set_drone_power` | `id`, `on` | POWER intent; removal and retarget reuse `remove_voice` / `set_voice_target` — there is no `remove_drone_voice` |
 
 ### 4.4 Arpeggiator (`arp.py`)
 
@@ -452,6 +750,15 @@ last root — the drone's on/off is its bypass toggle, not the note
 stream. The play-in is single-input (a new wire drops stale held
 state). Transport stop/play pauses/unpauses every enabled drone node.
 
+> ⚠ **SHIPPED 2026-07-26 — `_DroneSink` is REPLACED by the `Hold`
+> allocation (§4.3.2), and its pitch behaviour CHANGED.** This
+> sink aimed at the raw MIDI pitch and honoured neither global transpose nor
+> bend; `Hold` **follows transpose** (it still ignores bend, by design).
+> That fixes a real bug — a drone previously sat exactly `transpose`
+> semitones away from the rest of the patch — but it is a behaviour change
+> on THIS path too, not only on the new card, so a saved patch with a
+> non-zero transpose will sound different. See §4.3.2.
+
 ### 4.8 Globals on the note path
 
 `note_on`/`note_off` from any controller enter at `keys`. Panic
@@ -504,7 +811,7 @@ Valid binary-wire destinations (`gates.is_toggle_dst`):
 | `<logic>:a`, `<logic>:b` | level-in (single-input) | the gate's two named inputs (legacy `:set`/`:reset` accepted, canonicalized to `:a`/`:b`) |
 | `<relay>:ctl` | level-in (single-input) | relay closed follows the level (last writer vs. manual click wins) |
 | `<relay>:1..9` | level-in | a binary circuit's in (lazy OR, §7) |
-| `transport:run` / `:click` / `:accent` | level-in | the GLOBAL transport's play state / audible click / downbeat accent follow |
+| `transport:run` / `:click` / `:accent` | level-in | the GLOBAL transport's play state / audible click / downbeat accent follow. All three drive a CARD indicator per the reactive-indicator doctrine; `run` and `click` also mirror to a top-bar control, `accent` has none — see §8.1 |
 | `<tonic-id>`, `<literal-id>` (bare deriver id) | **trig-in** | rising edge = commit now; suppresses the deriver's grid timer while wired |
 | `deck:rec` / `:play` / `:stop` / `:clear` | **trig-in** | rising edge presses the deck button once |
 | `transport:tap` | **trig-in** | rising edge = one tap-tempo tap (§8.1) |
@@ -521,13 +828,29 @@ react to LOGIC input exactly as to a click).
 ### 5.4 Logic gates
 
 `logic`, `logic.2`, … — one card, an op dropdown: `AND | OR | NOR |
-XOR | SR latch`. EVERY op exposes exactly two single-input endpoints
-`:a`/`:b` (the shape never changes across op swaps, so wires never
-drop). NOR with one wired leg acts as NOT (an unwired in reads lo).
+XOR | SR latch | T latch`. EVERY op exposes exactly two single-input
+endpoints `:a`/`:b` (the shape never changes across op swaps, so wires
+never drop). NOR with one wired leg acts as NOT (an unwired in reads lo).
 SR latch: `:a` = SET, `:b` = RESET, reset wins; the latch state starts
 lo entering AND leaving SR. Bare-id destinations are invalid. Presets:
 (id, op) persist; op `NOT` migrates to `NOR`; a legacy `switches` list
 is ignored (the Switch node died — Relay replaced it).
+
+**T latch** (`"T latch"`) is the toggle: a RISING edge at `:a` flips the
+output, `:b` is RESET and wins exactly as SR's does (an edge arriving
+while held in reset is EATEN, not queued). It is the only op that is
+edge-triggered rather than combinational, so it settles in two phases —
+the combinational net reaches a fixpoint with T latches HOLDING (a
+toggle re-evaluated every iteration would flip forever and never
+converge), then rising edges are sampled ONCE per real edge. The outer
+pass then re-settles, which is what lets a toggle propagate into what it
+feeds: **chained T latches divide by two per stage, one stage per outer
+iteration.** Each gate remembers the level last sampled at `:a`, so a
+steady hi is distinguishable from an edge, and attaching a wire whose
+source is ALREADY hi is not an edge — the same rule every trig-in
+follows. Unwiring `:a` forgets that sample, so the next source to land
+there starts edge-fresh. `a_prev` is runtime state and is not persisted;
+a T latch reloads lo with no sampled level.
 
 ---
 
@@ -696,12 +1019,59 @@ transport — presence only (`transport_cards` in state/presets); the
 binary endpoints `transport:run/click/accent/tap` belong to the global
 transport and survive card removal.
 
+**Card-vs-top-bar, and accent's deliberate asymmetry.** The transport has
+three binary LEVEL-ins (`run`, `click`, `accent`; `tap` is a trig-in).
+Where a control has both a card element and a top-bar element they are ONE
+state, and a `{"kind": "level"}` tap must drive both or the two disagree:
+
+| level-in | card indicator | top-bar element |
+| --- | --- | --- |
+| `run` | Play/Stop card | play button (`syncTopBarPlay`) |
+| `click` | click LED | click checkbox (`syncTopBarClick`) |
+| `accent` | accent LED | **none — by decision** |
+
+`click` was updating the card only, which was not merely cosmetic:
+`sendTransport()` reads the top bar's checkbox, so a stale box pushed the
+wrong click state back to the server on the next BPM nudge or meter change.
+Fixed and on `main` (2026-07-27): the `level` handler calls
+`syncTopBarClick` for the `click` sub-endpoint, as it calls
+`syncTopBarPlay` for `run`.
+
+**`accent` has no top-bar element at all** (Cole, 2026-07-26), so there is
+nothing for it to sync to and its handler branch correctly has no top-bar
+call. That is an INTENTIONAL asymmetry, not an outstanding bug — do not
+"complete the pattern" by adding one. The doctrine still binds accent's
+CARD indicator: it must react to logic input like every other. Should
+accent ever gain a top-bar control, it joins the rule above and needs its
+own sync plus a falling-edge test (the rising edge false-passes, because
+the preceding state render usually already set the element).
+
+**Boot state: a fresh launch comes up STOPPED (item 32).**
+`transport.running` defaults **False**, so a boot with no custom preset
+populates the Play/Stop card and the top bar as stopped (both read
+`running !== false`, so no GUI change was needed) and nothing
+transport-driven — drums, clocks, the arp grid, drones — sounds until
+play is actually triggered. The default control plane and the shipped
+patches' `notes_to` bindings are untouched by this, so the rig is still
+immediately hand-playable: `midi → gen → master out` stays intact.
+
 ### 8.2 What stopping the transport does
 
 Position freezes; the arp parks (live notes pass through); clocks stop
 firing; drum sequencer idles; deriver grid timers idle; deck replay
 skips firing (and releases anything sounding); every enabled drone
 node pauses. Play resumes all of it on the same grid.
+
+**Drone silence is an INVARIANT, not a `set_transport` side effect
+(item 32).** Drones are gateless, so "silent while stopped" cannot be
+enforced only where the transport changes — a drone spawned while
+stopped would sound immediately. `app._sync_drone_run_state()` pauses or
+unpauses every ENABLED drone node to match `transport.running`, and
+EVERY path that creates, replaces or re-enables a drone node calls it:
+patch build (`_build_from`), `edit_chain` add, `swap_synth`,
+`set_enabled`, and the legacy `_ensure_legacy_drone` pair. Disabled
+instances are skipped — bypass pausing stays `rack.set_enabled`'s job.
+Any future path that can produce a live drone node must call it too.
 
 ### 8.3 Drum machine (`drums.py`)
 
@@ -816,11 +1186,54 @@ All psine voices share ADSR .01/.1/.85/.4 and a 24-partial bank.
 | `drive` | Drive | dirt | gain 1–40 · 4 exp; tone 500–12000 · 4000 exp; mix 0–1 · 1 | tanh soft clip (×0.7) + post-clip LPF |
 | `bitcrush` | Bitcrush | dirt | srate 400–44100 · 8000 exp; bits 2–16 · 10; mix 0–1 · 1 | Latch resampling + amplitude quantization |
 | `wavefolder` | Wavefolder | dirt | fold 1–12 · 2.5 exp; symmetry −0.5–0.5 · 0; mix 0–1 · 1 | fold2 with pre-fold DC offset (`symmetry`), LeakDC |
-| `power_shaper` | Power Shaper | psine | p 1–64 · 2 exp; drive 0.25–8 · 1 exp; mix 0–1 · 1 | item 11: the psine waveshaper law over INCOMING audio — `sgn(x)·abs(x)^(2/p)` after `drive`, LeakDC, dry/wet. Same law and same aliasing fingerprint as `power_sine_shaper`; the source/effect contract stays hard (this one takes `in_bus`, the generator does not) |
 | `compressor` | Compressor | dyn | threshold 0.01–1 · 0.3 exp; ratio 1–20 · 4 exp; attack 0.001–0.2 · 0.01 exp; release 0.02–1 · 0.15 exp; makeup 0.5–4 · 1.3 exp | Compander, downward only |
 | `pitchshift` | Pitch Shift | vox | semitones −24–24 · 0; mix 0–1 · 1; window 0.02–0.2 · 0.04 exp; smear 0–0.02 · 0.002 | granular PitchShift; `window` is grain size AND latency; `smear` 0 = robotic |
 | `ringmod` | Ring Mod | vox | carrier 20–4000 · 200 exp; mix 0–1 · 0.8 | multiply by lagged sine carrier |
 | `scope_tap` | Scope Tap | effect | gain 0–2 · 1 | transparent inline probe: the GUI's oscilloscope card; splice anywhere, the scope draws its out bus (§6.3) |
+
+#### 10.3.1 Power Shaper — the first `dual` module
+
+Not in §10.3's table: a dual is not an effect, and FX is only one of its
+two modes. Not in §10.1/§10.2 either — it generates, and it IS
+note-playable (§2.2), but it is neither a plain source nor a plain
+effect. The `dual` kind is §2.2; this is the module.
+
+| Key | Name | Kind | Family | Params |
+| --- | --- | --- | --- | --- |
+| `power_shaper` | Power Shaper | **`dual`** | `psine` | freq 20–2000 · 220 exp *(GEN only)*; p 1–64 · 2 exp; drive 0.25–8 · 1 exp; amp 0–1 · 0.3 *(GEN only)*; mix 0–1 · 1 *(FX only)* |
+
+ONE card and ONE synthdef that either GENERATES or shapes what you wire in.
+The psine law `T_p(A) = sgn(A)·|A|^(2/p)` is memoryless and computed per
+sample, so it is input-agnostic — the same law applies to an internal
+`SinOsc` or to `In.ar(in_bus)`:
+
+- **mode 0 — GENERATE:** the law over an internal sine, enveloped by `gate`
+  and levelled by `amp`. Equivalent to `power_sine_shaper` at `drive=1`.
+- **mode 1 — FX:** the law over the incoming signal, blended by `mix`.
+
+`mode` is **not a knob** — `App._sync_dual_modes` derives it from the audio
+graph (a stored wire whose destination is this instance means FX, no wire
+means GENERATE) and pushes it to the node. Both chains are computed and
+crossfaded through a **lagged** `mode`, so a wire landing or being cut is
+click-free. A rebuild spawns every dual at the synthdef default (`mode=0`),
+so the sync is re-pushed with `force=True` afterwards — the same hazard
+class as playable sources spawning `gate=0`. The card reacts to
+`{"kind": "level", "ep": "<id>:mode", "on": …}` per §5.3.
+
+**Live-verified on the rig (2026-07-27), both modes:** GEN produces rms
+**0.130** at **440 Hz** with THD **~0** — a clean sine, the envelope
+opening as it should; FX produces rms **0.724** with THD **0.396** and a
+genuine odd-harmonic square spectrum, which is the psine law doing its
+actual work rather than passing signal through.
+
+**GEN mode was silent when it first shipped**, and the cause is worth
+carrying: `app.py`'s four voice-targeting predicates each tested
+`kind == "source"` by strict equality, so no voice would aim at a `dual`
+module and its `gate` never opened — the DSP was correct the whole time.
+The four are now ONE, `App._is_playable` (`app.py:1587`), and
+`tests/test_playable.py` asserts that anything declaring `freq` + `gate` is
+reachable from the note plane — both merged to `main` in `34cab5e`.
+Post-mortem: `continuity/item11-gen-mode-failure.md` (closed).
 
 ### 10.4 Shared DSP helper (`harmonics.py`)
 
@@ -882,6 +1295,8 @@ sender (its UI already updated); structural changes broadcast to all.
 | `edit_chain` | action add/remove/move, key, [index] | live chain surgery (§3.2–3.3) |
 | `swap_synth` | id, key (new type) | in-place type swap (§3.3) |
 | `spawn_voice` / `remove_voice` | [id] | §4.3 (primary `voice` not removable) |
+| `spawn_poly` / `set_poly_voices` | [voices], id | §4.3.1 |
+| `spawn_drone_voice` / `set_drone_power` | —, (id, on) | §4.3.2 — both removed with `remove_voice` |
 | `set_voice_target` | key, [voice] | re-aim a mono voice |
 | `spawn_tonic` / `remove_tonic` / `set_tonic` | id; every, octave, memory, bass, listening, deck_feed | estimator deriver (§4.5) |
 | `spawn_literal` / `remove_literal` / `set_literal` | id; every, extract, place, fold_octave, transpose, hold_on_empty | literal deriver (§4.5) |
@@ -921,10 +1336,35 @@ sender (its UI already updated); structural changes broadcast to all.
 `sustain`, `tap` (src, note, on — §2.3), `voiced` (note, on, [deck]),
 `loop_note` (beat, note, on — deck viz feed), `looper` (full deck
 settings on state change), `drum_step` (step), `gate` (id, on — every
-binary level change), `level` (ep, on — level-in applications, §5.3),
-`ping` (src — rising-edge pulse anims), `ping_bound` (id, binding —
+binary level change), `level` (ep, on, [pulse] — level-in applications,
+§5.3), `ping` (src — rising-edge pulse anims), `ping_bound` (id, binding —
 button pairing landed), `tonic_out` (id, root name), `keyshift` (id,
 active).
+
+> **SHIPPED 2026-07-26 (reactive taps) — one new kind and one new field.**
+> ⚠ Still owed: `server.py`'s protocol docstring does not yet describe
+> either; this section is currently the only written record.
+>
+> **`transport`** — the transport's SETTINGS changed; the settings ride
+> along, mirroring `looper` exactly, so a client updates without a full
+> state round-trip. It exists because a logic wire into
+> `transport:run|click|accent`, or an edge on `transport:tap`, moves
+> transport state with nothing else to announce it — tap tempo could take
+> the BPM to 232 while the GUI still displayed the old value.
+>
+> **`pulse` on `level`** — marks a tap as MOMENTARY: a trig-in firing, with
+> no level to hold. It is `true` on pulse taps and **ABSENT (not `false`)
+> on steady ones**, so a steady event stays byte-identical to what existing
+> clients already parse.
+>
+> **Receivers must dispatch on the flag, never on the endpoint name.** This
+> is the load-bearing part, not a stylistic preference: a receiver that
+> keeps its own list of which endpoints flash is a list that rots the first
+> time a trig-in is added, and something drawn from a stale list is exactly
+> the silently-wrong indicator the reactive-indicator doctrine (§5.3)
+> exists to prevent. The flag is carried on the EVENT so no receiver has to
+> know the endpoint vocabulary. If you find yourself writing
+> `if (ep === "transport:tap" || ep === …)`, that is the rot returning.
 
 ### 11.3 The `state` snapshot (`app.state()`)
 
@@ -942,6 +1382,22 @@ verbatim — §6.1), `drums_target`, `arp`, `transport`,
 `transport_cards`, `drone` (legacy shape), `drums`, `looper`, `lfos`,
 `thresholds`, `logics`, `relays`, `presets`, `available` (palette:
 key/name/kind/family, sources first), `module_errors`.
+
+> **SHIPPED 2026-07-26 — `voices[]` gained two fields.** Each
+> entry becomes `{id, target, policy, slots}`: there is ONE entry per
+> ALLOCATION, mono or poly alike. `policy` is the allocation policy
+> (`mono-latest`, `poly` and `hold` — item 29 HAS landed) and tells the GUI
+> which card to draw; `slots` is how many notes that allocation can sound at
+> once, and is always 1 for `mono-latest`. **The card reads the policy off
+> this field and never guesses it from the id** — which is what lets item
+> 29's `hold` policy arrive as a label and nothing else. See §4.3.1.
+>
+> **Item 29 added a third field, `power`** (also shipped) —
+> `{id, target, policy, slots, power}`. It is the drone card's POWER as USER
+> INTENT (not the audible state: the effective gate is
+> `power AND transport.running`), and it is **`null` for the gated
+> policies**, so `policy === "hold"` — not `power != null` — is the correct
+> discriminator. See §4.3.2.
 
 ---
 
@@ -985,11 +1441,21 @@ canvas layout lives client-side in localStorage and survives). On boot,
 ctl wires, restores voice targets and drums target, then deletes the
 file. A resumed boot never auto-opens a browser.
 
+**Play state: resume carries it, named presets deliberately do NOT
+(item 32).** The `resume` block records `running`, and it is applied
+LAST — after the graph is rebuilt — so the drone walk (§8.2) sees the
+finished rack. Named presets (§12.2) carry no play state at all, and
+that asymmetry is the point: loading a preset mid-performance can
+neither stop nor start the rig. A pre-item-32 resume file, which has no
+`running` key, resumes PLAYING — which is what it was when written.
+
 ---
 
 ## 13. The GUI (`gui/blocks.html`)
 
-One self-contained page (no build step), served at `/`. Everything it
+One self-contained page (no build step), served at `/` and at `/blocks`
+(an alias kept for bookmarks — the same file, not a second UI). It is
+the ONLY page served; there is no `/legacy` route. Everything it
 shows derives from `state` + the event stream (§11.2); everything it
 does is protocol messages — the backend is the only authority. Cards on
 a block grid (§2.6) with gutter-routed subway wires; the full UI design
@@ -1008,6 +1474,63 @@ changes via the `level`/`gate` events, not only to clicks (§5.3).
 Headless GUI checks: `tests/gui_check8.py` (current; earlier
 `gui_check*.py` are kept snapshots) and `tests/check_blocks.py` drive
 the page with Playwright against mock state — no server needed.
+
+### 13.1 The allocation cards (Mono / Poly / Drone Voice)
+
+Shipped on `main` (2026-07-27) alongside their engine halves (§4.3.1,
+§4.3.2): `buildVoiceCard`, `buildDroneVoiceCard` and the `buildAllocationCard`
+dispatcher are all in `gui/blocks.html`.
+
+**ONE card renders both policies** (`buildVoiceCard`). The policy is read
+off the server's `state.voices[]` entry (§11.3) and **never guessed from
+the id** — which is the whole reason item 29's `hold` policy needed a
+label here and nothing else. Ports are identical either way: notes in,
+drive out. Both carry a static `±2 st` bend chip and a `target` chip that
+cycles through the playable sources.
+
+A poly allocation additionally gets a **1–16 step slider** (`POLY_SIZES`,
+mirroring `MAX_POLY_VOICES` in `allocation.py`), labelled "N notes".
+Shrinking it closes whatever was sounding on the slots that go away. The
+default `voice` is permanent; every spawned allocation, mono or poly,
+removes with `remove_voice`.
+
+**There is deliberately NO "voices sounding" indicator.** One would need a
+tap from `Poly`, and nothing yet proves that tap fires — shipping an
+indicator on an unverified tap is precisely the failure the
+reactive-indicator doctrine (§5.3) exists to prevent. When it is wanted it
+rides a `{"kind": "level", "ep": "<poly id>:active"}` tap, added *with* its
+test.
+
+**Palette placement — easy to get wrong.** Mono Voice, Poly Voice and Drone
+Voice sit under the palette section headed **`allocation`**, NOT `voices`.
+There is a separate `voices` section, and it holds the playable SOURCE
+MODULES. The two are different things: `allocation` spawns note-routing
+nodes on the control plane, `voices` spawns audio-generating modules. Spawn
+buttons are `{"type": "spawn_voice"}`, `{"type": "spawn_poly",
+"voices": 8}` (8 is the engine's own default; the card's slider retunes it)
+and `{"type": "spawn_drone_voice"}`.
+
+**Card dispatch is on `policy`, with an unknown policy falling back to the
+Mono card** so an older or newer server cannot blank the canvas:
+`mono-latest` → Mono Voice, `poly` → Poly Voice, `hold` → Drone Voice.
+
+**Drone Voice card (item 29, `buildDroneVoiceCard`).** Titled "Drone
+Voice" though its id type is `hold` — the id is plumbing, the name is the
+product. Family `ctl`, params-only body so sizing stays MEASURED (no
+`defaultSize`/`addSizeChips`/`ownFaces`); two rows lands it at S. Rows are
+`target` (identical to Mono Voice's chip, reusing `set_voice_target`) and
+POWER. Three ports: TONE in (ctl, at the bare gid — anything emitting notes
+wires in, and releasing the last note HOLDS the root), POWER in (binary
+level-in at `"<id>:pwr"`, fan-in rather than single-input, so no
+steal-on-drop) and `drive` out.
+
+POWER is preferably rendered as the card's **COLOUR BAR** — the same power
+indicator idiom as chain cards, this being the first `ctl` card with a
+genuine power axis — with an explicit toggle row as an acceptable fallback.
+Deliberately absent: **no bend readout** (a drone ignores bend by design, so
+a `±2 st` chip would be a lie), **no voice-count row** (`slots` is always 1),
+**no root readout and no subtitle** (the held root is not broadcast, so
+there is nothing honest to show).
 
 ---
 
@@ -1041,11 +1564,33 @@ derivation, graph/ctl bookkeeping, instance ids, multi-voice,
 tonic→drone, keyshift lanes/progression, tap-closure, snip-heal),
 `tests/test_looper.py` (deck timing, take pairing), plus unit suites
 (`test_deriver`, `test_gate`, `test_lfo`, `test_ping`, `test_power_sine`,
-`test_threshold`, `test_transport`), and the Playwright suites
-`gui_check8.py` + `check_blocks.py` (needs `requirements-dev.txt` +
-`playwright install chromium`). Live-rig only (Mac, real audio):
-`check_real.py`, `test_mixed_sources.py`, `diag_*.py`, `hear_check.py`,
-`probe_*.py`. On the Mac, `python -m synthbase test` is the real proof.
+`test_playable`, `test_threshold`, `test_transport`), and the THREE
+Playwright suites
+`gui_check8.py` + `check_blocks.py` + `check_real.py` (needs
+`requirements-dev.txt` + `playwright install chromium`). All three are
+HEADLESS and run in CI — `check_real.py` replays a captured real-rig
+state broadcast into `blocks.html` through the mock websocket and needs
+no server and no audio, despite the fixture coming off Cole's live rig.
+As of 2026-07-27 CI runs **19 Python suites + 4 Playwright invocations**
+(the earlier 15+4, plus `test_analysis`, `test_capture`, `test_replay`
+and `test_playable`). **`check_replay.py` is a THIRD category** —
+it replays recorded transcripts and runs in BOTH jobs, `--emission`
+headless and `--dom` with the browser, joining the engine's output to the
+GUI's render. It catches what neither of the other two can: the Python
+suites observe applied state, so blanking every `_emit_level` call site
+leaves them green, and the Playwright suites assert message shapes they
+wrote themselves. See `CLAUDE.md`'s testing section.
+`tests/test_playable.py` is STRUCTURAL, not a list: it asserts the
+playability decision is `generates(kind)` across every entry in `KINDS`,
+so a fourth kind that generates trips it rather than shipping silent
+(§2.2, §10.3.1).
+
+Live-rig only (Mac, real audio — these talk to a running
+`python -m synthbase gui` over websocket): `test_mixed_sources.py`,
+`live_dual_mode.py` (marked `CI_EXEMPT`; drives a real dual through
+GEN → FX → GEN and asserts the sound actually changes),
+`diag_*.py`, `hear_check.py`, `probe_*.py`.
+On the Mac, `python -m synthbase test` is the real proof.
 New checks are written failing-first against broken behavior.
 
 ---

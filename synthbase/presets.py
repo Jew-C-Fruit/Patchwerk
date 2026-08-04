@@ -241,8 +241,25 @@ def write_resume(app) -> None:
             "mod_wires": [dict(w) for w in getattr(app, "mod_wires", [])],
             "voice_targets": {vid: getattr(v, "target_key", None)
                               for vid, v in app.voices.items()},
+            # item 10: a poly voice also needs its SIZE back, or it restores
+            # as an 8-voice default whatever you set it to
+            "poly_sizes": {vid: getattr(v, "voices", 1)
+                           for vid, v in app.voices.items()
+                           if getattr(v, "policy", "") == "poly"},
+            # item 29: a drone voice's POWER is the only thing that makes it
+            # audible, so it has to come back with the patch
+            "drone_powers": {vid: bool(getattr(app, "_drone_powers", {})
+                                       .get(vid, False))
+                             for vid, v in app.voices.items()
+                             if getattr(v, "policy", "") == "hold"},
             "drums_target": (app.drums.target
                              if getattr(app, "drums", None) else None),
+            # item 32: fresh boots default STOPPED, so a ⟳ restart has to
+            # carry the play state across explicitly. RESUME ONLY — named
+            # presets never touch running (the transport snapshot above
+            # deliberately excludes it), so loading one mid-performance
+            # cannot stop or start the rig.
+            "running": bool(app.transport.running),
         }
     RESUME_PATH.write_text(json.dumps(data, indent=2))
 
@@ -306,16 +323,29 @@ def apply_resume(app) -> bool:
             app.mod_wire("add", w.get("from"), w.get("to"))
         except Exception:  # noqa: BLE001
             pass
+    poly_sizes = r.get("poly_sizes") or {}
     for vid, tgt in (r.get("voice_targets") or {}).items():
         if not tgt:
             continue
         if vid != "voice" and vid not in app.voices:
             try:
-                app.spawn_voice()
+                # the id's TYPE is the policy — a saved "poly.2" must come
+                # back as a poly voice, not as another mono one
+                if vid.split(".")[0] == "poly":
+                    app.spawn_poly(int(poly_sizes.get(vid, 8)))
+                elif vid.split(".")[0] == "hold":
+                    app.spawn_drone_voice()   # item 29
+                else:
+                    app.spawn_voice()
             except Exception:  # noqa: BLE001
                 pass
         try:
             app.set_voice_target(tgt, vid)
+        except Exception:  # noqa: BLE001
+            pass
+    for vid, on in (r.get("drone_powers") or {}).items():
+        try:
+            app.set_drone_power(vid, bool(on))
         except Exception:  # noqa: BLE001
             pass
     if r.get("drums_target") and getattr(app, "drums", None):
@@ -323,4 +353,13 @@ def apply_resume(app) -> bool:
             app.set_drums(target=r["drums_target"])
         except Exception:  # noqa: BLE001
             pass
+    # item 32: restore the pre-restart play state LAST — after the graph,
+    # because set_transport(playing=...) walks the rack's drone instances
+    # to pause/unpause them. A resume file written before item 32 has no
+    # "running" key: it came from a running-by-default build, so it
+    # resumes PLAYING.
+    try:
+        app.set_transport(playing=bool(r.get("running", True)))
+    except Exception:  # noqa: BLE001
+        pass
     return True
